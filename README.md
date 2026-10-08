@@ -28,9 +28,20 @@ uv venv .venv && uv pip install --python .venv/bin/python -e '.[dev]'
 cp cameras.example.yaml cameras.yaml
 ```
 
-`cameras.yaml` is git-ignored. Credentials stay out of it: write `${CAMERA_USER}` and
-`${CAMERA_PASS}` in the source URL and set them in the environment. A video file works as a
-camera, which is how the tests run and how to try the server away from home.
+`cameras.yaml` is git-ignored. A Tapo camera needs only a name and its IP:
+
+```yaml
+cameras:
+  - name: east_fence
+    label: Back fence, east
+    host: 192.0.2.10
+```
+
+The RTSP URL is built from the host (`rtsp://<user>:<pass>@<host>/stream1`), with the credentials
+taken from `$CAMERA_USER` and `$CAMERA_PASS`, the Camera Account set in the Tapo app. Credentials
+never go in the file. Anything else goes in `source` instead of `host`: a video file (which is how
+the tests run, and how to try the server away from home) or a full URL for a non-Tapo camera,
+where `${VAR}` is expanded from the environment.
 
 ## Use from Claude Code
 

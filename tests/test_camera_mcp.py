@@ -40,8 +40,8 @@ def clip(tmp_path):
 
 @pytest.fixture
 def config(tmp_path, clip, monkeypatch):
-    monkeypatch.setenv("CAM_USER", "u")
-    monkeypatch.setenv("CAM_PASS", "secret")
+    monkeypatch.setenv("CAMERA_USER", "u")
+    monkeypatch.setenv("CAMERA_PASS", "secret")
     path = tmp_path / "cameras.yaml"
     path.write_text(
         f"""
@@ -50,7 +50,7 @@ cameras:
     label: Generated clip
     source: {clip}
   - name: fence
-    source: rtsp://${{CAM_USER}}:${{CAM_PASS}}@127.0.0.1:9/stream1
+    host: 127.0.0.1:9
   - name: parked
     source: {clip}
     enabled: false
@@ -61,11 +61,37 @@ cameras:
 
 # ---- config ---------------------------------------------------------------------------
 
-def test_env_expansion_and_endpoint(config):
+def test_host_builds_rtsp_url_and_endpoint(config):
     cams = load_cameras(config)
     assert cams["fence"].source == "rtsp://u:secret@127.0.0.1:9/stream1"
     assert cams["fence"].endpoint() == ("127.0.0.1", 9)
     assert cams["demo"].endpoint() is None and not cams["parked"].enabled
+
+
+def test_host_quotes_special_characters_in_credentials(tmp_path, monkeypatch):
+    monkeypatch.setenv("CAMERA_USER", "cam")
+    monkeypatch.setenv("CAMERA_PASS", "p@ss/w:rd")
+    path = tmp_path / "c.yaml"
+    path.write_text("cameras:\n  - name: x\n    host: 10.0.0.2\n")
+    cam = load_cameras(path)["x"]
+    assert cam.source == "rtsp://cam:p%40ss%2Fw%3Ard@10.0.0.2/stream1"
+    assert cam.endpoint() == ("10.0.0.2", 554)
+
+
+def test_host_without_credentials_is_an_error(tmp_path, monkeypatch):
+    monkeypatch.delenv("CAMERA_USER", raising=False)
+    monkeypatch.delenv("CAMERA_PASS", raising=False)
+    path = tmp_path / "c.yaml"
+    path.write_text("cameras:\n  - name: x\n    host: 10.0.0.2\n")
+    with pytest.raises(ConfigError, match="CAMERA_USER and CAMERA_PASS"):
+        load_cameras(path)
+
+
+def test_host_and_source_together_is_an_error(tmp_path):
+    path = tmp_path / "c.yaml"
+    path.write_text("cameras:\n  - name: x\n    host: 10.0.0.2\n    source: rtsp://h/s\n")
+    with pytest.raises(ConfigError, match="not both"):
+        load_cameras(path)
 
 
 def test_missing_env_var_is_an_error(tmp_path, monkeypatch):

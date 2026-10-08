@@ -1,17 +1,19 @@
-# Copy to cameras.yaml (git-ignored). Credentials come from the environment:
-# ${VAR} is expanded at load time, so the file never holds a password.
-# 192.0.2.x is a documentation range; put your cameras' real addresses in cameras.yaml.
+# Copy to cameras.yaml (git-ignored) and put in your cameras' real addresses.
+# A Tapo camera needs only its IP: the RTSP URL is built from it, using the credentials in
+# $CAMERA_USER and $CAMERA_PASS (the Camera Account set in the Tapo app) and /stream1.
+# 192.0.2.x is a documentation range.
 cameras:
   - name: east_fence
     label: Back fence, east
-    source: rtsp://${CAMERA_USER}:${CAMERA_PASS}@192.0.2.10/stream1
+    host: 192.0.2.10
   - name: west_fence
     label: Back fence, west
-    source: rtsp://${CAMERA_USER}:${CAMERA_PASS}@192.0.2.11/stream1
+    host: 192.0.2.11
   - name: backyard
     label: Backyard
-    source: rtsp://${CAMERA_USER}:${CAMERA_PASS}@192.0.2.12/stream1
-  # A recorded clip works as a camera, for testing away from home:
-  # - name: clip_d161
+    host: 192.0.2.12
+  # Anything else goes in `source`: a video file (handy for testing away from home), or a
+  # full URL for a non-Tapo camera, where ${VAR} is expanded from the environment.
+  # - name: test_clip
   #   label: Recorded clip
-  #   source: ~/projects/camera-controller/recordings/known_good_6/48225422D161_20250420120504408_cam0.mp4
+  #   source: ~/Movies/some_clip.mp4
