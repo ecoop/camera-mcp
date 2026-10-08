@@ -4,8 +4,13 @@ _Last updated: 2026-10-08_
 
 An MCP server over the home IP cameras. A model can list the cameras and look at a current frame
 from any of them; detections, activity and recording come in later phases. Combines the camera
-work in `camera-controller` and `wildlife-cv-pipeline`. The design is in
-`../camera-controller/MCP_SERVER_DESIGN.md`.
+work in `camera-controller` and `wildlife-cv-pipeline`. The original design is in
+`../camera-controller/MCP_SERVER_DESIGN.md`; phase 2 (monitor, visit log, history tools) is in
+[docs/phase2-design.md](docs/phase2-design.md), backed by the
+[SpeciesNet eval](docs/speciesnet-eval-2026-10-08.md). SpeciesNet's full label list is in
+[docs/speciesnet-labels-v4.0.3a.txt](docs/speciesnet-labels-v4.0.3a.txt).
+
+Household context and motivations stay out of the repo, in the git-ignored `notes/` folder.
 
 ## Tools (phase 1)
 
