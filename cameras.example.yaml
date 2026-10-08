@@ -1,0 +1,17 @@
+# Copy to cameras.yaml (git-ignored). Credentials come from the environment:
+# ${VAR} is expanded at load time, so the file never holds a password.
+# 192.0.2.x is a documentation range; put your cameras' real addresses in cameras.yaml.
+cameras:
+  - name: east_fence
+    label: Back fence, east
+    source: rtsp://${CAMERA_USER}:${CAMERA_PASS}@192.0.2.10/stream1
+  - name: west_fence
+    label: Back fence, west
+    source: rtsp://${CAMERA_USER}:${CAMERA_PASS}@192.0.2.11/stream1
+  - name: backyard
+    label: Backyard
+    source: rtsp://${CAMERA_USER}:${CAMERA_PASS}@192.0.2.12/stream1
+  # A recorded clip works as a camera, for testing away from home:
+  # - name: clip_d161
+  #   label: Recorded clip
+  #   source: ~/projects/camera-controller/recordings/known_good_6/48225422D161_20250420120504408_cam0.mp4
