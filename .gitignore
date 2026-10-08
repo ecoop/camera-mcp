@@ -6,3 +6,5 @@ __pycache__/
 cameras.yaml
 snapshots/
 .DS_Store
+# private household notes: context that should never be committed or published
+notes/

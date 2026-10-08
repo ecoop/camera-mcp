@@ -1,0 +1,56 @@
+# Copyright (c) 2026 Eric Cooper. All rights reserved.
+# Build, import every module, run the tests. This is the gate a PR must pass before auto-merge.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.13"]   # the requires-python floor and the newest supported
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ffmpeg
+        run: sudo apt-get update -q && sudo apt-get install -y -q ffmpeg
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Build and install
+        run: |
+          uv venv .venv
+          uv build
+          uv pip install --python .venv/bin/python "$(ls dist/*.whl)[dev]"
+
+      # Imports the installed wheel, not the source tree, so a module missing from the package fails here.
+      - name: Import every module
+        run: |
+          cd /tmp && "$GITHUB_WORKSPACE/.venv/bin/python" -c "
+          import importlib, pkgutil, camera_mcp
+          mods = [m.name for m in pkgutil.walk_packages(camera_mcp.__path__, 'camera_mcp.')]
+          for name in mods:
+              importlib.import_module(name)
+          print('imported', len(mods), 'modules:', ', '.join(mods))
+          "
+
+      - name: Entry point starts
+        run: .venv/bin/camera-mcp --help
+
+      - name: Tests
+        run: .venv/bin/python -m pytest -q

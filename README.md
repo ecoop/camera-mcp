@@ -46,6 +46,10 @@ claude mcp add cameras -e CAMERA_USER=... -e CAMERA_PASS=... -- ~/projects/camer
 
 The tests generate a clip with ffmpeg and use it as a camera. No network or hardware is needed.
 
+CI (`.github/workflows/ci.yml`) runs on every PR and on pushes to `main`, on Python 3.11 and 3.13:
+it builds the wheel, installs it, imports every module from the installed package, starts the
+entry point, and runs the tests. A PR merges only once CI passes.
+
 ## Design notes
 
 - **Capture goes through the `ffmpeg` binary, not OpenCV's video backends.** OpenCV's macOS wheels
