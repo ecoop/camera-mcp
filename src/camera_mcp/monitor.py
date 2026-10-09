@@ -1,18 +1,25 @@
 # Copyright (c) 2026 Eric Cooper.
-"""The always-on monitor (phase 2a: motion and clips; no detection model yet).
+"""The always-on monitor.
 
 For each enabled camera it runs:
 
 - a **recorder**: ffmpeg copies the main stream into the ring buffer (see ringbuffer.py);
-- a **watcher**: ffmpeg decodes the low-resolution stream to small grayscale frames at a
-  few frames per second, and the motion detector opens and closes windows on them;
-- **housekeeping**: once a window has closed and its post-roll is on disk, the covering
-  segments are joined into a clip and the window is logged; old segments are deleted.
+- a **watcher**: ffmpeg decodes the low-resolution stream to small frames at a few frames
+  per second; the motion detector opens and closes windows on them, and every few minutes,
+  while all is still, the view is checked against its reference (has the camera moved?);
+- **housekeeping**: finished segments that overlap motion, or arrive while an animal is in
+  view, go to the shared analyzer; closed visits get a thumbnail and a clip joined from the
+  buffer; old segments are deleted.
 
-Streams that drop are reopened with backoff. A video file can stand in for a camera; it
-is read at its own speed, once, and the monitor stops when every file has ended.
+The **analyzer** (one for all cameras) runs the detector (SpeciesNet) on frames decoded from
+those segments and feeds each camera's visit tracker. Without a detector the monitor watches
+for motion only and keeps a clip of every motion window.
+
+Streams that drop are reopened with backoff. A video file can stand in for a camera; it is
+read at its own speed, once, and the monitor stops when every file has ended.
 
     camera-monitor [--config cameras.yaml] [--data-dir data] [--camera NAME ...] [--duration S]
+                   [--detector auto|speciesnet|none] [--reset-view NAME ...]
 """
 
 from __future__ import annotations
@@ -21,6 +28,8 @@ import argparse
 import collections
 import logging
 import os
+import queue
+import re
 import signal
 import subprocess
 import sys
@@ -29,15 +38,18 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import cv2
 import numpy as np
 
 from camera_mcp import ringbuffer
 from camera_mcp.capture import FFMPEG
-from camera_mcp.config import Camera, ConfigError, default_config_path, find_camera, load_cameras, redact
+from camera_mcp.config import Camera, ConfigError, default_config_path, find_camera, load_cameras, load_site, redact
+from camera_mcp.detect import Detector, SpeciesNetDetector, available
 from camera_mcp.motion import MotionDetector, MotionWindows, Window
 from camera_mcp.probe import ProbeError, probe_stream
 from camera_mcp.store import Store
 from camera_mcp.view import ViewCheck, is_colour
+from camera_mcp.visits import Visit, VisitTracker
 
 log = logging.getLogger("camera_mcp.monitor")
 
@@ -137,11 +149,20 @@ class CameraWorker:
         self.pid_file = self.seg_dir / "recorder.pid"
         self.store = store
         self.stop = stop
-        self.detector = MotionDetector(self.s)
+        self.motion = MotionDetector(self.s)
         self.windows = MotionWindows(self.s.quiet_seconds)
         self.view = ViewCheck(data_dir / "views", camera.name, every=self.s.view_check_seconds,
                               threshold=self.s.view_threshold)
         self.pending: list[Window] = []  # closed, waiting for their post-roll to reach disk
+        # Detection (phase 2b), when the monitor has an analyzer:
+        self.analyzer: Analyzer | None = None
+        self.tracker = VisitTracker(camera.name, close_after=self.s.visit_close_seconds)
+        self.recent_windows: list[tuple[float, float]] = []  # (start, last motion) of closed windows
+        self.considered_until = 0.0  # segments starting at or before this were already considered
+        self.queued: dict[Path, float] = {}  # segments waiting for the analyzer -> their start
+        self.pending_visits: list[Visit] = []  # closed visits waiting for their clip
+        self.analysis_finished = threading.Event()
+        self._dims: tuple[int, int] | None = None  # main-stream frame size, for decoding segments
         self.lock = threading.Lock()
         self.procs: set[subprocess.Popen] = set()
         self.recorder_done = threading.Event()
@@ -166,7 +187,8 @@ class CameraWorker:
 
     @property
     def done(self) -> bool:
-        return self.recorder_done.is_set() and self.watcher_done.is_set() and not self.pending
+        return (self.recorder_done.is_set() and self.watcher_done.is_set() and not self.pending
+                and not self.pending_visits and (self.analyzer is None or self.analysis_finished.is_set()))
 
     def _reap(self) -> None:
         """On stop, end this camera's ffmpeg processes so blocked reads return."""
@@ -258,8 +280,8 @@ class CameraWorker:
             count += 1
             frame = np.frombuffer(buf, np.uint8)
             gray = frame[:luma].reshape(height, width)
-            changed = self.detector.update(gray)
-            moving = self.detector.is_motion(changed)
+            changed = self.motion.update(gray)
+            moving = self.motion.is_motion(changed)
             with self.lock:
                 was_open = self.windows.open is not None
                 closed = self.windows.feed(now, changed, moving)
@@ -294,18 +316,103 @@ class CameraWorker:
                  window.last_motion - window.start, window.frames)
         with self.lock:
             self.pending.append(window)
+            self.recent_windows = [w for w in self.recent_windows if window.start - w[1] < 600]
+            self.recent_windows.append((window.start, window.last_motion))
 
     # ---- housekeeping -------------------------------------------------------------
 
     def _housekeep(self) -> None:
         while True:
             finished = self.recorder_done.is_set() and self.watcher_done.is_set()
-            self._finish_pending(final=finished)
-            self._prune()
-            if finished and not self.pending:
+            for step in (lambda: self.analyzer and self._schedule(finished),
+                         lambda: self._finish_pending(final=finished),
+                         lambda: self._finish_visits(final=finished and self.analysis_finished.is_set()),
+                         self._prune):
+                try:
+                    step()
+                except Exception:  # one failure must not stop this camera's housekeeping
+                    log.exception("%s: housekeeping step failed", self.camera.name)
+            if self.done:
                 self.store.set_status(self.camera.name, "stopped", now=time.time())
                 return
             time.sleep(0.5)
+
+    # ---- detection ----------------------------------------------------------------
+
+    def _schedule(self, finished: bool) -> None:
+        """Send finished segments to the analyzer if they overlap motion or an open visit."""
+        segments = ringbuffer.list_segments(self.seg_dir)
+        complete = segments if self.recorder_done.is_set() else segments[:-1]
+        for seg in complete:
+            if seg.start <= self.considered_until:
+                continue
+            self.considered_until = seg.start
+            if self._needs_analysis(seg) and not self.stop.is_set():
+                with self.lock:
+                    self.queued[seg.path] = seg.start
+                self.analyzer.submit(self, seg)
+        if finished and not self.queued and not self.analysis_finished.is_set():
+            with self.lock:
+                closed = self.tracker.close_all()  # input is over: whatever is open has ended
+            for visit in closed:
+                self._visit_closed(visit)
+            self.analysis_finished.set()
+
+    def _needs_analysis(self, seg: ringbuffer.Segment, margin: float = 1.0) -> bool:
+        with self.lock:
+            if self.tracker.open:
+                return True  # keep looking while an animal is here, moving or not
+            spans = list(self.recent_windows) + ([(self.windows.open.start, float("inf"))] if self.windows.open else [])
+        return any(seg.end >= start - margin and seg.start <= end + margin for start, end in spans)
+
+    def frame_size(self, seg: ringbuffer.Segment) -> tuple[int, int]:
+        if self._dims is None:
+            info = probe_stream(Camera("segment", str(seg.path)))
+            self._dims = (info.width, info.height)
+        return self._dims
+
+    def _visit_closed(self, visit: Visit) -> None:
+        label = visit.label
+        log.info("%s: %s visit ended: %s (%.0f%% of votes), %.0fs, up to %d at once", self.camera.name,
+                 visit.key, label.name, label.score * 100, visit.last_seen - visit.start, visit.max_count)
+        with self.lock:
+            self.pending_visits.append(visit)
+
+    def _finish_visits(self, final: bool) -> None:
+        segments = ringbuffer.list_segments(self.seg_dir)
+        with self.lock:
+            pending = list(self.pending_visits)
+        for visit in pending:
+            clip_end = visit.last_seen + self.s.post_seconds
+            if not (final or any(seg.start > clip_end for seg in segments)):
+                continue
+            keep_images = visit.key != "person" or self.s.save_people_images
+            thumbnail = clip = None
+            if keep_images:
+                stamp = datetime.fromtimestamp(visit.start, timezone.utc)
+                name = f"{stamp:%H%M%SZ}-{re.sub(r'[^a-z0-9]+', '-', visit.key)}"
+                try:
+                    thumbnail = self._write_thumbnail(visit, f"{stamp:%Y-%m-%d}/{name}.jpg")
+                    usable = segments if self.recorder_done.is_set() else segments[:-1]
+                    clip = self._write_clip(ringbuffer.covering(usable, visit.start - self.s.pre_seconds, clip_end),
+                                            visit.start, f"{name}.mp4")
+                except Exception:  # keep the visit even if its media can't be written
+                    log.exception("%s: couldn't save media for the %s visit", self.camera.name, visit.key)
+            self.store.add_visit(visit, model=self.analyzer.model if self.analyzer else "", thumbnail=thumbnail, clip=clip)
+            with self.lock:
+                self.pending_visits.remove(visit)
+
+    def _write_thumbnail(self, visit: Visit, rel: str) -> str | None:
+        if visit.thumbnail is None or visit.thumbnail.size == 0:
+            return None
+        out = self.data_dir / "media" / self.camera.name / rel
+        out.parent.mkdir(parents=True, exist_ok=True)
+        # imencode, not imwrite: SpeciesNet's yolov5 replaces cv2.imwrite with a 2-argument version.
+        ok, jpeg = cv2.imencode(".jpg", cv2.cvtColor(visit.thumbnail, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 85])
+        if not ok:
+            return None
+        out.write_bytes(jpeg.tobytes())
+        return str(out.relative_to(self.data_dir))
 
     def _finish_pending(self, final: bool) -> None:
         segments = ringbuffer.list_segments(self.seg_dir)
@@ -315,22 +422,25 @@ class CameraWorker:
             clip_start = window.start - self.s.pre_seconds
             clip_end = window.last_motion + self.s.post_seconds
             # The post-roll is on disk once a later segment has started (or recording is over).
-            if not (final or any(seg.start > clip_end for seg in segments)):
+            if not (final or (self.analyzer and not self.s.training_capture)
+                    or any(seg.start > clip_end for seg in segments)):
                 continue
-            usable = segments if self.recorder_done.is_set() else segments[:-1]
-            clip = self._write_clip(ringbuffer.covering(usable, clip_start, clip_end), window)
+            if self.analyzer and not self.s.training_capture:
+                clip = None  # with detection on, clips are kept for visits, not for raw motion
+            else:
+                usable = segments if self.recorder_done.is_set() else segments[:-1]
+                clip = self._write_clip(ringbuffer.covering(usable, clip_start, clip_end), window.start)
             self.store.add_window(self.camera.name, window.start, window.last_motion, window.peak,
                                   window.frames, clip)
             with self.lock:
                 self.pending.remove(window)
 
-    def _write_clip(self, segments: list[ringbuffer.Segment], window: Window) -> str | None:
+    def _write_clip(self, segments: list[ringbuffer.Segment], start: float, name: str | None = None) -> str | None:
+        stamp = datetime.fromtimestamp(start, timezone.utc)
         if not segments:
-            log.warning("%s: no recorded footage for the window at %s", self.camera.name,
-                        datetime.fromtimestamp(window.start, timezone.utc).isoformat(timespec="seconds"))
+            log.warning("%s: no recorded footage for %s", self.camera.name, stamp.isoformat(timespec="seconds"))
             return None
-        stamp = datetime.fromtimestamp(window.start, timezone.utc)
-        out = self.data_dir / "clips" / self.camera.name / stamp.strftime("%Y-%m-%d") / stamp.strftime("%H%M%SZ.mp4")
+        out = self.data_dir / "clips" / self.camera.name / f"{stamp:%Y-%m-%d}" / (name or f"{stamp:%H%M%SZ}.mp4")
         try:
             ringbuffer.assemble_clip(segments, out)
         except (RuntimeError, ValueError, subprocess.TimeoutExpired) as e:
@@ -343,20 +453,104 @@ class CameraWorker:
         keep = time.time() - self.s.pre_seconds - 2 * self.s.segment_seconds
         with self.lock:
             starts = [w.start for w in self.pending] + ([self.windows.open.start] if self.windows.open else [])
+            starts += list(self.queued.values()) + [v.start for v in self.pending_visits]
+            starts += [v.start for v in self.tracker.open.values()]
         if starts:
             keep = min(keep, min(starts) - self.s.pre_seconds - self.s.segment_seconds)
         ringbuffer.prune(self.seg_dir, keep)
 
 
+class Analyzer:
+    """One detection model shared by every camera, fed finished segments through a queue.
+
+    Each segment is decoded at one frame per `detect_every_seconds`; when the queue backs up
+    (a slow machine, many busy cameras), only one frame per segment is analysed until it
+    catches up. On stop, queued segments are dropped and open visits are closed as they are.
+    """
+
+    BACKLOG = 8  # queued segments beyond which analysis thins out
+
+    def __init__(self, detector: Detector, stop: threading.Event):
+        self.detector = detector
+        self.stop = stop
+        self.queue: queue.Queue[tuple[CameraWorker, ringbuffer.Segment]] = queue.Queue()
+        self.thread = threading.Thread(target=self._run, name="analyzer", daemon=True)
+        self._behind = False
+
+    @property
+    def model(self) -> str:
+        return self.detector.model
+
+    def submit(self, worker: CameraWorker, seg: ringbuffer.Segment) -> None:
+        self.queue.put((worker, seg))
+
+    def start(self) -> None:
+        self.thread.start()
+
+    def _run(self) -> None:
+        while True:
+            try:
+                worker, seg = self.queue.get(timeout=0.5)
+            except queue.Empty:
+                if self.stop.is_set():
+                    return
+                continue
+            try:
+                if not self.stop.is_set():
+                    self._analyze(worker, seg)
+            except Exception as e:  # a bad segment or a model error must not stop the monitor
+                log.warning("%s: analysis failed for %s: %s", worker.camera.name, seg.path.name, e)
+            finally:
+                with worker.lock:
+                    worker.queued.pop(seg.path, None)
+
+    def _analyze(self, worker: CameraWorker, seg: ringbuffer.Segment) -> None:
+        s = worker.s
+        behind = self.queue.qsize() > self.BACKLOG
+        if behind != self._behind:
+            self._behind = behind
+            log.warning("analysis is %s", "falling behind: one frame per segment until it catches up"
+                        if behind else "caught up")
+        every = max(seg.end - seg.start, s.segment_seconds) if behind else s.detect_every_seconds
+        width, height = worker.frame_size(seg)
+        proc = subprocess.run(
+            [FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin", "-i", str(seg.path),
+             "-vf", f"fps=1/{every}", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+            capture_output=True, timeout=60,
+        )
+        size = width * height * 3
+        for i in range(len(proc.stdout) // size):
+            if self.stop.is_set():
+                return
+            frame = np.frombuffer(proc.stdout[i * size:(i + 1) * size], np.uint8).reshape(height, width, 3)
+            t = seg.start + i * every
+            detections = self.detector.analyze(frame, tiles="wide_view" in worker.camera.tags,
+                                               min_conf=s.min_box_conf, max_boxes=s.max_boxes,
+                                               vehicles=s.detect_vehicles)
+            with worker.lock:
+                before = set(worker.tracker.open)
+                closed = worker.tracker.feed(t, detections, frame)
+                arrived = set(worker.tracker.open) - before
+            for key in sorted(arrived):
+                log.info("%s: %s arrived", worker.camera.name, key)
+            for visit in closed:
+                worker._visit_closed(visit)
+
+
 class Monitor:
-    def __init__(self, cameras: list[Camera], data_dir: Path):
+    def __init__(self, cameras: list[Camera], data_dir: Path, detector: Detector | None = None):
         self.data_dir = data_dir
         self.store = Store(data_dir / "monitor.db")
         self.stop = threading.Event()
         self.workers = [CameraWorker(c, data_dir, self.store, self.stop) for c in cameras]
+        self.analyzer = Analyzer(detector, self.stop) if detector else None
+        for w in self.workers:
+            w.analyzer = self.analyzer
 
     def run(self, duration: float | None = None) -> None:
         """Watch until stopped, until `duration` seconds pass, or until every file source ends."""
+        if self.analyzer:
+            self.analyzer.start()
         for w in self.workers:
             w.start()
         deadline = time.monotonic() + duration if duration else None
@@ -366,6 +560,8 @@ class Monitor:
         self.stop.set()
         for w in self.workers:
             w.join(timeout=30)
+        if self.analyzer:
+            self.analyzer.thread.join(timeout=30)
         self.store.close()
 
 
@@ -379,6 +575,9 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--camera", action="append", default=[], metavar="NAME",
                         help="watch only this camera (repeatable; names match loosely)")
     parser.add_argument("--duration", type=float, help="stop after this many seconds")
+    parser.add_argument("--detector", choices=("auto", "speciesnet", "none"), default="auto",
+                        help="what identifies animals in motion: SpeciesNet if installed (auto, the default),"
+                             " or none (motion and clips only)")
     parser.add_argument("--reset-view", action="append", default=[], metavar="NAME",
                         help="forget this camera's reference view after re-aiming it on purpose, then exit"
                              " (repeatable)")
@@ -406,7 +605,16 @@ def main(argv: list[str] | None = None) -> None:
             print(f"camera-monitor: unknown camera {', '.join(missing)}", file=sys.stderr)
             raise SystemExit(2)
         chosen = list({c.name: c for c in found.values()}.values())
-    monitor = Monitor(chosen, args.data_dir)
+    detector = None
+    if args.detector != "none":
+        if available():
+            detector = SpeciesNetDetector(load_site(args.config))
+        elif args.detector == "speciesnet":
+            print("camera-monitor: SpeciesNet isn't installed: pip install 'camera-mcp[detect]'", file=sys.stderr)
+            raise SystemExit(2)
+        else:
+            log.info("SpeciesNet isn't installed: watching for motion only")
+    monitor = Monitor(chosen, args.data_dir, detector)
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: monitor.stop.set())
     log.info("watching %s; data in %s", ", ".join(c.name for c in chosen), args.data_dir)

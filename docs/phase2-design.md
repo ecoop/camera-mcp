@@ -163,6 +163,29 @@ The monitor is the only writer. The MCP server opens the database read-only
   not blank.
 - Model version is stored with every visit, so labels can be recomputed after a model change.
 
+### How 2b was built
+
+Where the implementation differs from, or adds to, the plan above:
+
+- **Frames come from the ring buffer, not a live decode.** When a 2-second segment is finished
+  and overlaps motion (or a visit is open on that camera), it goes to one shared analyzer,
+  which decodes a frame per `detect_every_seconds` from it. No extra stream is opened, and an
+  open visit keeps being analysed whether or not anything moves (a stalking cat). Analysis lags
+  live by a few seconds.
+- **One model for all cameras.** A single SpeciesNet instance serves every camera through a
+  queue. When the queue backs up, it analyses one frame per segment until it catches up.
+- **Vehicles are ignored by default.** With tiling on a wide-view camera, MegaDetector called
+  garden furniture "vehicle" at 0.55–0.77; `detect_vehicles: true` turns them on for a camera
+  that watches a driveway.
+- **Tile boxes are merged by containment as well as overlap.** A tile's edge can cut an animal
+  into a partial box inside the full-frame box; it's dropped as a duplicate.
+- **An unidentified animal joins an open visit.** A box the classifier can't name ("animal")
+  joins the animal already being seen on that camera, and doesn't sway the visit's label.
+- **With detection on, clips are kept for visits, not for motion windows**, unless the camera
+  has `training_capture: true`. Motion windows are still logged.
+- **A housekeeping failure is logged and skipped**, never fatal to the camera; a visit whose
+  thumbnail or clip can't be written is stored without them.
+
 ### Visit aggregation
 
 - A visit is **one kind of animal on one camera over a stretch of time**: keyed by
@@ -373,7 +396,7 @@ Each step is its own PR.
 
 1. **2a: monitor skeleton** *(built: `camera-monitor`)*. Per-camera ffmpeg readers, motion, packet ring buffer, clips on
    motion. No model. Testable with the recorded clips.
-2. **2b: SpeciesNet + visits.** Tier 2 and 3 on candidate windows, allowlist, visit aggregation,
+2. **2b: SpeciesNet + visits** *(built; see "How 2b was built" below)*. Tier 2 and 3 on candidate windows, allowlist, visit aggregation,
    SQLite. Also re-run the eval on night clips.
 3. **2c: MCP history tools.** `find_visits`, `activity_summary`, `visit_media`, `monitor_status`
    against a fixture database.

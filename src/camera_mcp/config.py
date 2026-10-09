@@ -44,6 +44,22 @@ class MonitorSettings:
     min_changed: float = 0.002  # motion = at least this fraction of pixels changed (low, for recall)
     view_check_seconds: float = 300.0  # how often to check whether the camera has been moved (0: never)
     view_threshold: float = 0.5  # below this edge match (0-1), a check counts as "looks moved"
+    detect_every_seconds: float = 1.0  # while there's motion or an open visit, analyse a frame this often
+    visit_close_seconds: float = 30.0  # a visit ends after this long without its animal being detected
+    min_box_conf: float = 0.2  # detector boxes below this confidence are ignored
+    max_boxes: int = 8  # boxes classified per frame (the most confident); the rest share neighbours' labels
+    save_people_images: bool = True  # keep a thumbnail and clip for person visits
+    detect_vehicles: bool = False  # log vehicles (for a driveway camera); elsewhere they're false alarms
+    training_capture: bool = False  # keep a clip of every motion window, animal or not (training data)
+
+
+@dataclass(frozen=True)
+class Site:
+    """Where the cameras are and what lives there. The `site:` section of cameras.yaml."""
+
+    country: str = "USA"  # ISO 3166-1 alpha-3; SpeciesNet drops species not found there
+    admin1_region: str = ""  # e.g. "CA"; narrows that to a state
+    allowlist: tuple[str, ...] = ()  # common names or taxonomy prefixes; empty: everything allowed
 
 
 @dataclass(frozen=True)
@@ -119,6 +135,11 @@ def _settings(base: MonitorSettings, raw: dict, where: str, *, strict: bool) -> 
         raise ConfigError(f"{where}: unknown setting {', '.join(unknown)}")
     changes = {}
     for key in set(raw) & set(known):
+        if known[key].type == "bool":
+            if not isinstance(raw[key], bool):
+                raise ConfigError(f"{where}: {key} must be true or false, not {raw[key]!r}")
+            changes[key] = raw[key]
+            continue
         kind = int if known[key].type == "int" else float
         try:
             changes[key] = kind(raw[key])
@@ -139,6 +160,19 @@ def _strings(value, where: str, key: str) -> tuple[str, ...]:
     if not isinstance(items, list) or not all(isinstance(v, str) for v in items):
         raise ConfigError(f"{where}: {key} must be a list of strings")
     return tuple(items)
+
+
+def load_site(path: str | Path) -> Site:
+    """The `site:` section of the camera config (defaults if there is none)."""
+    data = yaml.safe_load(Path(path).expanduser().read_text()) or {}
+    raw = data.get("site") or {}
+    if unknown := sorted(set(raw) - {"country", "admin1_region", "allowlist"}):
+        raise ConfigError(f"site: unknown setting {', '.join(unknown)}")
+    return Site(
+        country=str(raw.get("country", Site.country)),
+        admin1_region=str(raw.get("admin1_region", "")),
+        allowlist=_strings(raw.get("allowlist"), "site", "allowlist"),
+    )
 
 
 def default_config_path() -> str:

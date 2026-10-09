@@ -69,25 +69,51 @@ what its streams deliver (codec, resolution, frame rate). Tapo cameras are check
 `/stream1` and `/stream2`. It's read-only: each stream is opened, its header read, and closed.
 It exits non-zero if any stream fails.
 
-## The monitor (phase 2a)
+## The monitor
 
 ```bash
-.venv/bin/camera-monitor                          # all enabled cameras, until Ctrl-C
+uv pip install --python .venv/bin/python -e '.[detect]'   # SpeciesNet, for animal identification
+.venv/bin/camera-monitor                                    # all enabled cameras, until Ctrl-C
 .venv/bin/camera-monitor --camera "west alley" --duration 300
 ```
 
 For each camera, the monitor:
 - **records** the main stream into a ring buffer of 2-second files, copied rather than re-encoded;
-- **watches** the low-resolution stream for motion, at 5 grayscale frames per second;
-- **saves a clip** when motion ends, joined from the buffer with the seconds before and after it.
+- **watches** the low-resolution stream for motion, at 5 frames per second;
+- **identifies** what's there: while there's motion, or an animal is still in view, it runs
+  [SpeciesNet](https://github.com/google/cameratrapai) on one frame per second from the buffer.
+  Every box is classified, and on `wide_view` cameras the detector also looks at tiles of the
+  frame, so small animals far away aren't lost;
+- **logs visits**: one per kind of animal per camera, from arrival until it's gone 30 seconds
+  (a flock is one visit with a head count; a cat among the birds is a second visit). Each visit
+  gets a label by vote across its frames, a group (`songbirds`, `jays`, `cat`, `raccoon`...),
+  a thumbnail of the best sighting and a clip with the seconds before and after.
 
-It logs each motion window, and each camera's status, to `data/monitor.db`. Clips go to
-`data/clips/<camera>/<date>/`. `data/` is git-ignored; set `--data-dir` or `$CAMERA_MCP_DATA` to
-put it elsewhere. Dropped streams are reopened with backoff.
+Everything goes to `data/` (git-ignored; `--data-dir` or `$CAMERA_MCP_DATA` to move it):
+`monitor.db` (visits, their frames, motion windows, camera status), `media/` (thumbnails) and
+`clips/`. Dropped streams are reopened with backoff. The first detection loads the model, which
+downloads its weights (about 500 MB) on first use.
 
-There is no detection model yet: phase 2b adds SpeciesNet, which turns motion into animal visits.
-Timing and sensitivity can be set site-wide under `monitor:` in `cameras.yaml`, or per camera:
-`pre_seconds`, `post_seconds`, `quiet_seconds`, `motion_fps`, `pixel_threshold` and `min_changed`.
+Without SpeciesNet installed, or with `--detector none`, the monitor watches for motion only and
+keeps a clip of every motion window. With it, clips are kept for visits, so leaves, shadows and
+insects in the infrared light don't fill the disk; set `training_capture: true` on a camera to
+keep motion clips too. On a slow machine analysis thins to one frame per segment when it falls
+behind; SpeciesNet takes about 4 s per frame on an Intel MacBook Pro's CPU.
+
+Where the cameras are goes under `site:` in `cameras.yaml`. SpeciesNet drops species not found
+there, and an `allowlist` turns any other species into its class ("mammal", "bird"):
+
+```yaml
+site:
+  country: USA
+  admin1_region: CA
+  allowlist: [domestic cat, domestic dog, northern raccoon, striped skunk, virginia opossum, aves]
+```
+
+Settings, site-wide under `monitor:` or per camera: `pre_seconds`, `post_seconds`,
+`quiet_seconds`, `motion_fps`, `pixel_threshold`, `min_changed`, `detect_every_seconds`,
+`visit_close_seconds`, `min_box_conf`, `max_boxes`, `save_people_images` (default true),
+`detect_vehicles` (default false; for a driveway camera) and `training_capture`.
 
 **Moved-camera check.** Every 5 minutes, when nothing is moving, the monitor compares each
 camera's view with a stored reference (one for day, one for infrared night, in `data/views/`).

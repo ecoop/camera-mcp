@@ -79,7 +79,8 @@ class ViewCheck:
 
     def _save(self, light: str, mask: np.ndarray, now: float) -> None:
         self.ref_dir.mkdir(parents=True, exist_ok=True)
-        cv2.imwrite(str(self._path(light)), mask.astype(np.uint8) * 255)
+        # imencode/imdecode, not imwrite/imread: SpeciesNet's yolov5 replaces those in cv2.
+        self._path(light).write_bytes(cv2.imencode(".png", mask.astype(np.uint8) * 255)[1].tobytes())
         self.refreshed[light] = now
 
     def check(self, now: float, gray: np.ndarray, colour: bool) -> ViewResult | None:
@@ -88,7 +89,8 @@ class ViewCheck:
         light = DAY if colour else NIGHT
         current = edges(gray)
         path = self._path(light)
-        stored = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE) if path.exists() else None
+        stored = (cv2.imdecode(np.frombuffer(path.read_bytes(), np.uint8), cv2.IMREAD_GRAYSCALE)
+                  if path.exists() else None)
         if stored is None or stored.shape != current.shape:
             if current.mean() < MIN_EDGES:
                 return None

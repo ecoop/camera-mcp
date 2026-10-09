@@ -1,7 +1,7 @@
 [project]
 name = "camera-mcp"
 version = "0.1.0"
-description = "MCP server over home IP cameras: list, snapshot, and (later) detections and recording."
+description = "MCP server over home IP cameras: live snapshots, and a monitor that logs animal visits."
 requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -13,6 +13,9 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+# Animal identification in the monitor. SpeciesNet supports Python < 3.14 (and pins numpy < 2
+# on Intel Macs); without it the monitor watches for motion only.
+detect = ["speciesnet>=5.0.5; python_version < '3.14'"]
 
 [project.scripts]
 camera-mcp = "camera_mcp.server:main"

@@ -2,6 +2,10 @@
 # A Tapo camera needs only its IP: the RTSP URL is built from it, using the credentials in
 # $CAMERA_USER and $CAMERA_PASS (the Camera Account set in the Tapo app) and /stream1.
 # 192.0.2.x is a documentation range.
+# Where the cameras are: SpeciesNet drops species not found there. See the README for `allowlist`.
+site:
+  country: USA
+  admin1_region: CA
 cameras:
   - name: east_fence
     label: Back fence, east

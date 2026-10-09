@@ -8,6 +8,7 @@ ISO 8601 strings, so they sort and compare as text.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 from datetime import datetime, timezone
@@ -24,6 +25,35 @@ CREATE TABLE IF NOT EXISTS motion_windows (
   clip        TEXT                -- path relative to the data directory; NULL if none was saved
 );
 CREATE INDEX IF NOT EXISTS motion_windows_camera_time ON motion_windows(camera, started_at);
+
+CREATE TABLE IF NOT EXISTS visits (
+  id          INTEGER PRIMARY KEY,
+  camera      TEXT NOT NULL,
+  started_at  TEXT NOT NULL,
+  ended_at    TEXT NOT NULL,       -- the last frame the animal was detected in
+  label       TEXT NOT NULL,       -- common name: 'domestic cat', 'bird', 'person'
+  taxonomy    TEXT NOT NULL,       -- 'class;order;family;genus;species', '' if unknown
+  grp         TEXT NOT NULL,       -- what the visit is keyed by: 'songbirds', 'cat', 'mammal'
+  score       REAL NOT NULL,       -- the winning label's share of the vote, 0-1
+  frames      INTEGER NOT NULL,    -- analysed frames it was detected in
+  max_count   INTEGER NOT NULL,    -- most of them in any one frame
+  thumbnail   TEXT,                -- paths relative to the data directory; NULL if not kept
+  clip        TEXT,
+  model       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS visits_camera_time ON visits(camera, started_at);
+CREATE INDEX IF NOT EXISTS visits_grp_time ON visits(grp, started_at);
+CREATE INDEX IF NOT EXISTS visits_taxonomy ON visits(taxonomy);
+
+CREATE TABLE IF NOT EXISTS visit_frames (
+  visit_id  INTEGER NOT NULL REFERENCES visits(id),
+  ts        TEXT NOT NULL,
+  label     TEXT NOT NULL,
+  taxonomy  TEXT NOT NULL,
+  score     REAL NOT NULL,
+  boxes     TEXT NOT NULL           -- JSON: [{"conf": 0.94, "bbox": [x, y, w, h]}], fractions of the frame
+);
+CREATE INDEX IF NOT EXISTS visit_frames_visit ON visit_frames(visit_id);
 
 CREATE TABLE IF NOT EXISTS camera_status (
   camera          TEXT PRIMARY KEY,
@@ -71,6 +101,33 @@ class Store:
                 (camera, iso(start), iso(end), peak, frames, clip),
             )
             return int(cur.lastrowid)
+
+    def add_visit(self, visit, *, model: str, thumbnail: str | None, clip: str | None) -> int:
+        """Store a closed visits.Visit and its per-frame detections."""
+        label = visit.label
+        with self._lock:
+            cur = self._db.execute(
+                "INSERT INTO visits (camera, started_at, ended_at, label, taxonomy, grp, score, frames,"
+                " max_count, thumbnail, clip, model) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (visit.camera, iso(visit.start), iso(visit.last_seen), label.name, label.taxonomy, visit.key,
+                 round(label.score, 3), visit.frames, visit.max_count, thumbnail, clip, model),
+            )
+            visit_id = int(cur.lastrowid)
+            rows = []
+            for t, dets in visit.log:
+                best = max(dets, key=lambda d: d.box.conf)
+                boxes = [{"conf": round(d.box.conf, 3), "bbox": [round(v, 4) for v in (d.box.x, d.box.y, d.box.w, d.box.h)]}
+                         for d in dets]
+                rows.append((visit_id, iso(t), best.label.name, best.label.taxonomy, round(best.label.score, 3),
+                             json.dumps(boxes)))
+            self._db.executemany("INSERT INTO visit_frames VALUES (?, ?, ?, ?, ?, ?)", rows)
+            return visit_id
+
+    def visits(self, camera: str | None = None) -> list[sqlite3.Row]:
+        with self._lock:
+            self._db.row_factory = sqlite3.Row
+            sql = "SELECT * FROM visits" + (" WHERE camera = ?" if camera else "") + " ORDER BY started_at"
+            return self._db.execute(sql, (camera,) if camera else ()).fetchall()
 
     def set_status(self, camera: str, state: str, *, now: float, last_frame: float | None = None,
                    last_motion: float | None = None, error: str | None = None) -> None:
