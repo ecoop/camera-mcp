@@ -79,6 +79,23 @@ def grab_frame(camera: Camera, timeout: float = 5.0) -> Frame:
     return Frame(image=image, taken_at=time.time())
 
 
+def grab_any(camera: Camera, timeout: float = 5.0) -> tuple[Frame, str]:
+    """A frame from the main stream, or from the low-resolution stream if the main one won't
+    open (Tapo cameras allow only a couple of main-stream clients at once: the monitor's
+    recorder and the Tapo app's live view can use them up). Returns the frame and a note."""
+    try:
+        return grab_frame(camera, timeout), ""
+    except CaptureError:
+        sub = camera.substream()
+        if sub is None:
+            raise
+        try:
+            return grab_frame(sub, timeout), " (from the low-resolution stream: the main stream is busy)"
+        except CaptureError:
+            pass
+        raise
+
+
 def to_jpeg(image: np.ndarray, max_width: int = 1024, quality: int = 80) -> tuple[bytes, int, int]:
     """Downscale to `max_width` (never up) and JPEG-encode. Returns (bytes, width, height)."""
     h, w = image.shape[:2]

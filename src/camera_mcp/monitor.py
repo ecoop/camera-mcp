@@ -50,6 +50,7 @@ from camera_mcp.config import (
 from camera_mcp.detect import Detector, SpeciesNetDetector, available
 from camera_mcp.motion import MotionDetector, MotionWindows, Window
 from camera_mcp.probe import ProbeError, probe_stream
+from camera_mcp.scenery import Scenery
 from camera_mcp.store import Store
 from camera_mcp.view import ViewCheck, is_colour
 from camera_mcp.visits import Visit, VisitTracker
@@ -58,6 +59,7 @@ log = logging.getLogger("camera_mcp.monitor")
 
 BACKOFF = (2, 5, 10, 30, 60)  # seconds between reconnect attempts
 STATUS_EVERY = 5.0  # seconds between status writes while watching
+SHUTDOWN_SECONDS = 120.0  # at most this long, after stopping, to save open visits and their media
 
 
 def watcher_args(source: Camera, width: int, height: int, fps: float) -> list[str]:
@@ -155,6 +157,7 @@ class CameraWorker:
         # Detection (phase 2b), when the monitor has an analyzer:
         self.analyzer: Analyzer | None = None
         self.tracker = VisitTracker(camera.name, close_after=self.s.visit_close_seconds)
+        self.scenery = Scenery(data_dir / "scenery" / f"{camera.name}.json")
         self.recent_windows: list[tuple[float, float]] = []  # (start, last motion) of closed windows
         self.considered_until = 0.0  # segments starting at or before this were already considered
         self.queued: dict[Path, float] = {}  # segments waiting for the analyzer -> their start
@@ -248,7 +251,9 @@ class CameraWorker:
                         break
                     attempt += 1
                     continue
-                width = self.s.motion_width
+                # Wide views decode motion frames at the low-res stream's full width, so a far-off
+                # bird covers 4x the pixels.
+                width = max(self.s.motion_width, 640) if "wide_view" in self.camera.tags else self.s.motion_width
                 height = max(2, round(width * info.height / max(info.width, 1) / 2) * 2)
                 proc = self._run(watcher_args(source, width, height, self.s.motion_fps), stdout=subprocess.PIPE)
                 errors = _tail(proc)
@@ -387,7 +392,7 @@ class CameraWorker:
         with self.lock:
             pending = list(self.pending_visits)
         for visit in pending:
-            clip_end = visit.last_seen + self.s.post_seconds
+            clip_end = min(visit.last_seen + self.s.post_seconds, visit.start + self.s.max_clip_seconds)
             if not (final or any(seg.start > clip_end for seg in segments)):
                 continue
             keep_images = visit.key != "person" or self.s.save_people_images
@@ -424,7 +429,7 @@ class CameraWorker:
             pending = list(self.pending)
         for window in pending:
             clip_start = window.start - self.s.pre_seconds
-            clip_end = window.last_motion + self.s.post_seconds
+            clip_end = min(window.last_motion + self.s.post_seconds, window.start + self.s.max_clip_seconds)
             # The post-roll is on disk once a later segment has started (or recording is over).
             if not (final or (self.analyzer and not self.s.training_capture)
                     or any(seg.start > clip_end for seg in segments)):
@@ -550,6 +555,11 @@ class Analyzer:
             detections = self.detector.analyze(frame, tiles="wide_view" in worker.camera.tags,
                                                min_conf=s.min_box_conf, max_boxes=s.max_boxes,
                                                vehicles=s.detect_vehicles)
+            detections, learned = worker.scenery.filter(t, detections, frame)
+            for spot in learned:
+                log.info("%s: learned scenery at x=%.2f y=%.2f (%.0f%% x %.0f%% of the frame): a \"%s\" that "
+                         "keeps appearing in exactly the same place; ignoring it from now on",
+                         worker.camera.name, spot.x, spot.y, spot.w * 100, spot.h * 100, spot.kind)
             with worker.lock:
                 before = set(worker.tracker.open)
                 closed = worker.tracker.feed(t, detections, frame)
@@ -586,8 +596,16 @@ class Monitor:
             if self.stop.wait(0.5) or deadline and time.monotonic() >= deadline:
                 break
         self.stop.set()
+        # Let every camera finish: close its open visits, write their thumbnails and clips, and
+        # store them. Only then close the store; a visit still unsaved at the deadline is named.
+        finish_by = time.monotonic() + SHUTDOWN_SECONDS
+        while not all(w.done for w in self.workers) and time.monotonic() < finish_by:
+            time.sleep(0.5)
         for w in self.workers:
-            w.join(timeout=30)
+            w.join(timeout=5)
+            for visit in w.pending_visits:
+                log.warning("%s: shutting down before the %s visit from %s was saved", w.camera.name, visit.key,
+                            datetime.fromtimestamp(visit.start, timezone.utc).isoformat(timespec="seconds"))
         if self.analyzer:
             self.analyzer.thread.join(timeout=30)
         self.store.close()
@@ -607,8 +625,8 @@ def main(argv: list[str] | None = None) -> None:
                         help="what identifies animals in motion: SpeciesNet if installed (auto, the default),"
                              " or none (motion and clips only)")
     parser.add_argument("--reset-view", action="append", default=[], metavar="NAME",
-                        help="forget this camera's reference view after re-aiming it on purpose, then exit"
-                             " (repeatable)")
+                        help="after re-aiming a camera on purpose: forget its reference view and learned"
+                             " scenery, then exit (repeatable)")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     try:
@@ -623,8 +641,9 @@ def main(argv: list[str] | None = None) -> None:
                 print(f"camera-monitor: unknown camera {name}", file=sys.stderr)
                 raise SystemExit(2)
             removed = ViewCheck(args.data_dir / "views", cam.name).reset()
+            spots = Scenery(args.data_dir / "scenery" / f"{cam.name}.json").reset()
             print(f"{cam.name}: {'reference view forgotten' if removed else 'no reference view yet'};"
-                  " a new one is taken on the next check")
+                  f" a new one is taken on the next check. Learned scenery forgotten ({spots} spot(s)).")
         return
     chosen = [c for c in cameras.values() if c.enabled]
     if args.camera:

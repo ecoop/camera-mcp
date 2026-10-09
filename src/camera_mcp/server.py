@@ -22,7 +22,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp_types import ToolAnnotations
 from pydantic import BaseModel
 
-from camera_mcp.capture import CaptureError, grab_frame, reachable, to_jpeg
+from camera_mcp.capture import CaptureError, grab_any, reachable, to_jpeg
 from camera_mcp.config import (
     Camera, ConfigError, default_config_path, default_data_dir, find_camera, load_cameras, load_site,
 )
@@ -118,12 +118,12 @@ def build_server(cameras: dict[str, Camera], history: History | None = None, dat
         cam = lookup(camera)
         max_width = max(160, min(max_width, 1920))
         try:
-            frame = await anyio.to_thread.run_sync(grab_frame, cam)
+            frame, note = await anyio.to_thread.run_sync(grab_any, cam)
         except CaptureError as e:
             raise ToolError(str(e)) from None
         data, w, h = to_jpeg(frame.image, max_width=max_width)
         taken = datetime.fromtimestamp(frame.taken_at).astimezone().isoformat(timespec="seconds")
-        return [Image(data=data, format="jpeg"), f"{cam.name} ({cam.label or 'no label'}) at {taken}, {w}x{h}"]
+        return [Image(data=data, format="jpeg"), f"{cam.name} ({cam.label or 'no label'}) at {taken}, {w}x{h}{note}"]
 
     @server.resource("cameras://list", mime_type="application/json")
     def camera_list() -> str:
@@ -134,7 +134,7 @@ def build_server(cameras: dict[str, Camera], history: History | None = None, dat
     def latest(name: str) -> bytes:
         """A current frame from the named camera, as JPEG (1024 px wide at most)."""
         try:
-            return to_jpeg(grab_frame(lookup(name)).image)[0]
+            return to_jpeg(grab_any(lookup(name))[0].image)[0]
         except CaptureError as e:
             raise ToolError(str(e)) from None
 

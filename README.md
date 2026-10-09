@@ -21,7 +21,7 @@ Household context and motivations stay out of the repo, in the git-ignored `note
 | Tool | What it returns |
 |---|---|
 | `list_cameras` | name, label, tags, aliases, and whether each camera answers right now (a TCP check, no decode) |
-| `snapshot(camera, max_width=1024)` | one current frame as a JPEG image, downscaled to `max_width` |
+| `snapshot(camera, max_width=1024)` | one current frame as a JPEG image, downscaled to `max_width`; from the low-res stream if the camera's main stream is busy (Tapo cameras allow only a couple of main-stream clients) |
 | `find_visits(since, until, cameras, tag, taxon, overlapping, min_score, limit)` | animal visits in a stretch of time, newest first; `still_there` marks one happening now |
 | `activity_summary(since, until, group_by, cameras, tag, taxon)` | visit counts by `species`, `group`, `camera`, local `hour` or `day` |
 | `visit_media(visit_id)` | the thumbnail of a visit's best sighting |
@@ -143,6 +143,11 @@ Settings, site-wide under `monitor:` or per camera: `pre_seconds`, `post_seconds
 `quiet_seconds`, `motion_fps`, `pixel_threshold`, `min_changed`, `detect_every_seconds`,
 `visit_close_seconds`, `min_box_conf`, `max_boxes`, `save_people_images` (default true),
 `detect_vehicles` (default false; for a driveway camera) and `training_capture`.
+
+**Learned scenery.** Fixed objects that the detector keeps mistaking for an animal or a person
+(an empty feeder, a cloth on a rail, clothespins on a line) are learned after 5 sightings over 10
+minutes at the same place and size, and ignored from then on (`data/scenery/`). Named animals are
+never ignored, however still they sit.
 
 **Moved-camera check.** Every 5 minutes, when nothing is moving, the monitor compares each
 camera's view with a stored reference (one for day, one for infrared night, in `data/views/`).

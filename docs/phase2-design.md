@@ -183,6 +183,12 @@ Where the implementation differs from, or adds to, the plan above:
   joins the animal already being seen on that camera, and doesn't sway the visit's label.
 - **With detection on, clips are kept for visits, not for motion windows**, unless the camera
   has `training_capture: true`. Motion windows are still logged.
+- **Motion is judged by patches as well as by share of frame** (added after the first feeder
+  trial): one small bird at a far feeder is a tiny share of a wide view, so any compact patch of
+  change of `min_blob_fraction` counts too, and wide views get 640-px motion frames.
+- **Learned scenery** (repeat-detection elimination): unconfirmed boxes (animal, person, vehicle)
+  that recur at the same place and size over 10+ minutes are dropped. The trial's tray feeder,
+  deck-rail cloth and clothespins were all learned, halving the backyard's false visits.
 - **A housekeeping failure is logged and skipped**, never fatal to the camera; a visit whose
   thumbnail or clip can't be written is stored without them.
 

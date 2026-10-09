@@ -50,11 +50,13 @@ class MonitorSettings:
     motion_fps: float = 5.0  # frames per second decoded from the low-resolution stream
     motion_width: int = 320  # those frames are scaled to this width, in grayscale
     pixel_threshold: int = 25  # a pixel counts as changed if it differs this much (0-255) from the background
-    min_changed: float = 0.002  # motion = at least this fraction of pixels changed (low, for recall)
+    min_changed: float = 0.002  # motion = at least this fraction of pixels changed (low, for recall)...
+    min_blob_fraction: float = 0.0002  # ...or one compact patch this big (a small bird far from the camera)
     view_check_seconds: float = 300.0  # how often to check whether the camera has been moved (0: never)
     view_threshold: float = 0.5  # below this edge match (0-1), a check counts as "looks moved"
     detect_every_seconds: float = 1.0  # while there's motion or an open visit, analyse a frame this often
     max_analysis_lag: float = 120.0  # a segment still waiting this long is skipped, and logged as unanalysed
+    max_clip_seconds: float = 120.0  # clips are cut off this long after the visit starts (a dove can sit for an hour)
     visit_close_seconds: float = 30.0  # a visit ends after this long without its animal being detected
     min_box_conf: float = 0.2  # detector boxes below this confidence are ignored
     max_boxes: int = 8  # boxes classified per frame (the most confident); the rest share neighbours' labels

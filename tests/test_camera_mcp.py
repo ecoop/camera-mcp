@@ -8,6 +8,7 @@ import base64
 import shutil
 import subprocess
 
+import numpy as np
 import pytest
 from mcp import Client
 
@@ -250,3 +251,22 @@ async def test_snapshot_matches_names_loosely_and_lists_tags(config):
         assert not result.is_error and result.content[1].text.startswith("west_alley ")
         cams = (await client.call_tool("list_cameras", {})).structured_content["result"]
         assert {c["name"]: c["tags"] for c in cams}["west_alley"] == ["feeder", "dog_yard"]
+
+
+def test_snapshot_falls_back_to_the_low_res_stream(monkeypatch):
+    from camera_mcp import capture
+
+    calls = []
+
+    def fake_grab(camera, timeout=5.0):
+        calls.append(camera.source)
+        if camera.source.endswith("/stream1"):
+            raise capture.CaptureError("cam: Error opening input files: Operation not permitted")
+        return capture.Frame(image=np.zeros((360, 640, 3), np.uint8), taken_at=0.0)
+
+    monkeypatch.setattr(capture, "grab_frame", fake_grab)
+    frame, note = capture.grab_any(Camera("cam", "rtsp://u:p@10.0.0.2/stream1"))
+    assert frame.image.shape == (360, 640, 3) and "low-resolution" in note
+    assert [c.rsplit("/", 1)[1] for c in calls] == ["stream1", "stream2"]
+    with pytest.raises(capture.CaptureError):  # not a Tapo RTSP camera: no low-res stream to fall back to
+        capture.grab_any(Camera("other", "rtsps://u:p@10.0.0.2/stream1"))

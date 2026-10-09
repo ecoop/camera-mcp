@@ -292,3 +292,23 @@ def test_monitor_flags_a_camera_that_moved(tmp_path):
     db = sqlite3.connect(data / "monitor.db")
     score, since = db.execute("SELECT view_score, view_moved_since FROM camera_status").fetchone()
     assert since is not None and score < 0.5, (score, since)
+
+
+def test_one_small_bird_is_motion_but_scattered_noise_is_not():
+    detector = MotionDetector(MonitorSettings())
+    still = np.full((180, 320), 100, np.uint8)
+    detector.update(still)
+    detector.update(still)
+    bird = still.copy()
+    bird[90:95, 200:205] = 30  # a 5x5 dark patch: 0.04% of the frame, far under min_changed
+    changed = detector.update(bird)
+    assert changed < detector.min_changed and detector.is_motion(changed)
+
+    detector = MotionDetector(MonitorSettings())
+    detector.update(still)
+    rng = np.random.default_rng(0)
+    noisy = still.copy()
+    ys, xs = rng.integers(0, 180, 50), rng.integers(0, 320, 50)
+    noisy[ys, xs] = 255  # 50 lone hot pixels scattered across the frame
+    changed = detector.update(noisy)
+    assert not detector.is_motion(changed) and detector.largest_blob == 0.0

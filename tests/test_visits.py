@@ -243,3 +243,100 @@ def test_a_detector_that_cant_keep_up_skips_old_motion_and_says_so(tmp_path, box
     spans = db.execute("SELECT started_at, ended_at FROM analysis_skipped WHERE camera = 'feeder'").fetchall()
     assert spans, "nothing was recorded as skipped"
     assert db.execute("SELECT state FROM camera_status").fetchone()[0] == "stopped"
+
+
+# ---- learned scenery ------------------------------------------------------------------
+
+def _unnamed(x=0.3, y=0.4):
+    return Detection(Box(x, y, 0.03, 0.08, 0.6), Label("animal"), "animal")
+
+
+def test_a_static_unidentified_box_is_learned_as_scenery_and_dropped(tmp_path):
+    from camera_mcp.scenery import Scenery
+
+    scenery = Scenery(tmp_path / "cam.json")
+    for t in (0, 150, 300, 450):  # four sightings over 7.5 minutes: not yet scenery
+        kept, newly = scenery.filter(t, [_unnamed()])
+        assert len(kept) == 1 and not newly
+    kept, newly = scenery.filter(660, [_unnamed()])  # fifth, 11 minutes after the first: scenery
+    assert len(newly) == 1 and kept == []
+    cat = Detection(Box(0.3, 0.4, 0.03, 0.08, 0.9), Label("domestic cat", CAT, 0.9), "cat")
+    kept, _ = scenery.filter(700, [_unnamed(), cat, _unnamed(x=0.7)])  # a cat on the same spot stays
+    assert [d.key for d in kept] == ["cat", "animal"] and kept[1].box.x == 0.7
+    assert Scenery(tmp_path / "cam.json").filter(800, [_unnamed()])[0] == []  # kept across restarts
+    assert Scenery(tmp_path / "cam.json").reset() == 1 and not (tmp_path / "cam.json").exists()
+
+
+def test_moving_or_brief_unidentified_boxes_are_not_scenery(tmp_path):
+    from camera_mcp.scenery import Scenery
+
+    scenery = Scenery(tmp_path / "cam.json")
+    for i, t in enumerate(range(0, 1200, 120)):  # an animal wandering: a different place each time
+        kept, newly = scenery.filter(t, [_unnamed(x=0.05 + i * 0.08)])
+        assert kept and not newly
+    brief = Scenery(tmp_path / "brief.json")
+    for t in range(0, 60, 10):  # six sightings within one minute: an animal that paused
+        kept, newly = brief.filter(t, [_unnamed()])
+        assert kept and not newly
+
+
+def test_a_static_person_box_is_scenery_but_a_person_walking_is_not(tmp_path):
+    from camera_mcp.scenery import Scenery
+
+    cloth = Detection(Box(0.8, 0.49, 0.03, 0.1, 0.4), Label("person"), "person")  # a cloth over the deck rail
+    scenery = Scenery(tmp_path / "cam.json")
+    for t in (0, 200, 400, 600, 800):
+        kept, _ = scenery.filter(t, [cloth])
+    assert kept == []
+    walker = Scenery(tmp_path / "walker.json")
+    for i, t in enumerate(range(0, 1200, 120)):
+        kept, newly = walker.filter(t, [Detection(Box(0.1 + i * 0.05, 0.4, 0.05, 0.2, 0.9), Label("person"), "person")])
+        assert kept and not newly
+    bird = Detection(Box(0.8, 0.49, 0.03, 0.1, 0.9), Label("bird", "aves;;;;", 0.8), "bird")
+    assert scenery.filter(900, [bird])[0] == [bird]  # a named animal on a scenery spot is never dropped
+
+
+def test_something_sitting_on_learned_scenery_is_kept(tmp_path):
+    """A learned feeder roof: dropped while it looks the same, kept when a bird sits on it."""
+    from camera_mcp.scenery import Scenery
+
+    rng = np.random.default_rng(2)
+    base = np.clip(rng.normal(120, 30, (360, 640, 3)), 0, 255).astype(np.uint8)
+    base[40:70, 230:300] = 40  # the dark roof
+    base[40:44, 230:300] = 200  # its bright edge
+    roof = Detection(Box(230 / 640, 40 / 360, 70 / 640, 30 / 360, 0.3), Label("animal"), "animal")
+    scenery = Scenery(tmp_path / "cam.json")
+    for t in (0, 200, 400, 600, 800):
+        kept, _ = scenery.filter(t, [roof], base)
+    assert kept == []  # learned, and still looks the same
+    dimmer = (base * 0.7).astype(np.uint8)
+    assert scenery.filter(900, [roof], dimmer)[0] == []  # evening light: the same look, still dropped
+    with_bird = base.copy()
+    with_bird[44:62, 250:268] = 230  # a pale finch perched on the roof
+    assert scenery.filter(1000, [roof], with_bird)[0] == [roof]  # looks different: kept
+
+
+@pytest.fixture
+def busy(tmp_path):
+    """60 s of a test pattern with white bars: the stand-in detector sees an animal in every frame."""
+    path = tmp_path / "busy.mp4"
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=size=640x360:rate=10:d=60",
+                    "-c:v", "libx264", "-g", "10", "-pix_fmt", "yuv420p", str(path)], check=True)
+    return path
+
+
+@needs_ffmpeg
+def test_a_visit_open_at_shutdown_is_saved_with_a_capped_clip(tmp_path, busy):
+    """Regression: the trial's 21-minute dove visit ended during shutdown and was never saved."""
+    s = MonitorSettings(pre_seconds=0, post_seconds=0, quiet_seconds=2, max_clip_seconds=4)
+    data = tmp_path / "data"
+    Monitor([Camera("tree", str(busy), monitor=s)], data, WhiteThingDetector(Label("bird", "aves;;;;", 0.7), "bird")).run(duration=12)
+    db = sqlite3.connect(data / "monitor.db")
+    db.row_factory = sqlite3.Row
+    (visit,) = db.execute("SELECT * FROM visits").fetchall()
+    assert visit["open"] == 0 and visit["thumbnail"] and visit["clip"]
+    assert db.execute("SELECT COUNT(*) FROM visit_frames WHERE visit_id = ?", (visit["id"],)).fetchone()[0] > 0
+    import json as _json
+    dur = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "json", str(data / visit["clip"])],
+                         capture_output=True, text=True).stdout
+    assert float(_json.loads(dur)["format"]["duration"]) <= 4 + 2 * s.segment_seconds  # capped (segments are 2 s)
