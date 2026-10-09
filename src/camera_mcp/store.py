@@ -35,6 +35,14 @@ CREATE TABLE IF NOT EXISTS camera_status (
 );
 """
 
+# Columns added after the first release, added to an existing database when it's opened.
+ADDED_COLUMNS = {
+    "camera_status": {
+        "view_score": "REAL",  # last moved-camera check: how well the view matched its reference, 0-1
+        "view_moved_since": "TEXT",  # set while the camera looks moved; NULL otherwise
+    },
+}
+
 
 def iso(t: float) -> str:
     return datetime.fromtimestamp(t, timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
@@ -48,6 +56,11 @@ class Store:
         with self._lock:
             self._db.execute("PRAGMA journal_mode=WAL")
             self._db.executescript(SCHEMA)
+            for table, columns in ADDED_COLUMNS.items():
+                have = {row[1] for row in self._db.execute(f"PRAGMA table_info({table})")}
+                for name, kind in columns.items():
+                    if name not in have:
+                        self._db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {kind}")
 
     def add_window(self, camera: str, start: float, end: float, peak: float, frames: int,
                    clip: str | None) -> int:
@@ -74,6 +87,18 @@ class Store:
                      updated_at = excluded.updated_at""",
                 (camera, state, last_frame and iso(last_frame), last_motion and iso(last_motion),
                  error, iso(now)),
+            )
+
+    def set_view(self, camera: str, score: float | None, moved: bool, *, now: float) -> None:
+        """Record a moved-camera check. `view_moved_since` keeps the time it first looked moved."""
+        with self._lock:
+            self._db.execute(
+                """UPDATE camera_status SET
+                     view_score = COALESCE(?, view_score),
+                     view_moved_since = CASE WHEN ? THEN COALESCE(view_moved_since, ?) ELSE NULL END,
+                     updated_at = ?
+                   WHERE camera = ?""",
+                (score, moved, iso(now), iso(now), camera),
             )
 
     def windows(self, camera: str | None = None) -> list[sqlite3.Row]:

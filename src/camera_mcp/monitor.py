@@ -37,6 +37,7 @@ from camera_mcp.config import Camera, ConfigError, default_config_path, find_cam
 from camera_mcp.motion import MotionDetector, MotionWindows, Window
 from camera_mcp.probe import ProbeError, probe_stream
 from camera_mcp.store import Store
+from camera_mcp.view import ViewCheck, is_colour
 
 log = logging.getLogger("camera_mcp.monitor")
 
@@ -50,11 +51,12 @@ def default_data_dir() -> Path:
 
 
 def watcher_args(source: Camera, width: int, height: int, fps: float) -> list[str]:
-    """ffmpeg arguments that decode `source` to raw grayscale frames on stdout."""
+    """ffmpeg arguments that decode `source` to raw YUV 4:2:0 frames on stdout: the Y plane
+    (brightness) drives motion detection; the colour planes tell day from infrared night."""
     args = [FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin"]
     args += ["-rtsp_transport", "tcp", "-timeout", "10000000"] if source.is_stream else ["-re"]
-    return args + ["-i", source.source, "-an", "-vf", f"fps={fps},scale={width}:{height},format=gray",
-                   "-f", "rawvideo", "-pix_fmt", "gray", "-"]
+    return args + ["-i", source.source, "-an", "-vf", f"fps={fps},scale={width}:{height}",
+                   "-f", "rawvideo", "-pix_fmt", "yuv420p", "-"]
 
 
 def stop_process(proc: subprocess.Popen, grace: tuple[float, ...] = (2.0, 3.0)) -> None:
@@ -137,6 +139,8 @@ class CameraWorker:
         self.stop = stop
         self.detector = MotionDetector(self.s)
         self.windows = MotionWindows(self.s.quiet_seconds)
+        self.view = ViewCheck(data_dir / "views", camera.name, every=self.s.view_check_seconds,
+                              threshold=self.s.view_threshold)
         self.pending: list[Window] = []  # closed, waiting for their post-roll to reach disk
         self.lock = threading.Lock()
         self.procs: set[subprocess.Popen] = set()
@@ -242,7 +246,8 @@ class CameraWorker:
             self.watcher_done.set()
 
     def _read_frames(self, proc: subprocess.Popen, width: int, height: int) -> int:
-        size = width * height
+        luma = width * height
+        size = luma * 3 // 2  # yuv420p: a full-size Y plane, then quarter-size U and V
         count = 0
         last_status = last_frame = 0.0
         while not self.stop.is_set():
@@ -251,11 +256,15 @@ class CameraWorker:
                 break
             now = last_frame = time.time()
             count += 1
-            changed = self.detector.update(np.frombuffer(buf, np.uint8).reshape(height, width))
+            frame = np.frombuffer(buf, np.uint8)
+            gray = frame[:luma].reshape(height, width)
+            changed = self.detector.update(gray)
             moving = self.detector.is_motion(changed)
             with self.lock:
                 was_open = self.windows.open is not None
                 closed = self.windows.feed(now, changed, moving)
+            if not moving and not was_open and self.view.due(now):
+                self._check_view(now, gray, frame[luma:luma + luma // 4], frame[luma + luma // 4:])
             if moving and not was_open:
                 log.info("%s: motion (%.1f%% of pixels changed)", self.camera.name, changed * 100)
             if closed:
@@ -267,6 +276,18 @@ class CameraWorker:
         if count:  # the stream ended or we're stopping: record the last frame actually seen
             self.store.set_status(self.camera.name, "watching", now=time.time(), last_frame=last_frame)
         return count
+
+    def _check_view(self, now: float, gray: np.ndarray, u: np.ndarray, v: np.ndarray) -> None:
+        result = self.view.check(now, gray, colour=is_colour(u, v))
+        if result is None:
+            return
+        self.store.set_view(self.camera.name, result.score, result.moved, now=now)
+        if result.changed and result.moved:
+            log.warning("%s: the view no longer matches its reference (score %.2f): moved or "
+                        "blocked? If it was re-aimed on purpose: camera-monitor --reset-view %s",
+                        self.camera.name, result.score, self.camera.name)
+        elif result.changed:
+            log.info("%s: the view matches its reference again (score %.2f)", self.camera.name, result.score)
 
     def _closed(self, window: Window) -> None:
         log.info("%s: motion window closed after %.1fs (%d motion frames)", self.camera.name,
@@ -358,6 +379,9 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--camera", action="append", default=[], metavar="NAME",
                         help="watch only this camera (repeatable; names match loosely)")
     parser.add_argument("--duration", type=float, help="stop after this many seconds")
+    parser.add_argument("--reset-view", action="append", default=[], metavar="NAME",
+                        help="forget this camera's reference view after re-aiming it on purpose, then exit"
+                             " (repeatable)")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     try:
@@ -365,6 +389,16 @@ def main(argv: list[str] | None = None) -> None:
     except ConfigError as e:
         print(f"camera-monitor: {e}", file=sys.stderr)
         raise SystemExit(2) from None
+    if args.reset_view:
+        for name in args.reset_view:
+            cam = find_camera(cameras, name)
+            if cam is None:
+                print(f"camera-monitor: unknown camera {name}", file=sys.stderr)
+                raise SystemExit(2)
+            removed = ViewCheck(args.data_dir / "views", cam.name).reset()
+            print(f"{cam.name}: {'reference view forgotten' if removed else 'no reference view yet'};"
+                  " a new one is taken on the next check")
+        return
     chosen = [c for c in cameras.values() if c.enabled]
     if args.camera:
         found = {name: find_camera(cameras, name) for name in args.camera}

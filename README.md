@@ -89,6 +89,16 @@ There is no detection model yet: phase 2b adds SpeciesNet, which turns motion in
 Timing and sensitivity can be set site-wide under `monitor:` in `cameras.yaml`, or per camera:
 `pre_seconds`, `post_seconds`, `quiet_seconds`, `motion_fps`, `pixel_threshold` and `min_changed`.
 
+**Moved-camera check.** Every 5 minutes, when nothing is moving, the monitor compares each
+camera's view with a stored reference (one for day, one for infrared night, in `data/views/`).
+If three checks in a row don't match, it logs a warning and sets `view_moved_since` in the
+camera's status: a raccoon may have tilted it. After re-aiming a camera on purpose, forget its
+old reference:
+
+```bash
+.venv/bin/camera-monitor --reset-view east_fence
+```
+
 ## Tests
 
 ```bash

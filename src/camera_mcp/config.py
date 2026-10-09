@@ -42,6 +42,8 @@ class MonitorSettings:
     motion_width: int = 320  # those frames are scaled to this width, in grayscale
     pixel_threshold: int = 25  # a pixel counts as changed if it differs this much (0-255) from the background
     min_changed: float = 0.002  # motion = at least this fraction of pixels changed (low, for recall)
+    view_check_seconds: float = 300.0  # how often to check whether the camera has been moved (0: never)
+    view_threshold: float = 0.5  # below this edge match (0-1), a check counts as "looks moved"
 
 
 @dataclass(frozen=True)

@@ -12,6 +12,7 @@ import sys
 import time
 from datetime import datetime
 
+import cv2
 import numpy as np
 import pytest
 
@@ -20,6 +21,7 @@ from camera_mcp.monitor import Monitor, stop_stale_recorder
 from camera_mcp.motion import MotionDetector, MotionWindows
 from camera_mcp.probe import probe_stream
 from camera_mcp.ringbuffer import covering, list_segments, prune
+from camera_mcp.view import ViewCheck, edges, is_colour, similarity
 
 needs_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs the ffmpeg binary")
 
@@ -226,3 +228,67 @@ def test_a_recorder_left_by_a_dead_monitor_is_stopped_at_startup(tmp_path):
         for p in (stale, unrelated):
             p.kill()
             p.wait()
+
+
+# ---- moved-camera check ---------------------------------------------------------------
+
+def _scene(shift: int = 0, brightness: float = 1.0, seed: int = 1) -> np.ndarray:
+    """A 320x180 stand-in for a camera view: fence boards and posts over a noisy ground."""
+    rng = np.random.default_rng(seed)
+    img = np.clip(rng.normal(110, 12, (180, 320)), 0, 255).astype(np.uint8)
+    for x in range(10, 320, 34):
+        cv2.rectangle(img, (x, 20), (x + 26, 120), 175, -1)
+        cv2.rectangle(img, (x, 20), (x + 26, 120), 60, 2)
+    cv2.line(img, (0, 125), (319, 140), 40, 3)
+    cv2.rectangle(img, (230, 60), (300, 170), 200, -1)
+    if shift:
+        img = np.roll(img, (shift, shift // 2), axis=(1, 0))
+    return np.clip(img * brightness, 0, 255).astype(np.uint8)
+
+
+def test_view_similarity_tells_a_moved_camera_from_changing_light():
+    ref = edges(_scene())
+    assert similarity(edges(_scene(seed=2)), ref) > 0.85  # same view, different noise
+    assert similarity(edges(_scene(brightness=0.6)), ref) > 0.6  # 40% less light
+    assert similarity(edges(_scene(shift=20)), ref) < 0.5  # tilted: everything 20 px over
+    assert similarity(edges(np.full((180, 320), 30, np.uint8)), ref) is None  # too dark to judge
+
+
+def test_view_check_flags_after_strikes_and_clears(tmp_path):
+    check = ViewCheck(tmp_path, "cam", every=60, threshold=0.5, strikes=3)
+    first = check.check(0, _scene(), colour=True)
+    assert first.score is None and (tmp_path / "cam-day.png").exists()
+    assert check.check(60, _scene(seed=3), colour=True).score > 0.85
+    results = [check.check(t, _scene(shift=20), colour=True) for t in (120, 180, 240)]
+    assert [r.moved for r in results] == [False, False, True] and results[-1].changed
+    back = check.check(300, _scene(seed=4), colour=True)  # put back
+    assert not back.moved and back.changed
+    assert check.check(360, _scene(shift=20), colour=False).score is None  # night: its own reference
+    assert check.reset() == 2 and not (tmp_path / "cam-day.png").exists()
+
+
+def test_is_colour_tells_day_from_infrared():
+    neutral = np.full((90, 160), 128, np.uint8)
+    assert not is_colour(neutral, neutral)
+    assert is_colour(neutral - 20, neutral + 25)
+
+
+@needs_ffmpeg
+def test_monitor_flags_a_camera_that_moved(tmp_path):
+    """A still view for 6 s, then the same view shifted (a raccoon tilted the camera). The jump
+    reads as motion for ~6 s while the motion background adapts; checks wait for stillness."""
+    a, b, clip = tmp_path / "a.png", tmp_path / "b.png", tmp_path / "tilted.mp4"
+    cv2.imwrite(str(a), cv2.resize(_scene(), (640, 360)))
+    cv2.imwrite(str(b), cv2.resize(_scene(shift=20), (640, 360)))
+    subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-loop", "1", "-t", "6", "-r", "10", "-i", str(a),
+         "-loop", "1", "-t", "14", "-r", "10", "-i", str(b), "-filter_complex", "[0][1]concat=n=2,format=yuv420p",
+         "-c:v", "libx264", "-g", "10", str(clip)],
+        check=True,
+    )
+    settings = MonitorSettings(view_check_seconds=1, quiet_seconds=1, pre_seconds=0, post_seconds=0)
+    data = tmp_path / "data"
+    Monitor([Camera("fence", str(clip), monitor=settings)], data).run(duration=60)
+    db = sqlite3.connect(data / "monitor.db")
+    score, since = db.execute("SELECT view_score, view_moved_since FROM camera_status").fetchone()
+    assert since is not None and score < 0.5, (score, since)

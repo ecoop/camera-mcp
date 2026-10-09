@@ -149,10 +149,11 @@ The monitor is the only writer. The MCP server opens the database read-only
   ancestor, or its class ("mammal", "bird"). This catches errors like the "domestic cattle" cat.
 - **The household dog and people are expected, not wildlife.** `domestic dog` is on the allowlist
   so the dog gets its own visits instead of being mislabelled, and it is left out of alerts and
-  the dog-yard check by default. MegaDetector's *person* boxes become `person` visits. By default
-  no thumbnail or clip is saved for them, so the log shows activity without keeping images of
-  people; a camera can set `save_people_images: true` (for example one watching a driveway, where
-  a person is on the property and an image is the point).
+  the dog-yard check by default. MegaDetector's *person* boxes become `person` visits, with a
+  thumbnail and clip like any other visit: the cameras watch private property, and the images
+  stay in the local `data/` directory. They leave the machine only when a client asks for a
+  visit's image through the MCP tools. A camera can set `save_people_images: false` to log people
+  without keeping images of them.
 - **Detect on tiles for wide-view cameras.** MegaDetector shrinks each frame to 1280 px wide, so
   on a camera mounted high with a wide view (tag `wide_view`), a rat or sparrow across the yard
   may be only a few pixels. For those cameras the monitor also runs it on overlapping tiles of the
@@ -178,6 +179,18 @@ The monitor is the only writer. The MCP server opens the database read-only
 - Per-frame results are kept (`visit_frames`) so the vote can be re-run and audited.
 - The **thumbnail** is the crop of the highest-scoring box. The **clip** is the ring-buffer
   recording.
+
+### Moved-camera check *(built)*
+
+Raccoons tilt cameras. Every 5 minutes (`view_check_seconds`), when nothing is moving, the
+watcher compares the scene's strong edges with a stored reference view, one for day (colour) and
+one for night (infrared), kept in `data/views/`. Edges survive changes of light; brightness
+doesn't. Calibrated on our cameras: the same view scores 0.92–0.96, a raccoon-tilted fence camera
+0.03, a 12-pixel shift 0.48, 40% less light 0.68. Three checks in a row below `view_threshold`
+(0.5) flag the camera: `camera_status.view_moved_since` is set and a warning is logged. The flag
+clears when the view matches again. After re-aiming on purpose, `camera-monitor --reset-view NAME`
+forgets the old reference. `monitor_status` (2c) reports the flag, so a tilted camera doesn't
+silently watch the ground.
 
 ### Training capture
 
@@ -413,7 +426,7 @@ Not built in phase 2; recorded here so phase 2 doesn't make it harder.
 7. Night clips with a skunk, rat, raccoon or opossum, for the eval before 2b.
 8. Deterrents (later): does playing audio through the camera speaker via go2rtc work on our
    cameras, and is it loud enough at the feeders?
-9. ~~People~~: answered; keep `person` visits, no images by default, `save_people_images` per
-   camera.
+9. ~~People~~: answered; keep `person` visits with images by default; `save_people_images: false`
+   per camera to opt out.
 10. Under-deck cameras may be dark enough to be in night mode during the day; the night eval
     should include their daytime footage.
