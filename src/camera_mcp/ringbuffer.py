@@ -83,9 +83,23 @@ def prune(seg_dir: Path, keep_from: float) -> int:
 
 
 def assemble_clip(segments: list[Segment], out: Path, timeout: float = 60.0) -> Path:
-    """Join `segments` into one MP4 at `out`, without re-encoding."""
+    """Join `segments` into one MP4 at `out`, without re-encoding.
+
+    The newest segment can be cut short when the recorder is stopped; if joining fails, it is
+    retried without that last segment.
+    """
+    segments = [s for s in segments if s.path.exists() and s.path.stat().st_size >= 188]  # one TS packet
     if not segments:
         raise ValueError("no segments to join")
+    try:
+        return _concat(segments, out, timeout)
+    except RuntimeError:
+        if len(segments) < 2:
+            raise
+        return _concat(segments[:-1], out, timeout)
+
+
+def _concat(segments: list[Segment], out: Path, timeout: float) -> Path:
     out.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as listing:
         for seg in segments:

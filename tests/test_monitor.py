@@ -8,6 +8,7 @@ import os
 import shutil
 import sqlite3
 import subprocess
+import sys
 import time
 from datetime import datetime
 
@@ -15,7 +16,7 @@ import numpy as np
 import pytest
 
 from camera_mcp.config import Camera, ConfigError, MonitorSettings, find_camera, load_cameras
-from camera_mcp.monitor import Monitor
+from camera_mcp.monitor import Monitor, stop_stale_recorder
 from camera_mcp.motion import MotionDetector, MotionWindows
 from camera_mcp.probe import probe_stream
 from camera_mcp.ringbuffer import covering, list_segments, prune
@@ -157,3 +158,71 @@ def test_monitor_records_one_window_and_a_clip(tmp_path, still_move_still):
     assert (clip.width, clip.height) == (640, 360)
     status = db.execute("SELECT state, error FROM camera_status WHERE camera = 'demo'").fetchone()
     assert tuple(status) == ("stopped", None)
+
+
+@pytest.fixture
+def endless(tmp_path):
+    """A 120 s moving test pattern: for the length of a test, it behaves like a live camera."""
+    path = tmp_path / "endless.mp4"
+    subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=size=640x360:rate=10:d=120",
+         "-c:v", "libx264", "-g", "10", "-pix_fmt", "yuv420p", str(path)],
+        check=True,
+    )
+    return path
+
+
+def _started(proc: subprocess.Popen, marker: str, timeout: float = 5.0) -> None:
+    """Wait until `proc` shows `marker` in its command line (right after fork it still shows
+    the parent's)."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        ps = subprocess.run(["ps", "-ww", "-p", str(proc.pid), "-o", "command="], capture_output=True, text=True)
+        if marker in ps.stdout:
+            return
+        time.sleep(0.05)
+    raise AssertionError(f"process {proc.pid} never showed {marker!r}")
+
+
+def _children_reading(path) -> list[str]:
+    ps = subprocess.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True).stdout
+    return [line for line in ps.splitlines() if str(path) in line and "ffmpeg" in line]
+
+
+@needs_ffmpeg
+def test_stopping_leaves_no_ffmpeg_running_and_saves_the_open_window(tmp_path, endless):
+    """Regression: ffmpeg 7 can ignore a single SIGTERM, which left recorders running (and
+    filling the disk) after the monitor exited, and lost the window open at shutdown."""
+    camera = Camera("live", str(endless), monitor=MonitorSettings(pre_seconds=1, post_seconds=1))
+    data = tmp_path / "data"
+    started = time.monotonic()
+    Monitor([camera], data).run(duration=4)  # stops while motion is ongoing
+    assert time.monotonic() - started < 25
+    assert _children_reading(endless) == []
+    assert not (data / "buffer" / "live" / "recorder.pid").exists()
+    db = sqlite3.connect(data / "monitor.db")
+    assert db.execute("SELECT state FROM camera_status WHERE camera = 'live'").fetchone() == ("stopped",)
+    (clip,) = db.execute("SELECT clip FROM motion_windows").fetchone()
+    assert clip and probe_stream(Camera("clip", str(data / clip))).width == 640
+
+
+@needs_ffmpeg
+def test_a_recorder_left_by_a_dead_monitor_is_stopped_at_startup(tmp_path):
+    seg_dir = tmp_path / "data" / "buffer" / "cam"
+    seg_dir.mkdir(parents=True)
+    # Stands in for an orphaned recorder: its command line names the buffer directory.
+    stale = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", str(seg_dir)])
+    (seg_dir / "recorder.pid").write_text(str(stale.pid))
+    unrelated = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    _started(stale, str(seg_dir))
+    _started(unrelated, "time.sleep(60)")
+    try:
+        assert stop_stale_recorder(seg_dir / "recorder.pid") is True
+        assert stale.wait(5) is not None and not (seg_dir / "recorder.pid").exists()
+        (seg_dir / "recorder.pid").write_text(str(unrelated.pid))  # a reused pid: not ours
+        assert stop_stale_recorder(seg_dir / "recorder.pid") is False
+        assert unrelated.poll() is None
+    finally:
+        for p in (stale, unrelated):
+            p.kill()
+            p.wait()

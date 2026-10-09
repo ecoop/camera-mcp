@@ -57,6 +57,63 @@ def watcher_args(source: Camera, width: int, height: int, fps: float) -> list[st
                    "-f", "rawvideo", "-pix_fmt", "gray", "-"]
 
 
+def stop_process(proc: subprocess.Popen, grace: tuple[float, ...] = (2.0, 3.0)) -> None:
+    """Stop an ffmpeg child for certain.
+
+    ffmpeg 7 treats the first SIGTERM (or SIGINT) as "finish gracefully", and with the segment
+    muxer that can hang indefinitely; a second signal makes it exit. SIGKILL is the backstop.
+    """
+    for wait in grace:
+        if proc.poll() is not None:
+            return
+        proc.terminate()
+        try:
+            proc.wait(wait)
+            return
+        except subprocess.TimeoutExpired:
+            pass
+    proc.kill()
+    proc.wait()
+
+
+def _alive(pid: int) -> bool:
+    """True if `pid` is running; a zombie (exited, not yet reaped) counts as gone."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    ps = subprocess.run(["ps", "-p", str(pid), "-o", "stat="], capture_output=True, text=True)
+    return ps.returncode == 0 and not ps.stdout.strip().startswith("Z")
+
+
+def stop_stale_recorder(pid_file: Path) -> bool:
+    """Stop a recorder left running by a monitor that died, if it's still writing into this
+    camera's buffer. True if one was stopped. The command line must name the buffer directory,
+    so an unrelated process that reused the pid is left alone."""
+    try:
+        pid = int(pid_file.read_text().strip())
+    except (FileNotFoundError, ValueError):
+        return False
+    ps = subprocess.run(["ps", "-ww", "-p", str(pid), "-o", "command="], capture_output=True, text=True)
+    stopped = False
+    if ps.returncode == 0 and str(pid_file.parent) in ps.stdout:
+        for sig in (signal.SIGTERM, signal.SIGTERM, signal.SIGKILL):
+            try:
+                os.kill(pid, sig)
+            except ProcessLookupError:
+                break
+            for _ in range(20):
+                time.sleep(0.1)
+                if not _alive(pid):
+                    break
+            else:
+                continue
+            break
+        stopped = True
+    pid_file.unlink(missing_ok=True)
+    return stopped
+
+
 def _tail(proc: subprocess.Popen) -> collections.deque[str]:
     """Collect the last few stderr lines of `proc` in the background (and keep the pipe drained)."""
     lines: collections.deque[str] = collections.deque(maxlen=5)
@@ -75,6 +132,7 @@ class CameraWorker:
         self.s = camera.monitor
         self.data_dir = data_dir
         self.seg_dir = data_dir / "buffer" / camera.name
+        self.pid_file = self.seg_dir / "recorder.pid"
         self.store = store
         self.stop = stop
         self.detector = MotionDetector(self.s)
@@ -90,6 +148,8 @@ class CameraWorker:
 
     def start(self) -> None:
         self.seg_dir.mkdir(parents=True, exist_ok=True)
+        if stop_stale_recorder(self.pid_file):
+            log.warning("%s: stopped a recorder left running by an earlier monitor", self.camera.name)
         self.store.set_status(self.camera.name, "starting", now=time.time())
         for target in (self._record, self._watch, self._housekeep, self._reap):
             t = threading.Thread(target=target, name=f"{self.camera.name}:{target.__name__[1:]}", daemon=True)
@@ -108,13 +168,13 @@ class CameraWorker:
         """On stop, end this camera's ffmpeg processes so blocked reads return."""
         self.stop.wait()
         for proc in list(self.procs):
-            proc.terminate()
+            stop_process(proc)
 
     def _run(self, args: list[str], **kw) -> subprocess.Popen:
         proc = subprocess.Popen(args, stdin=subprocess.DEVNULL, stderr=subprocess.PIPE, **kw)
         self.procs.add(proc)
         if self.stop.is_set():
-            proc.terminate()
+            stop_process(proc)
         return proc
 
     def _retry(self, attempt: int, error: str) -> bool:
@@ -134,10 +194,12 @@ class CameraWorker:
             while not self.stop.is_set():
                 args = ringbuffer.recorder_args(self.camera, self.seg_dir, self.s.segment_seconds)
                 proc = self._run(args, stdout=subprocess.DEVNULL, env=ringbuffer.recorder_env())
+                self.pid_file.write_text(str(proc.pid))
                 errors = _tail(proc)
                 started = time.monotonic()
                 code = proc.wait()
                 self.procs.discard(proc)
+                self.pid_file.unlink(missing_ok=True)
                 if time.monotonic() - started > 60:
                     attempt = 0  # it ran for a while: start the backoff over
                 if not self._retry(attempt, errors[-1] if errors else f"recorder exited ({code})"):
@@ -250,7 +312,7 @@ class CameraWorker:
         out = self.data_dir / "clips" / self.camera.name / stamp.strftime("%Y-%m-%d") / stamp.strftime("%H%M%SZ.mp4")
         try:
             ringbuffer.assemble_clip(segments, out)
-        except (RuntimeError, subprocess.TimeoutExpired) as e:
+        except (RuntimeError, ValueError, subprocess.TimeoutExpired) as e:
             log.warning("%s: %s", self.camera.name, e)
             return None
         log.info("%s: clip %s (%d segments)", self.camera.name, out.relative_to(self.data_dir), len(segments))
