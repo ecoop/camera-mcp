@@ -1,4 +1,4 @@
-# Copyright (c) 2026 Eric Cooper. All rights reserved.
+# Copyright (c) 2026 Eric Cooper.
 """Camera configuration: a YAML list of named cameras.
 
 A camera is usually just a `host` (its IP address): the RTSP URL is built here, with the

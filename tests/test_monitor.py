@@ -1,4 +1,4 @@
-# Copyright (c) 2026 Eric Cooper. All rights reserved.
+# Copyright (c) 2026 Eric Cooper.
 """Phase 2a: config additions, motion detection, the ring buffer, and the monitor end to end
 on a generated clip (still, then a moving box, then still). No network or hardware."""
 

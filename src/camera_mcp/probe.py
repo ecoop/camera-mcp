@@ -1,4 +1,4 @@
-# Copyright (c) 2026 Eric Cooper. All rights reserved.
+# Copyright (c) 2026 Eric Cooper.
 """Probe every configured camera: does it answer, is the login accepted, and what do its
 streams deliver (codec, resolution, frame rate).
 

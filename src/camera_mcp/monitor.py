@@ -1,4 +1,4 @@
-# Copyright (c) 2026 Eric Cooper. All rights reserved.
+# Copyright (c) 2026 Eric Cooper.
 """The always-on monitor (phase 2a: motion and clips; no detection model yet).
 
 For each enabled camera it runs:

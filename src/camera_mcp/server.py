@@ -1,4 +1,4 @@
-# Copyright (c) 2026 Eric Cooper. All rights reserved.
+# Copyright (c) 2026 Eric Cooper.
 """The camera MCP server (phase 1: list and snapshot).
 
 Run over stdio:  camera-mcp --config ~/projects/camera-mcp/cameras.yaml

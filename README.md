@@ -1,5 +1,9 @@
 # camera-mcp
 
+[![CI](https://github.com/ecoop/camera-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/ecoop/camera-mcp/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-blue)
+![License](https://img.shields.io/badge/license-MIT-blue)
+
 _Last updated: 2026-10-08_
 
 An MCP server over the home IP cameras. A model can list the cameras and look at a current frame
@@ -93,7 +97,7 @@ Timing and sensitivity can be set site-wide under `monitor:` in `cameras.yaml`, 
 
 The tests generate a clip with ffmpeg and use it as a camera. No network or hardware is needed.
 
-CI (`.github/workflows/ci.yml`) runs on every PR and on pushes to `main`, on Python 3.11 and 3.13:
+CI (`.github/workflows/ci.yml`) runs on every PR and on pushes to `main`, on Python 3.11–3.14:
 it builds the wheel, installs it, imports every module from the installed package, starts the
 entry point, and runs the tests. A PR merges only once CI passes.
 

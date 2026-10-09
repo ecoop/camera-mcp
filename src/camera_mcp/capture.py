@@ -1,4 +1,4 @@
-# Copyright (c) 2026 Eric Cooper. All rights reserved.
+# Copyright (c) 2026 Eric Cooper.
 """One-shot frame capture and JPEG encoding.
 
 Frames come from the `ffmpeg` binary, not from OpenCV's video backends: OpenCV's macOS

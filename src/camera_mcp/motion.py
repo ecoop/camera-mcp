@@ -1,4 +1,4 @@
-# Copyright (c) 2026 Eric Cooper. All rights reserved.
+# Copyright (c) 2026 Eric Cooper.
 """Tier 1: motion detection on small grayscale frames, and the windows it opens.
 
 Tuned for recall, not precision. A false alarm (a branch, a cloud) costs a little work

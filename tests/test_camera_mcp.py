@@ -1,4 +1,4 @@
-# Copyright (c) 2026 Eric Cooper. All rights reserved.
+# Copyright (c) 2026 Eric Cooper.
 """Tests run against a generated video file standing in for a camera: no network, no
 hardware."""
 

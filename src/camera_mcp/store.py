@@ -1,4 +1,4 @@
-# Copyright (c) 2026 Eric Cooper. All rights reserved.
+# Copyright (c) 2026 Eric Cooper.
 """The monitor's SQLite store: motion windows and per-camera status.
 
 The monitor is the only writer. Readers (the MCP server, from phase 2c) open the file

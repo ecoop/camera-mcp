@@ -1,4 +1,4 @@
-# Copyright (c) 2026 Eric Cooper. All rights reserved.
+# Copyright (c) 2026 Eric Cooper.
 """The ring buffer: the camera's main stream, copied (never re-encoded) into short files.
 
 ffmpeg's segment muxer writes the stream as a run of MPEG-TS files, each starting at a
