@@ -35,6 +35,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -472,6 +473,7 @@ class Analyzer:
     """
 
     BACKLOG = 8  # queued segments beyond which analysis thins out
+    SKIP_REPORT_EVERY = 60.0  # seconds between "can't keep up" warnings
 
     def __init__(self, detector: Detector, stop: threading.Event):
         self.detector = detector
@@ -479,6 +481,8 @@ class Analyzer:
         self.queue: queue.Queue[tuple[CameraWorker, ringbuffer.Segment]] = queue.Queue()
         self.thread = threading.Thread(target=self._run, name="analyzer", daemon=True)
         self._behind = False
+        self._skipped: dict[str, float] = defaultdict(float)  # seconds skipped per camera since the last report
+        self._last_report = 0.0
 
     @property
     def model(self) -> str:
@@ -499,13 +503,29 @@ class Analyzer:
                     return
                 continue
             try:
-                if not self.stop.is_set():
+                if self.stop.is_set():
+                    pass
+                elif time.time() - seg.end > worker.s.max_analysis_lag:
+                    self._skip(worker, seg)
+                else:
                     self._analyze(worker, seg)
             except Exception as e:  # a bad segment or a model error must not stop the monitor
                 log.warning("%s: analysis failed for %s: %s", worker.camera.name, seg.path.name, e)
             finally:
                 with worker.lock:
                     worker.queued.pop(seg.path, None)
+
+    def _skip(self, worker: CameraWorker, seg: ringbuffer.Segment) -> None:
+        """Too far behind to be useful: drop the segment, but record the blind spot."""
+        worker.store.add_skipped(worker.camera.name, seg.start, seg.end)
+        self._skipped[worker.camera.name] += seg.end - seg.start
+        now = time.time()
+        if now - self._last_report >= self.SKIP_REPORT_EVERY:
+            log.warning("analysis can't keep up: skipped %s (motion more than %.0fs old); this machine is too "
+                        "slow for this many busy cameras", ", ".join(f"{s:.0f}s on {c}" for c, s in self._skipped.items()),
+                        worker.s.max_analysis_lag)
+            self._skipped.clear()
+            self._last_report = now
 
     def _analyze(self, worker: CameraWorker, seg: ringbuffer.Segment) -> None:
         s = worker.s

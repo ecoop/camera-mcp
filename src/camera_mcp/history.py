@@ -145,6 +145,11 @@ class History:
             for row in db.execute(f"SELECT camera, started_at, ended_at FROM camera_uptime WHERE camera IN ({marks})"
                                   " AND started_at <= ? AND ended_at >= ?", (*names, self._iso(t1), self._iso(t0))):
                 watched[row["camera"]] += max(0.0, min(_epoch(row["ended_at"]), t1) - max(_epoch(row["started_at"]), t0))
+        skipped: dict[str, float] = defaultdict(float)
+        if "analysis_skipped" in _tables(db):
+            for row in db.execute(f"SELECT camera, started_at, ended_at FROM analysis_skipped WHERE camera IN ({marks})"
+                                  " AND started_at <= ? AND ended_at >= ?", (*names, self._iso(t1), self._iso(t0))):
+                skipped[row["camera"]] += max(0.0, min(_epoch(row["ended_at"]), t1) - max(_epoch(row["started_at"]), t0))
         status = {r["camera"]: r for r in db.execute(f"SELECT * FROM camera_status WHERE camera IN ({marks})", names)}
         out = []
         for name in names:
@@ -152,6 +157,7 @@ class History:
             out.append({
                 "camera": name,
                 "watched": round(min(watched[name] / span, 1.0), 3) if known else None,  # None: unknown
+                "unanalysed_motion_seconds": round(skipped[name]),  # motion the detector was too far behind to see
                 "last_frame": self._local(_get(st, "last_frame_at")),
                 "looks_moved_since": self._local(_get(st, "view_moved_since")),
             })

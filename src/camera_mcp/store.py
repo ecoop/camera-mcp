@@ -62,6 +62,13 @@ CREATE TABLE IF NOT EXISTS camera_uptime (
   PRIMARY KEY (camera, started_at)
 );
 
+CREATE TABLE IF NOT EXISTS analysis_skipped (
+  camera      TEXT NOT NULL,       -- motion the detector never looked at, because it was too far behind
+  started_at  TEXT NOT NULL,
+  ended_at    TEXT NOT NULL,
+  PRIMARY KEY (camera, started_at)
+);
+
 CREATE TABLE IF NOT EXISTS camera_status (
   camera          TEXT PRIMARY KEY,
   state           TEXT NOT NULL,  -- 'starting', 'watching', 'retrying', 'stopped'
@@ -146,6 +153,17 @@ class Store:
                 " DO UPDATE SET ended_at = excluded.ended_at",
                 (camera, iso(start), iso(end)),
             )
+
+    def add_skipped(self, camera: str, start: float, end: float) -> None:
+        """Record motion that was never analysed; extends the camera's last span if they touch."""
+        with self._lock:
+            last = self._db.execute("SELECT started_at, ended_at FROM analysis_skipped WHERE camera = ?"
+                                    " ORDER BY started_at DESC LIMIT 1", (camera,)).fetchone()
+            if last and last[1] >= iso(start - 1.0):
+                self._db.execute("UPDATE analysis_skipped SET ended_at = ? WHERE camera = ? AND started_at = ?",
+                                 (max(last[1], iso(end)), camera, last[0]))
+            else:
+                self._db.execute("INSERT INTO analysis_skipped VALUES (?, ?, ?)", (camera, iso(start), iso(end)))
 
     def add_visit(self, visit, *, model: str, thumbnail: str | None, clip: str | None) -> int:
         """Store a closed visits.Visit and its per-frame detections (completing its open row, if any)."""

@@ -58,8 +58,10 @@ night-critters (raccoon, skunk, opossum), a class (bird, mammal), or a common na
 picks cameras by role (list_cameras shows tags). Camera names match loosely.
 
 Be honest about absence: every history answer has `coverage`, the share of the time each
-camera was actually watched. "Nothing seen" only means nothing was there if coverage is near
-1 and the camera doesn't look moved; otherwise say which camera wasn't watching. A visit with
+camera was actually watched, and `unanalysed_motion_seconds`, motion the detector skipped
+because it was too far behind. "Nothing seen" only means nothing was there if coverage is near
+1, nothing went unanalysed and the camera doesn't look moved; otherwise say which camera wasn't
+fully watched. A visit with
 still_there=true is happening now. Plain "bird" visits couldn't be sorted into a group: when
 asked about songbirds, mention them as possibly songbirds too.
 """

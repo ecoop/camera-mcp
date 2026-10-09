@@ -222,3 +222,24 @@ def test_an_unidentified_first_sighting_becomes_the_named_visit():
     tracker.feed(1, [det("jays", "california scrub-jay", JAY)])
     (visit,) = tracker.close_all()
     assert visit.key == "jays" and visit.start == 0 and visit.label.name == "california scrub-jay"
+
+
+class SlowDetector(WhiteThingDetector):
+    """Like a slow machine: each frame takes seconds."""
+
+    def analyze(self, frame, **kwargs):
+        import time
+
+        time.sleep(1.5)
+        return super().analyze(frame, **kwargs)
+
+
+@needs_ffmpeg
+def test_a_detector_that_cant_keep_up_skips_old_motion_and_says_so(tmp_path, box_crosses):
+    s = MonitorSettings(pre_seconds=1, post_seconds=1, quiet_seconds=2, visit_close_seconds=3, max_analysis_lag=1)
+    data = tmp_path / "data"
+    Monitor([Camera("feeder", str(box_crosses), monitor=s)], data, SlowDetector(Label("domestic cat", CAT, 0.9), "cat")).run(duration=90)
+    db = sqlite3.connect(data / "monitor.db")
+    spans = db.execute("SELECT started_at, ended_at FROM analysis_skipped WHERE camera = 'feeder'").fetchall()
+    assert spans, "nothing was recorded as skipped"
+    assert db.execute("SELECT state FROM camera_status").fetchone()[0] == "stopped"

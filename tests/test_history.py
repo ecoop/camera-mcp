@@ -65,6 +65,8 @@ def log(tmp_path):
     for cam, last in (("backyard", NOW), ("east_deck", NOW), ("west_alley", NOW - 0.5 * H), ("east_fence", NOW - 9 * H)):
         store.set_status(cam, "watching", now=last, last_frame=last)
     store.set_view("east_fence", 0.04, True, now=NOW - 8 * H)
+    store.add_skipped("backyard", NOW - 3 * H, NOW - 3 * H + 40)  # the detector fell behind for a while
+    store.add_skipped("backyard", NOW - 3 * H + 40.5, NOW - 3 * H + 60)  # touching: merged into one span
     store.close()
     cameras = {
         "backyard": Camera("backyard", "x", tags=("feeder", "dog_yard", "wide_view")),
@@ -235,3 +237,14 @@ def iso_ago(seconds: float) -> str:
     from camera_mcp.store import iso
 
     return iso(time.time() - seconds)
+
+
+def test_coverage_reports_motion_that_was_never_analysed(log):
+    history, _ = log
+    coverage = {c["camera"]: c for c in history.find_visits("24h")["coverage"]}
+    assert coverage["backyard"]["unanalysed_motion_seconds"] == 60
+    assert coverage["east_deck"]["unanalysed_motion_seconds"] == 0
+    import sqlite3
+
+    rows = sqlite3.connect(history.db_path).execute("SELECT COUNT(*) FROM analysis_skipped").fetchone()[0]
+    assert rows == 1  # the two touching spans were merged

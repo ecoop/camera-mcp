@@ -54,6 +54,7 @@ class MonitorSettings:
     view_check_seconds: float = 300.0  # how often to check whether the camera has been moved (0: never)
     view_threshold: float = 0.5  # below this edge match (0-1), a check counts as "looks moved"
     detect_every_seconds: float = 1.0  # while there's motion or an open visit, analyse a frame this often
+    max_analysis_lag: float = 120.0  # a segment still waiting this long is skipped, and logged as unanalysed
     visit_close_seconds: float = 30.0  # a visit ends after this long without its animal being detected
     min_box_conf: float = 0.2  # detector boxes below this confidence are ignored
     max_boxes: int = 8  # boxes classified per frame (the most confident); the rest share neighbours' labels
