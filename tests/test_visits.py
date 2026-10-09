@@ -203,6 +203,9 @@ def test_monitor_turns_motion_into_a_visit(tmp_path, box_crosses, monkeypatch):
     windows = db.execute("SELECT clip FROM motion_windows").fetchall()
     assert windows and all(w["clip"] is None for w in windows)  # with detection on, clips go with visits
     assert db.execute("SELECT state FROM camera_status").fetchone()["state"] == "stopped"
+    assert visit["open"] == 0  # written when the cat arrived, completed (not duplicated) when it left
+    (span,) = db.execute("SELECT * FROM camera_uptime").fetchall()  # the watched stretch, for coverage
+    assert span["started_at"] < visit["started_at"] <= span["ended_at"]
 
 
 @needs_ffmpeg

@@ -16,17 +16,33 @@ work in `camera-controller` and `wildlife-cv-pipeline`. The original design is i
 
 Household context and motivations stay out of the repo, in the git-ignored `notes/` folder.
 
-## Tools (phase 1)
+## Tools
 
 | Tool | What it returns |
 |---|---|
-| `list_cameras` | name, label, enabled, stream or file, and whether it answers right now (a TCP check, no decode) |
+| `list_cameras` | name, label, tags, aliases, and whether each camera answers right now (a TCP check, no decode) |
 | `snapshot(camera, max_width=1024)` | one current frame as a JPEG image, downscaled to `max_width` |
+| `find_visits(since, until, cameras, tag, taxon, overlapping, min_score, limit)` | animal visits in a stretch of time, newest first; `still_there` marks one happening now |
+| `activity_summary(since, until, group_by, cameras, tag, taxon)` | visit counts by `species`, `group`, `camera`, local `hour` or `day` |
+| `visit_media(visit_id)` | the thumbnail of a visit's best sighting |
+| `monitor_status()` | per camera: watched now?, last frame and motion, looks moved?, visits in progress, errors |
 
 Resources: `cameras://list` (JSON) and `cameras://{name}/latest.jpg`.
 
-Both tools are marked read-only. Cameras are addressed by name; a source URL or credential is never
-returned.
+All tools are read-only. Cameras are addressed by name (loosely: "west alley" finds `west_alley`);
+a source URL or credential is never returned. The history tools read the monitor's
+`data/monitor.db` read-only.
+
+`since` and `until` take ISO times or durations ago (`15m`, `4h`, `3d`, `2w`), `today`,
+`yesterday`. `taxon` takes a group (`songbirds`, `jays`, `crows`, `doves/pigeons`, `hawks`, `owls`,
+`cat`, `dog`, `rat`, `squirrel`, `skunk`, `raccoon`, `opossum`, `fox`, `coyote`, `person`), the union
+`night-critters`, a class (`bird`, `mammal`) or a common name. `overlapping` finds visits that
+overlapped another kind on the same camera: `taxon=cat, overlapping=bird` is cats among the birds.
+
+Every history answer carries `coverage`: the share of the time each camera was actually being
+watched (`null` if the log predates that record). "Nothing seen" only means nothing was there when
+coverage is near 1. "Is the dog yard clear?" is `find_visits(since="15m", tag="dog_yard",
+taxon="night-critters")`.
 
 ## Setup
 
@@ -55,7 +71,7 @@ where `${VAR}` is expanded from the environment.
 ## Use from Claude Code
 
 ```bash
-claude mcp add cameras -e CAMERA_USER=... -e CAMERA_PASS=... -- ~/projects/camera-mcp/.venv/bin/camera-mcp --config ~/projects/camera-mcp/cameras.yaml
+claude mcp add cameras -e CAMERA_USER=... -e CAMERA_PASS=... -- ~/projects/camera-mcp/.venv/bin/camera-mcp --config ~/projects/camera-mcp/cameras.yaml --data-dir ~/projects/camera-mcp/data
 ```
 
 ## Probe the cameras
@@ -101,12 +117,14 @@ keep motion clips too. On a slow machine analysis thins to one frame per segment
 behind; SpeciesNet takes about 4 s per frame on an Intel MacBook Pro's CPU.
 
 Where the cameras are goes under `site:` in `cameras.yaml`. SpeciesNet drops species not found
-there, and an `allowlist` turns any other species into its class ("mammal", "bird"):
+there, and an `allowlist` turns any other species into its class ("mammal", "bird"). `timezone`
+sets the hours of the day that `activity_summary` reports (default: this machine's):
 
 ```yaml
 site:
   country: USA
   admin1_region: CA
+  timezone: America/Los_Angeles
   allowlist: [domestic cat, domestic dog, northern raccoon, striped skunk, virginia opossum, aves]
 ```
 

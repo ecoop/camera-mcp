@@ -55,6 +55,13 @@ CREATE TABLE IF NOT EXISTS visit_frames (
 );
 CREATE INDEX IF NOT EXISTS visit_frames_visit ON visit_frames(visit_id);
 
+CREATE TABLE IF NOT EXISTS camera_uptime (
+  camera      TEXT NOT NULL,
+  started_at  TEXT NOT NULL,       -- a stretch of time the monitor was receiving this camera's frames
+  ended_at    TEXT NOT NULL,
+  PRIMARY KEY (camera, started_at)
+);
+
 CREATE TABLE IF NOT EXISTS camera_status (
   camera          TEXT PRIMARY KEY,
   state           TEXT NOT NULL,  -- 'starting', 'watching', 'retrying', 'stopped'
@@ -67,6 +74,9 @@ CREATE TABLE IF NOT EXISTS camera_status (
 
 # Columns added after the first release, added to an existing database when it's opened.
 ADDED_COLUMNS = {
+    "visits": {
+        "open": "INTEGER NOT NULL DEFAULT 0",  # 1 while the animal is still there (ended_at = last seen so far)
+    },
     "camera_status": {
         "view_score": "REAL",  # last moved-camera check: how well the view matched its reference, 0-1
         "view_moved_since": "TEXT",  # set while the camera looks moved; NULL otherwise
@@ -102,17 +112,58 @@ class Store:
             )
             return int(cur.lastrowid)
 
-    def add_visit(self, visit, *, model: str, thumbnail: str | None, clip: str | None) -> int:
-        """Store a closed visits.Visit and its per-frame detections."""
+    def open_visit(self, visit, *, model: str) -> int:
+        """Record a visit as soon as its animal arrives, so "is anything there now?" sees it."""
         label = visit.label
         with self._lock:
             cur = self._db.execute(
                 "INSERT INTO visits (camera, started_at, ended_at, label, taxonomy, grp, score, frames,"
-                " max_count, thumbnail, clip, model) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " max_count, model, open) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)",
                 (visit.camera, iso(visit.start), iso(visit.last_seen), label.name, label.taxonomy, visit.key,
-                 round(label.score, 3), visit.frames, visit.max_count, thumbnail, clip, model),
+                 round(label.score, 3), visit.frames, visit.max_count, model),
             )
-            visit_id = int(cur.lastrowid)
+            return int(cur.lastrowid)
+
+    def update_open_visit(self, visit) -> None:
+        label = visit.label
+        with self._lock:
+            self._db.execute(
+                "UPDATE visits SET ended_at = ?, label = ?, taxonomy = ?, grp = ?, score = ?, frames = ?,"
+                " max_count = ? WHERE id = ? AND open = 1",
+                (iso(visit.last_seen), label.name, label.taxonomy, visit.key, round(label.score, 3),
+                 visit.frames, visit.max_count, visit.db_id),
+            )
+
+    def close_stale_visits(self, camera: str) -> int:
+        """Visits left open by a monitor that stopped without closing them."""
+        with self._lock:
+            return self._db.execute("UPDATE visits SET open = 0 WHERE camera = ? AND open = 1", (camera,)).rowcount
+
+    def extend_uptime(self, camera: str, start: float, end: float) -> None:
+        with self._lock:
+            self._db.execute(
+                "INSERT INTO camera_uptime VALUES (?, ?, ?) ON CONFLICT(camera, started_at)"
+                " DO UPDATE SET ended_at = excluded.ended_at",
+                (camera, iso(start), iso(end)),
+            )
+
+    def add_visit(self, visit, *, model: str, thumbnail: str | None, clip: str | None) -> int:
+        """Store a closed visits.Visit and its per-frame detections (completing its open row, if any)."""
+        label = visit.label
+        values = (visit.camera, iso(visit.start), iso(visit.last_seen), label.name, label.taxonomy, visit.key,
+                  round(label.score, 3), visit.frames, visit.max_count, thumbnail, clip, model)
+        with self._lock:
+            if getattr(visit, "db_id", None):
+                self._db.execute(
+                    "UPDATE visits SET camera = ?, started_at = ?, ended_at = ?, label = ?, taxonomy = ?, grp = ?,"
+                    " score = ?, frames = ?, max_count = ?, thumbnail = ?, clip = ?, model = ?, open = 0"
+                    " WHERE id = ?", (*values, visit.db_id))
+                visit_id = visit.db_id
+            else:
+                cur = self._db.execute(
+                    "INSERT INTO visits (camera, started_at, ended_at, label, taxonomy, grp, score, frames,"
+                    " max_count, thumbnail, clip, model) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", values)
+                visit_id = int(cur.lastrowid)
             rows = []
             for t, dets in visit.log:
                 best = max(dets, key=lambda d: d.box.conf)

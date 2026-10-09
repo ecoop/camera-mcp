@@ -13,8 +13,10 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass, field, fields, replace
+from datetime import datetime, tzinfo
 from pathlib import Path
 from urllib.parse import quote, urlsplit
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
 
@@ -60,6 +62,10 @@ class Site:
     country: str = "USA"  # ISO 3166-1 alpha-3; SpeciesNet drops species not found there
     admin1_region: str = ""  # e.g. "CA"; narrows that to a state
     allowlist: tuple[str, ...] = ()  # common names or taxonomy prefixes; empty: everything allowed
+    timezone: str = ""  # IANA name, e.g. "America/Los_Angeles", for hours of the day; "": this machine's
+
+    def tz(self) -> tzinfo:
+        return ZoneInfo(self.timezone) if self.timezone else datetime.now().astimezone().tzinfo
 
 
 @dataclass(frozen=True)
@@ -166,13 +172,24 @@ def load_site(path: str | Path) -> Site:
     """The `site:` section of the camera config (defaults if there is none)."""
     data = yaml.safe_load(Path(path).expanduser().read_text()) or {}
     raw = data.get("site") or {}
-    if unknown := sorted(set(raw) - {"country", "admin1_region", "allowlist"}):
+    if unknown := sorted(set(raw) - {"country", "admin1_region", "allowlist", "timezone"}):
         raise ConfigError(f"site: unknown setting {', '.join(unknown)}")
-    return Site(
+    site = Site(
         country=str(raw.get("country", Site.country)),
         admin1_region=str(raw.get("admin1_region", "")),
         allowlist=_strings(raw.get("allowlist"), "site", "allowlist"),
+        timezone=str(raw.get("timezone", "")),
     )
+    try:
+        site.tz()
+    except (ZoneInfoNotFoundError, ValueError):
+        raise ConfigError(f"site: unknown timezone {site.timezone!r}") from None
+    return site
+
+
+def default_data_dir() -> Path:
+    """$CAMERA_MCP_DATA, else data/ at the repo root: the monitor's buffer, clips and monitor.db."""
+    return Path(os.environ.get("CAMERA_MCP_DATA") or Path(__file__).resolve().parents[2] / "data")
 
 
 def default_config_path() -> str:

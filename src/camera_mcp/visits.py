@@ -50,6 +50,7 @@ class Visit:
     best_conf: float = 0.0
     thumbnail: np.ndarray | None = None  # RGB crop of the best box so far
     log: list[tuple[float, list[Detection]]] = field(default_factory=list)  # per frame
+    db_id: int | None = None  # its row in the store, written when it opened
 
     @property
     def label(self) -> Label:

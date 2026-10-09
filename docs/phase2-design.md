@@ -398,8 +398,13 @@ Each step is its own PR.
    motion. No model. Testable with the recorded clips.
 2. **2b: SpeciesNet + visits** *(built; see "How 2b was built" below)*. Tier 2 and 3 on candidate windows, allowlist, visit aggregation,
    SQLite. Also re-run the eval on night clips.
-3. **2c: MCP history tools.** `find_visits`, `activity_summary`, `visit_media`, `monitor_status`
-   against a fixture database.
+3. **2c: MCP history tools** *(built)*. `find_visits`, `activity_summary`, `visit_media`, `monitor_status`
+   against a fixture database. Building them exposed two gaps the monitor now fills: visits are
+   written when the animal **arrives** (`open = 1`, updated per frame, completed on leaving), so
+   "is anything there now?" sees a visit in progress; and each camera's watched stretches go to
+   `camera_uptime`, so every answer can report `coverage` instead of guessing from the last frame.
+   The server never alters the log, so it reads logs from older monitors (missing columns
+   default; missing uptime gives `coverage: null`, "unknown").
 4. **2d: alerts.** After a channel is chosen.
 
 Follow-up, outside phase 2: a **bird classifier** for the birds the site's cameras actually see

@@ -43,7 +43,9 @@ import numpy as np
 
 from camera_mcp import ringbuffer
 from camera_mcp.capture import FFMPEG
-from camera_mcp.config import Camera, ConfigError, default_config_path, find_camera, load_cameras, load_site, redact
+from camera_mcp.config import (
+    Camera, ConfigError, default_config_path, default_data_dir, find_camera, load_cameras, load_site, redact,
+)
 from camera_mcp.detect import Detector, SpeciesNetDetector, available
 from camera_mcp.motion import MotionDetector, MotionWindows, Window
 from camera_mcp.probe import ProbeError, probe_stream
@@ -55,11 +57,6 @@ log = logging.getLogger("camera_mcp.monitor")
 
 BACKOFF = (2, 5, 10, 30, 60)  # seconds between reconnect attempts
 STATUS_EVERY = 5.0  # seconds between status writes while watching
-
-
-def default_data_dir() -> Path:
-    """$CAMERA_MCP_DATA, else data/ at the repo root."""
-    return Path(os.environ.get("CAMERA_MCP_DATA") or Path(__file__).resolve().parents[2] / "data")
 
 
 def watcher_args(source: Camera, width: int, height: int, fps: float) -> list[str]:
@@ -176,6 +173,8 @@ class CameraWorker:
         if stop_stale_recorder(self.pid_file):
             log.warning("%s: stopped a recorder left running by an earlier monitor", self.camera.name)
         self.store.set_status(self.camera.name, "starting", now=time.time())
+        if stale := self.store.close_stale_visits(self.camera.name):
+            log.warning("%s: closed %d visit(s) left open by an earlier monitor", self.camera.name, stale)
         for target in (self._record, self._watch, self._housekeep, self._reap):
             t = threading.Thread(target=target, name=f"{self.camera.name}:{target.__name__[1:]}", daemon=True)
             t.start()
@@ -272,11 +271,13 @@ class CameraWorker:
         size = luma * 3 // 2  # yuv420p: a full-size Y plane, then quarter-size U and V
         count = 0
         last_status = last_frame = 0.0
+        span_start: float | None = None  # this stream session: the camera is being watched from here
         while not self.stop.is_set():
             buf = proc.stdout.read(size)
             if len(buf) < size:
                 break
             now = last_frame = time.time()
+            span_start = span_start or now
             count += 1
             frame = np.frombuffer(buf, np.uint8)
             gray = frame[:luma].reshape(height, width)
@@ -294,9 +295,11 @@ class CameraWorker:
             if now - last_status >= STATUS_EVERY or moving and not was_open:
                 self.store.set_status(self.camera.name, "watching", now=now, last_frame=now,
                                       last_motion=now if moving else None)
+                self.store.extend_uptime(self.camera.name, span_start, now)
                 last_status = now
         if count:  # the stream ended or we're stopping: record the last frame actually seen
             self.store.set_status(self.camera.name, "watching", now=time.time(), last_frame=last_frame)
+            self.store.extend_uptime(self.camera.name, span_start, last_frame)
         return count
 
     def _check_view(self, now: float, gray: np.ndarray, u: np.ndarray, v: np.ndarray) -> None:
@@ -530,9 +533,14 @@ class Analyzer:
             with worker.lock:
                 before = set(worker.tracker.open)
                 closed = worker.tracker.feed(t, detections, frame)
-                arrived = set(worker.tracker.open) - before
-            for key in sorted(arrived):
-                log.info("%s: %s arrived", worker.camera.name, key)
+                still_open = dict(worker.tracker.open)
+            for key, visit in sorted(still_open.items()):
+                if visit.db_id is None:  # arrived (or took over an unidentified visit's row)
+                    if key not in before:
+                        log.info("%s: %s arrived", worker.camera.name, key)
+                    visit.db_id = worker.store.open_visit(visit, model=self.model)
+                elif visit.last_seen == t:
+                    worker.store.update_open_visit(visit)
             for visit in closed:
                 worker._visit_closed(visit)
 

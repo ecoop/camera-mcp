@@ -1,0 +1,237 @@
+# Copyright (c) 2026 Eric Cooper.
+"""Phase 2c: questions about the past, from a visit log built with the monitor's own store."""
+
+from __future__ import annotations
+
+import base64
+import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+import pytest
+from mcp import Client
+
+from camera_mcp.config import Camera, Site
+from camera_mcp.history import History, HistoryError, parse_when
+from camera_mcp.server import build_server
+from camera_mcp.store import Store
+from camera_mcp.visits import Visit
+
+pytestmark = pytest.mark.anyio
+LA = ZoneInfo("America/Los_Angeles")
+NOW = time.time()
+H = 3600.0
+
+FINCH = ("house finch", "aves;passeriformes;fringillidae;haemorhous;mexicanus")
+CAT = ("domestic cat", "mammalia;carnivora;felidae;felis;catus")
+BIRD = ("bird", "aves;;;;")
+SKUNK = ("striped skunk", "mammalia;carnivora;mephitidae;mephitis;mephitis")
+RACCOON = ("northern raccoon", "mammalia;carnivora;procyonidae;procyon;lotor")
+RAT = ("brown rat", "mammalia;rodentia;muridae;rattus;norvegicus")
+
+
+@pytest.fixture
+def anyio_backend():
+    return "asyncio"
+
+
+def visit(camera, key, label, start, minutes, count=1):
+    v = Visit(camera, key, start=NOW + start, last_seen=NOW + start + minutes * 60, frames=minutes * 6, max_count=count)
+    v.votes[label] = 1.0
+    return v
+
+
+@pytest.fixture
+def log(tmp_path):
+    """Four cameras, a known timeline (times relative to NOW)."""
+    data = tmp_path / "data"
+    store = Store(data / "monitor.db")
+    thumb = data / "media" / "backyard" / "cat.jpg"
+    thumb.parent.mkdir(parents=True)
+    thumb.write_bytes(b"\xff\xd8 a jpeg")
+    store.add_visit(visit("backyard", "songbirds", FINCH, -2 * H, 10, count=6), model="m", thumbnail=None, clip="c1.mp4")
+    store.add_visit(visit("backyard", "cat", CAT, -2 * H + 300, 2), model="m",
+                    thumbnail="media/backyard/cat.jpg", clip=None)
+    store.add_visit(visit("west_alley", "jays", BIRD, -3 * H, 5), model="m", thumbnail=None, clip=None)
+    store.add_visit(visit("backyard", "bird", BIRD, -1 * H, 3), model="m", thumbnail=None, clip=None)
+    store.add_visit(visit("east_deck", "raccoon", RACCOON, -26 * H, 4), model="m", thumbnail=None, clip=None)
+    store.add_visit(visit("east_fence", "rat", RAT, -5 * H, 1), model="m", thumbnail=None, clip=None)
+    skunk = visit("east_deck", "skunk", SKUNK, -0.25 * H, 5)
+    skunk.db_id = store.open_visit(skunk, model="m")  # still there
+    for cam in ("backyard", "east_deck"):
+        store.extend_uptime(cam, NOW - 48 * H, NOW)
+    store.extend_uptime("west_alley", NOW - 24 * H, NOW - 2 * H)  # dropped out two hours ago...
+    store.extend_uptime("west_alley", NOW - 1 * H, NOW - 0.5 * H)  # ...back for half an hour, then gone
+    for cam, last in (("backyard", NOW), ("east_deck", NOW), ("west_alley", NOW - 0.5 * H), ("east_fence", NOW - 9 * H)):
+        store.set_status(cam, "watching", now=last, last_frame=last)
+    store.set_view("east_fence", 0.04, True, now=NOW - 8 * H)
+    store.close()
+    cameras = {
+        "backyard": Camera("backyard", "x", tags=("feeder", "dog_yard", "wide_view")),
+        "west_alley": Camera("west_alley", "x", tags=("feeder", "dog_yard")),
+        "east_deck": Camera("east_deck", "x", tags=("under_deck", "dog_yard")),
+        "east_fence": Camera("east_fence", "x", tags=("thoroughfare",)),
+    }
+    return History(data / "monitor.db", cameras, Site(timezone="America/Los_Angeles")), data
+
+
+def labels(result):
+    return [v["label"] for v in result["visits"]]
+
+
+# ---- times ----------------------------------------------------------------------------
+
+def test_parse_when():
+    now = datetime(2026, 10, 9, 21, 30, tzinfo=LA).timestamp()
+    assert parse_when("15m", now, LA) == now - 900
+    assert parse_when("2w", now, LA) == now - 14 * 86400
+    assert parse_when(None, now, LA) == now
+    assert parse_when("2026-10-09T06:00", now, LA) == datetime(2026, 10, 9, 6, 0, tzinfo=LA).timestamp()
+    assert parse_when("2026-10-09T13:00:00Z", now, LA) == datetime(2026, 10, 9, 6, 0, tzinfo=LA).timestamp()
+    assert parse_when("today", now, LA) == datetime(2026, 10, 9, tzinfo=LA).timestamp()
+    assert parse_when("yesterday", now, LA) == datetime(2026, 10, 8, tzinfo=LA).timestamp()
+    with pytest.raises(HistoryError, match="15m"):
+        parse_when("last tuesday", now, LA)
+
+
+# ---- find_visits ----------------------------------------------------------------------
+
+def test_groups_are_exact_and_classes_are_broad(log):
+    history, _ = log
+    assert labels(history.find_visits("24h", taxon="songbirds")) == ["house finch"]  # not the jays, not "bird"
+    assert set(labels(history.find_visits("24h", taxon="bird"))) == {"house finch", "bird"}  # jays (bird label) too:
+    assert history.find_visits("24h", taxon="bird")["total"] == 3
+    assert labels(history.find_visits("24h", taxon="striped skunk")) == ["striped skunk"]
+    assert labels(history.find_visits("48h", taxon="night-critters")) == ["striped skunk", "northern raccoon"]
+
+
+def test_is_the_dog_yard_clear(log):
+    history, _ = log
+    result = history.find_visits("15m", tag="dog_yard", taxon="night-critters")
+    (skunk,) = result["visits"]
+    assert skunk["camera"] == "east_deck" and skunk["still_there"] is True
+    coverage = {c["camera"]: c["watched"] for c in result["coverage"]}
+    assert coverage == pytest.approx({"backyard": 1.0, "west_alley": 0.0, "east_deck": 1.0}, abs=0.02)  # west alley isn't watched
+
+
+def test_cats_among_the_birds(log):
+    history, _ = log
+    result = history.find_visits("24h", tag="feeder", taxon="cat", overlapping="bird")
+    assert labels(result) == ["domestic cat"]
+    assert history.find_visits("24h", taxon="cat", overlapping="rat")["total"] == 0
+
+
+def test_cameras_match_loosely_and_unknown_ones_are_errors(log):
+    history, _ = log
+    assert history.find_visits("24h", cameras=["East Fence"])["total"] == 1
+    with pytest.raises(HistoryError, match="known: backyard"):
+        history.find_visits("24h", cameras=["driveway"])
+    with pytest.raises(HistoryError, match="tags in use"):
+        history.find_visits("24h", tag="driveway")
+
+
+def test_coverage_counts_gaps_and_moved_cameras(log):
+    history, _ = log
+    coverage = {c["camera"]: c for c in history.find_visits("24h")["coverage"]}
+    assert coverage["west_alley"]["watched"] == pytest.approx(22.5 / 24, abs=0.01)
+    assert coverage["east_fence"]["watched"] == 0.0 and coverage["east_fence"]["looks_moved_since"]
+
+
+# ---- activity_summary -----------------------------------------------------------------
+
+def test_activity_by_species_and_by_local_hour(log):
+    history, _ = log
+    by_species = history.activity_summary("48h", group_by="species")
+    assert by_species["total_visits"] == 7
+    assert {r["key"]: r["visits"] for r in by_species["rows"]}["bird"] == 2
+    finch = next(r for r in by_species["rows"] if r["key"] == "house finch")
+    assert finch["max_at_once"] == 6
+    by_hour = history.activity_summary("24h", group_by="hour", tag="feeder")
+    expected = sorted({f"{datetime.fromtimestamp(NOW + s, LA):%H}:00" for s in (-2 * H, -2 * H + 300, -3 * H, -1 * H)})
+    assert [r["key"] for r in by_hour["rows"]] == expected
+
+
+def test_bad_group_by(log):
+    history, _ = log
+    with pytest.raises(HistoryError, match="group_by"):
+        history.activity_summary(group_by="weekday")
+
+
+# ---- media and status -----------------------------------------------------------------
+
+def test_visit_thumbnail(log):
+    history, data = log
+    cat_id = history.find_visits("24h", taxon="cat")["visits"][0]["id"]
+    image, caption = history.visit_thumbnail(cat_id, data)
+    assert image.startswith(b"\xff\xd8") and "domestic cat" in caption
+    finch_id = history.find_visits("24h", taxon="songbirds")["visits"][0]["id"]
+    with pytest.raises(HistoryError, match="no thumbnail"):
+        history.visit_thumbnail(finch_id, data)
+
+
+def test_monitor_status(log):
+    history, _ = log
+    status = {s["camera"]: s for s in history.monitor_status()}
+    assert status["backyard"]["watching_now"] and status["east_deck"]["open_visits"] == 1
+    assert not status["west_alley"]["watching_now"]
+    assert status["east_fence"]["looks_moved_since"] is not None
+
+
+def test_no_log_yet(tmp_path):
+    history = History(tmp_path / "monitor.db", {"a": Camera("a", "x")})
+    with pytest.raises(HistoryError, match="monitor hasn't run"):
+        history.find_visits()
+
+
+# ---- over MCP -------------------------------------------------------------------------
+
+async def test_history_tools_over_mcp(log):
+    history, data = log
+    cameras = history.cameras
+    async with Client(build_server(cameras, history, data)) as client:
+        tools = {t.name: t for t in (await client.list_tools()).tools}
+        assert {"find_visits", "activity_summary", "visit_media", "monitor_status"} <= set(tools)
+        assert all(tools[n].annotations.read_only_hint for n in ("find_visits", "visit_media"))
+        found = await client.call_tool("find_visits", {"since": "15m", "tag": "dog_yard", "taxon": "night-critters"})
+        assert found.structured_content["visits"][0]["label"] == "striped skunk"
+        cat_id = (await client.call_tool("find_visits", {"taxon": "cat"})).structured_content["visits"][0]["id"]
+        media = await client.call_tool("visit_media", {"visit_id": cat_id})
+        image, caption = media.content
+        assert image.mime_type == "image/jpeg" and base64.b64decode(image.data).startswith(b"\xff\xd8")
+        bad = await client.call_tool("find_visits", {"since": "last tuesday"})
+        assert bad.is_error and "15m" in bad.content[0].text
+
+
+def test_logs_from_older_monitors(tmp_path):
+    """The server opens the log read-only, so it never adds new columns: older logs must still work."""
+    import sqlite3
+
+    db_path = tmp_path / "monitor.db"
+    db = sqlite3.connect(db_path)
+    db.executescript("""
+        CREATE TABLE camera_status (camera TEXT PRIMARY KEY, state TEXT NOT NULL, last_frame_at TEXT,
+          last_motion_at TEXT, error TEXT, updated_at TEXT NOT NULL);
+    """)  # 2a: motion only, no visits
+    db.commit()
+    cams = {"a": Camera("a", "x")}
+    with pytest.raises(HistoryError, match="no visits yet"):
+        History(db_path, cams).find_visits()
+    db.executescript("""
+        CREATE TABLE visits (id INTEGER PRIMARY KEY, camera TEXT NOT NULL, started_at TEXT NOT NULL,
+          ended_at TEXT NOT NULL, label TEXT NOT NULL, taxonomy TEXT NOT NULL, grp TEXT NOT NULL,
+          score REAL NOT NULL, frames INTEGER NOT NULL, max_count INTEGER NOT NULL, thumbnail TEXT,
+          clip TEXT, model TEXT NOT NULL);
+    """)  # 2b: visits, but no `open` column and no uptime table
+    db.execute("INSERT INTO visits VALUES (1, 'a', ?, ?, 'domestic cat', ?, 'cat', 1, 3, 1, NULL, NULL, 'm')",
+               (iso_ago(600), iso_ago(500), CAT[1]))
+    db.commit()
+    result = History(db_path, cams).find_visits("1h")
+    assert result["visits"][0]["still_there"] is False
+    assert result["coverage"][0]["watched"] is None  # unknown, not "not watched"
+    assert History(db_path, cams).monitor_status()[0]["open_visits"] == 0
+
+
+def iso_ago(seconds: float) -> str:
+    from camera_mcp.store import iso
+
+    return iso(time.time() - seconds)
