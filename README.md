@@ -62,17 +62,28 @@ cameras:
     host: 192.0.2.10
 ```
 
-The RTSP URL is built from the host (`rtsp://<user>:<pass>@<host>/stream1`), with the credentials
-taken from `$CAMERA_USER` and `$CAMERA_PASS`, the Camera Account set in the Tapo app. Credentials
-never go in the file. Anything else goes in `source` instead of `host`: a video file (which is how
-the tests run, and how to try the server away from home) or a full URL for a non-Tapo camera,
-where `${VAR}` is expanded from the environment.
+The RTSP URL is built from the host (`rtsp://<user>:<pass>@<host>/stream1`). The login is the
+Camera Account set in the Tapo app, and it never goes in a file. On macOS, store it once in the
+Keychain; `security` asks for the password, so it isn't typed on the command line:
+
+```bash
+security add-generic-password -U -s camera-mcp -a <camera user> -w
+```
+
+`$CAMERA_USER` and `$CAMERA_PASS`, if set, take precedence (for other systems, and the tests).
+Anything else goes in `source` instead of `host`: a video file (which is how the tests run, and
+how to try the server away from home) or a full URL for a non-Tapo camera, where `${VAR}` is
+expanded from the environment.
 
 ## Use from Claude Code
 
 ```bash
-claude mcp add cameras -e CAMERA_USER=... -e CAMERA_PASS=... -- ~/projects/camera-mcp/.venv/bin/camera-mcp --config ~/projects/camera-mcp/cameras.yaml --data-dir ~/projects/camera-mcp/data
+claude mcp add cameras -- ~/projects/camera-mcp/.venv/bin/camera-mcp --config ~/projects/camera-mcp/cameras.yaml --data-dir ~/projects/camera-mcp/data
 ```
+
+No password goes into Claude's settings: the server reads the login from the Keychain, and only
+`snapshot` needs it. Without a login the server still starts, the history tools work, and
+`snapshot` says how to add one.
 
 ## Probe the cameras
 

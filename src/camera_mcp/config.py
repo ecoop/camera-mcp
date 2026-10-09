@@ -2,7 +2,8 @@
 """Camera configuration: a YAML list of named cameras.
 
 A camera is usually just a `host` (its IP address): the RTSP URL is built here, with the
-credentials from $CAMERA_USER and $CAMERA_PASS and the Tapo main-stream path. Anything
+Tapo main-stream path and the cameras' login: $CAMERA_USER and $CAMERA_PASS if set, else the
+macOS Keychain item "camera-mcp" (so no password has to sit in a config file). Anything
 else (a video file, another brand's URL) goes in `source`, where `${VAR}` is expanded
 from the environment. Either way the file holds no credentials, and sources are never
 returned to an MCP client; cameras are addressed by name.
@@ -10,8 +11,11 @@ returned to an MCP client; cameras are addressed by name.
 
 from __future__ import annotations
 
+import functools
 import os
 import re
+import shutil
+import subprocess
 from dataclasses import dataclass, field, fields, replace
 from datetime import datetime, tzinfo
 from pathlib import Path
@@ -26,6 +30,9 @@ _USERINFO = re.compile(r"(?<=://)[^/@\s]*@")
 # Tapo cameras: /stream1 is full resolution, /stream2 low resolution; both always on.
 MAIN_STREAM, SUB_STREAM = "/stream1", "/stream2"
 USER_ENV, PASS_ENV = "CAMERA_USER", "CAMERA_PASS"
+KEYCHAIN_SERVICE = "camera-mcp"
+NO_LOGIN = (f"no camera login: set {USER_ENV} and {PASS_ENV}, or store it in the macOS Keychain with "
+            f"`security add-generic-password -U -s {KEYCHAIN_SERVICE} -a <camera user> -w` (it asks for the password)")
 
 
 class ConfigError(ValueError):
@@ -77,6 +84,7 @@ class Camera:
     tags: tuple[str, ...] = ()
     aliases: tuple[str, ...] = ()
     monitor: MonitorSettings = field(default_factory=MonitorSettings)
+    needs_login: bool = False  # a host camera loaded without a login: it can't be opened
 
     @property
     def is_stream(self) -> bool:
@@ -112,12 +120,36 @@ def _expand(value: str, where: str) -> str:
     return os.path.expanduser(_VAR.sub(sub, value))
 
 
-def _rtsp_url(host: str, where: str) -> str:
-    missing = [v for v in (USER_ENV, PASS_ENV) if v not in os.environ]
-    if missing:
-        raise ConfigError(f"{where}: environment variable {' and '.join(missing)} is not set")
-    user, password = (quote(os.environ[v], safe="") for v in (USER_ENV, PASS_ENV))
-    return f"rtsp://{user}:{password}@{host}{MAIN_STREAM}"
+@functools.cache
+def _keychain_login() -> tuple[str, str] | None:
+    """The login stored in the macOS Keychain as a generic password, service "camera-mcp",
+    account = the camera user. None if there's no Keychain (not macOS) or no such item."""
+    security = shutil.which("security")
+    if security is None:
+        return None
+    try:
+        item = subprocess.run([security, "find-generic-password", "-s", KEYCHAIN_SERVICE],
+                              capture_output=True, text=True, timeout=10)
+        secret = subprocess.run([security, "find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"],
+                                capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    account = re.search(r'"acct"<blob>="([^"]*)"', item.stdout)
+    if item.returncode or secret.returncode or not account:
+        return None
+    return account.group(1), secret.stdout.rstrip("\n")
+
+
+def camera_login() -> tuple[str, str] | None:
+    """(user, password) for the cameras: the environment first, then the Keychain."""
+    if os.environ.get(USER_ENV) and os.environ.get(PASS_ENV):
+        return os.environ[USER_ENV], os.environ[PASS_ENV]
+    return _keychain_login()
+
+
+def _rtsp_url(host: str, login: tuple[str, str] | None) -> str:
+    userinfo = ":".join(quote(part, safe="") for part in login) + "@" if login else ""
+    return f"rtsp://{userinfo}{host}{MAIN_STREAM}"
 
 
 def normalize_name(name: str) -> str:
@@ -197,7 +229,10 @@ def default_config_path() -> str:
     return os.environ.get("CAMERA_MCP_CONFIG", str(Path(__file__).resolve().parents[2] / "cameras.yaml"))
 
 
-def load_cameras(path: str | Path) -> dict[str, Camera]:
+def load_cameras(path: str | Path, *, require_login: bool = True) -> dict[str, Camera]:
+    """The cameras in a config file. Host cameras need the login (see camera_login); with
+    `require_login=False` (the MCP server, whose history tools never open a camera) they load
+    without it and are marked `needs_login`."""
     path = Path(path).expanduser()
     if not path.exists():
         raise ConfigError(f"camera config not found: {path}")
@@ -220,9 +255,13 @@ def load_cameras(path: str | Path) -> dict[str, Camera]:
         for n in (name, *aliases):
             if (other := seen.setdefault(normalize_name(n), name)) != name or (n == name and name in cameras):
                 raise ConfigError(f"cameras[{i}]: {n!r} clashes with camera {other!r} (names match loosely)")
+        login = camera_login() if host else None
+        if host and login is None and require_login:
+            raise ConfigError(f"{where}: {NO_LOGIN}")
         cameras[name] = Camera(
             name=name,
-            source=_rtsp_url(str(host), where) if host else _expand(str(source), where),
+            source=_rtsp_url(str(host), login) if host else _expand(str(source), where),
+            needs_login=bool(host) and login is None,
             label=str(raw.get("label", "")),
             enabled=bool(raw.get("enabled", True)),
             tags=_strings(raw.get("tags"), where, "tags"),

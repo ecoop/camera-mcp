@@ -207,7 +207,7 @@ def main(argv: list[str] | None = None) -> None:
                         help="the monitor's data directory, with monitor.db (default: $CAMERA_MCP_DATA, else data/)")
     args = parser.parse_args(argv)
     try:
-        cameras = load_cameras(args.config)
+        cameras = load_cameras(args.config, require_login=False)  # history needs no login; snapshot says so
         site = load_site(args.config)
     except ConfigError as e:
         print(f"camera-mcp: {e}", file=sys.stderr)

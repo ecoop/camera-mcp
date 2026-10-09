@@ -23,7 +23,7 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
-from camera_mcp.config import Camera, redact
+from camera_mcp.config import NO_LOGIN, Camera, redact
 
 FFMPEG = os.environ.get("CAMERA_MCP_FFMPEG") or shutil.which("ffmpeg") or "ffmpeg"
 
@@ -60,6 +60,8 @@ def _ffmpeg_args(camera: Camera, timeout: float) -> list[str]:
 
 def grab_frame(camera: Camera, timeout: float = 5.0) -> Frame:
     """Return one decoded frame from the camera (the first frame, for a file)."""
+    if camera.needs_login:
+        raise CaptureError(f"{camera.name}: {NO_LOGIN}")
     if not camera.is_stream and not os.path.exists(camera.source):
         raise CaptureError(f"{camera.name}: source file not found")
     try:
