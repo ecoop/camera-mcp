@@ -21,11 +21,11 @@ Phase 2 only observes, but its data model is built so that step can be added (se
 
 1. **Alert** when any camera sees an animal.
 2. What, and how many, distinct species in the last 4 days?
-3. Has the side yard camera seen any skunks this week?
+3. Has the west alley camera seen any skunks this week?
 4. When are songbirds most active at the feeders (several cameras)?
 5. Have any rats been on any bird feeder in the past 3 days?
 6. *(Toward deterrents)* When was a cat at a feeder, and were birds there at the same time?
-7. **Is the backyard clear?** Has a raccoon, skunk or opossum been seen in the backyard in the last
+7. **Is the dog yard clear?** Has a raccoon, skunk or opossum been seen in the dog's area in the last
    few minutes, typically at night before letting a dog out?
 
 Question 7 can only ever say "nothing *seen*": an animal can be out of every camera's view. Its
@@ -147,6 +147,16 @@ The monitor is the only writer. The MCP server opens the database read-only
   the follow-up bird classifier.
 - **Site allowlist** (config): a species not on the list is replaced by its nearest listed
   ancestor, or its class ("mammal", "bird"). This catches errors like the "domestic cattle" cat.
+- **The household dog and people are expected, not wildlife.** `domestic dog` is on the allowlist
+  so the dog gets its own visits instead of being mislabelled, and it is left out of alerts and
+  the dog-yard check by default. MegaDetector's *person* boxes become `person` visits with no
+  thumbnail or clip saved, so the log shows activity without keeping images of people (open
+  question 9).
+- **Detect on tiles for wide-view cameras.** MegaDetector shrinks each frame to 1280 px wide, so
+  on a camera mounted high with a wide view (tag `wide_view`), a rat or sparrow across the yard
+  may be only a few pixels. For those cameras the monitor also runs it on overlapping tiles of the
+  2560×1440 frame (about 4× the detector cost, only during candidate windows) and merges the
+  boxes.
 - Frames where the detector and classifier disagree ("no cv result") count as *unknown animal*,
   not blank.
 - Model version is stored with every visit, so labels can be recomputed after a model change.
@@ -249,6 +259,7 @@ jays are technically songbirds (Passeriformes), and we want them kept apart:
 | fox | `mammalia;carnivora;canidae;urocyon`, `mammalia;carnivora;canidae;vulpes` |
 | coyote | `mammalia;carnivora;canidae;canis;latrans` |
 | night-critters | union of raccoon, skunk, opossum (a group can list other groups) |
+| dog | `mammalia;carnivora;canidae;canis;familiaris` (the household dog; excluded from alerts) |
 
 A "bird (unsorted)" visit doesn't match "songbirds". Until the bird classifier exists, question 4
 should count songbirds plus unsorted birds at feeder cameras, and say so in its answer.
@@ -262,7 +273,7 @@ site:
   # Birds are allowed at any level (aves); the bird groups do the sorting.
   allowlist: [domestic cat, eastern gray squirrel, western gray squirrel, eastern fox squirrel,
               northern raccoon, striped skunk, virginia opossum, grey fox, red fox, coyote,
-              brown rat, house rat, rattus species, aves]
+              brown rat, house rat, rattus species, domestic dog, aves]
   groups:                      # ordered: first match wins (see Data model)
     - {name: crows,         prefix: ["aves;passeriformes;corvidae;corvus"]}
     - {name: jays,          prefix: ["aves;passeriformes;corvidae"]}
@@ -271,17 +282,30 @@ site:
     # ... hawks, owls, cat, rat, squirrel, skunk, raccoon, opossum, fox, coyote
 
 cameras:
-  - name: side_yard
-    label: Side yard
+  - name: feeder_west
+    label: Feeders, west side
     host: 192.0.2.13            # recording uses /stream1, motion /stream2
-    aliases: ["side yard"]
-    tags: [feeder]
+    tags: [feeder, wide_view]   # free-form roles; see the tag table below
     pre_seconds: 5              # optional, defaults shown
     post_seconds: 10
     training_capture: false
 ```
 
 Phase 1 already accepts `name`, `label`, `host` (or `source`) and `enabled`; the rest are new.
+
+**Tags** are free-form roles that questions and rules refer to; only these have meaning to the
+monitor or the tools:
+
+| Tag | Used by |
+|---|---|
+| `feeder` | feeder questions (4, 5, 6) and feeder deterrent rules |
+| `no-doves` | the dove deterrent rule |
+| `dog_yard` | the dog-yard check (question 7) |
+| `wide_view` | detection on tiles |
+| `under_deck`, `thoroughfare`, `wired` | descriptive; available to questions ("anything under the deck last night?") |
+
+**Camera names match loosely:** spaces, underscores and capitals are ignored, so "west alley"
+finds `west_alley`. Aliases are only needed for genuinely different words.
 
 ## MCP tools (all read-only)
 
@@ -296,27 +320,29 @@ Few and general: Claude turns questions into calls; there's no tool per question
 | `visit_media(visit_id, kind="thumbnail")` | the thumbnail as an image (clips stay on disk and are referenced by path) |
 | `monitor_status()` | per camera: last frame seen, last visit, errors. So "nothing seen" can be told apart from "monitor was down" |
 
-`taxon` accepts a group name, a common name, or a taxonomy prefix. `cameras` accepts names or
-aliases.
+`taxon` accepts a group name, a common name, or a taxonomy prefix. `cameras` accepts names
+(matched loosely) or aliases.
 
 How the questions map:
 
 | # | Call |
 |---|---|
 | 2 | `activity_summary(since=now-4d, group_by=species)` |
-| 3 | `find_visits(since=start of week, cameras=["side yard"], taxon="skunk")` |
+| 3 | `find_visits(since=start of week, cameras=["west alley"], taxon="skunk")` |
 | 4 | `activity_summary(since=now-14d, tag="feeder", taxon="songbirds", group_by=hour)`, then the same for unsorted birds |
 | 5 | `find_visits(since=now-3d, tag="feeder", taxon="rat")` |
 | 6 | `find_visits(since=now-7d, tag="feeder", taxon="cat", overlapping="aves")` |
-| 7 | `find_visits(since=now-15m, tag="backyard", taxon="night-critters")` (includes visits still open), plus `monitor_status` for the backyard cameras |
+| 7 | `find_visits(since=now-15m, tag="dog_yard", taxon="night-critters")` (includes visits still open), plus `monitor_status` for the `dog_yard` cameras |
 
-`monitor_status` matters for every history answer: "no skunks" is only true if the side yard
+`monitor_status` matters for every history answer: "no skunks" is only true if the west alley
 camera was watched all week. For question 7 it is essential: "nothing seen in 15 minutes, all three
-backyard cameras watching" is a useful answer; "nothing seen" with a camera down is not.
+dog-yard cameras watching" is a useful answer; "nothing seen" with a camera down is not. The
+dog-yard cameras include the ones under the deck, where skunks and raccoons den and the dog
+sometimes goes.
 
 Question 7 is time-sensitive and asked from a phone at the back door. If asking through Claude
 turns out too slow, the same query can back a one-tap phone shortcut or a standing alert
-("night-critter in the backyard") while it's dark. That's a later decision; the query is the same.
+("night-critter in the dog yard") while it's dark. That's a later decision; the query is the same.
 
 ## Hosting
 
@@ -376,8 +402,7 @@ Not built in phase 2; recorded here so phase 2 doesn't make it harder.
 
 1. The remaining primary cameras (and a seventh, not yet installed): name, IP, and placement.
    Stream paths are known (`/stream1`, `/stream2`).
-2. Which cameras point at feeders (`tags: [feeder]`), which cover the backyard (`tags: [backyard]`),
-   and which is "side yard".
+2. ~~Camera roles~~: answered; tags are set in the local `cameras.yaml`.
 3. Is `wildlife-cv-pipeline`'s `motion_capture.py` running anywhere, and still writing to MinIO?
    Without its trained weights it emits random placeholder detections, so any data it wrote may be
    noise. Does camera-mcp need MinIO at all, or is local disk enough?
@@ -387,3 +412,7 @@ Not built in phase 2; recorded here so phase 2 doesn't make it harder.
 7. Night clips with a skunk, rat, raccoon or opossum, for the eval before 2b.
 8. Deterrents (later): does playing audio through the camera speaker via go2rtc work on our
    cameras, and is it loud enough at the feeders?
+9. People: is a `person` visit with no saved image the right default, or should person
+   detections be dropped entirely?
+10. Under-deck cameras may be dark enough to be in night mode during the day; the night eval
+    should include their daytime footage.
