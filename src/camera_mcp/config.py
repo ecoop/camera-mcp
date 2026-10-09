@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
@@ -22,7 +22,7 @@ _VAR = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 _USERINFO = re.compile(r"(?<=://)[^/@\s]*@")
 
 # Tapo cameras: /stream1 is full resolution, /stream2 low resolution; both always on.
-MAIN_STREAM = "/stream1"
+MAIN_STREAM, SUB_STREAM = "/stream1", "/stream2"
 USER_ENV, PASS_ENV = "CAMERA_USER", "CAMERA_PASS"
 
 
@@ -40,6 +40,12 @@ class Camera:
     @property
     def is_stream(self) -> bool:
         return "://" in self.source
+
+    def substream(self) -> Camera | None:
+        """The same camera on its low-resolution stream, for a Tapo RTSP source; else None."""
+        if not (self.source.startswith("rtsp://") and self.source.endswith(MAIN_STREAM)):
+            return None
+        return replace(self, source=self.source[: -len(MAIN_STREAM)] + SUB_STREAM)
 
     def endpoint(self) -> tuple[str, int] | None:
         """(host, port) for a network source, else None."""
@@ -71,6 +77,11 @@ def _rtsp_url(host: str, where: str) -> str:
         raise ConfigError(f"{where}: environment variable {' and '.join(missing)} is not set")
     user, password = (quote(os.environ[v], safe="") for v in (USER_ENV, PASS_ENV))
     return f"rtsp://{user}:{password}@{host}{MAIN_STREAM}"
+
+
+def default_config_path() -> str:
+    """$CAMERA_MCP_CONFIG, else cameras.yaml at the repo root."""
+    return os.environ.get("CAMERA_MCP_CONFIG", str(Path(__file__).resolve().parents[2] / "cameras.yaml"))
 
 
 def load_cameras(path: str | Path) -> dict[str, Camera]:

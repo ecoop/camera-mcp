@@ -38,22 +38,40 @@ head count.
 
 ## Cameras
 
-All primary cameras are the same model, a **TP-Link Tapo C325WB** (outdoor, 2688×1520 at up to
-20 fps, H.264, F1.0 lens, built-in speaker, microphone, spotlights and a 97 dB siren). What that
-means for the design:
+The primary cameras are most likely **TP-Link Tapo C320WS** (outdoor, up to 2560×1440 at 15 fps,
+H.264, F1.6 lens, starlight sensor, 850 nm IR LEDs, built-in speaker, microphone and siren); see
+the measurements below. What that means for the design:
 
 - **Two always-on RTSP streams per camera:** `/stream1` (full resolution) for recording and
   detection crops, `/stream2` (low resolution) for motion. Uniform paths keep the config short.
-- **Night images are colour, not IR grayscale.** The C325WB's "ColorPro" low-light mode keeps
-  colour at night without turning on its spotlights. That may help SpeciesNet at night, since it's
-  trained mostly on IR camera-trap images and colour gives it more to go on; or hurt it, if the
-  low-light colour image is noisy. Night clips decide (open question 7).
+- **Night mode is a setting, and it matters for detection.** The C320WS can show night in colour
+  (starlight sensor) or in IR grayscale (850 nm LEDs), chosen in the Tapo app. SpeciesNet was
+  trained mostly on IR camera-trap images, so IR mode may suit it better; colour may help with
+  some animals or be too noisy. Night clips in both modes decide (open question 7).
 - **Each camera has a speaker**, so deterrent sounds may not need extra hardware (see
   [Deterrents](#later-deterrents)).
 
-Not yet confirmed on our cameras: the `/stream2` resolution, whether `/stream1` really runs at
-2688×1520 (the 2025 clips are 1920×1080), and ONVIF support. A probe of each camera will settle
-these.
+**Measured 2026-10-08** with `python -m camera_mcp.probe` (all six cameras, login accepted):
+
+| Camera | `/stream1` (main) | `/stream2` (sub) |
+|---|---|---|
+| east_fence, west_fence, backyard, west_deck | H.264 1920×1080, 15 fps | H.264 640×360, 15 fps |
+| east_deck | H.264 1920×1080, 20 fps | H.264 640×360, 20 fps |
+| west_alley | H.264 2560×1440, 15 fps | H.264 640×360, 15 fps |
+
+- **Five cameras run below the C320WS's 2560×1440;** only west_alley is at full resolution. The
+  others are probably set to 1080p in the Tapo app. Full resolution would help with small birds,
+  at the cost of more disk for clips.
+- **east_deck runs at 20 fps,** above the C320WS's 15 fps, so it may be a different model (the
+  C325WB does 20 fps). The Tapo app shows each camera's model.
+- **The sub stream is the same everywhere: 640×360**, so motion detection gets one fixed input
+  size. At about 5 fps of 640×360 per camera, decoding six of them is light work.
+- **Frame rates differ** (15 vs 20 fps), so the monitor reads the rate per stream rather than
+  assuming one.
+- **Opening a stream takes about 2 s.** The monitor keeps its streams open, so this only matters to
+  one-off reads such as `snapshot`; it's also why question 7 must be answered from the monitor's
+  state, not by opening cameras on demand.
+- ONVIF answers on port 2020 on all six; its features (events, audio output) are still untested.
 
 ## Architecture
 
@@ -327,7 +345,7 @@ Not built in phase 2; recorded here so phase 2 doesn't make it harder.
 - **Every firing is logged** (rule, sound, camera, the visit that triggered it) together with
   whether the visit **ended within N seconds** afterwards. That gives a measure of which sound
   works on which animal, and it's queryable like everything else.
-- **Speakers:** first choice is the C325WB's own speaker. [go2rtc](https://github.com/AlexxIT/go2rtc)
+- **Speakers:** first choice is the camera's own speaker. [go2rtc](https://github.com/AlexxIT/go2rtc)
   supports two-way audio on Tapo cameras and can play audio files through them; to be tested on
   ours, including whether the camera leaves talk mode cleanly afterwards. The built-in 97 dB siren
   is a blunter option. The fallback is a separate speaker per feeder.
@@ -356,5 +374,5 @@ Not built in phase 2; recorded here so phase 2 doesn't make it harder.
 5. Retention: how long to keep clips (visits are small and kept indefinitely).
 6. Should `snapshot` calls be saved as an audit trail?
 7. Night clips with a skunk, rat, raccoon or opossum, for the eval before 2b.
-8. Deterrents (later): does playing audio through the C325WB speaker via go2rtc work on our
+8. Deterrents (later): does playing audio through the camera speaker via go2rtc work on our
    cameras, and is it loud enough at the feeders?

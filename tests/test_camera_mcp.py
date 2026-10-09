@@ -13,6 +13,7 @@ from mcp import Client
 
 from camera_mcp.capture import grab_frame, reachable, to_jpeg
 from camera_mcp.config import Camera, ConfigError, load_cameras, redact
+from camera_mcp.probe import ProbeError, probe_stream
 from camera_mcp.server import build_server
 
 pytestmark = [
@@ -117,6 +118,26 @@ def test_unquoted_yaml_boolean_name_is_rejected(tmp_path):
 
 def test_redact():
     assert redact("failed rtsp://u:p@10.0.0.2/stream1 x") == "failed rtsp://***@10.0.0.2/stream1 x"
+
+
+def test_substream_only_for_tapo_rtsp(config):
+    cams = load_cameras(config)
+    assert cams["fence"].substream().source == "rtsp://u:secret@127.0.0.1:9/stream2"
+    assert cams["demo"].substream() is None
+
+
+# ---- probe ----------------------------------------------------------------------------
+
+def test_probe_reads_stream_header(clip):
+    info = probe_stream(Camera("demo", str(clip)))
+    assert (info.codec, info.width, info.height, info.fps) == ("h264", 640, 360, 10.0)
+
+
+def test_probe_failure_is_redacted(config):
+    fence = load_cameras(config)["fence"]  # port 9: nothing listens
+    with pytest.raises(ProbeError) as e:
+        probe_stream(fence, timeout=2)
+    assert "secret" not in str(e.value)
 
 
 # ---- capture --------------------------------------------------------------------------

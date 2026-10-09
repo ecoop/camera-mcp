@@ -8,10 +8,8 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from datetime import datetime
-from pathlib import Path
 
 import anyio
 from mcp.server.mcpserver import Image, MCPServer
@@ -20,7 +18,7 @@ from mcp_types import ToolAnnotations
 from pydantic import BaseModel
 
 from camera_mcp.capture import CaptureError, grab_frame, reachable, to_jpeg
-from camera_mcp.config import Camera, load_cameras
+from camera_mcp.config import Camera, default_config_path, load_cameras
 
 READ_ONLY = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
 
@@ -106,7 +104,7 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="camera-mcp", description=__doc__)
     parser.add_argument(
         "--config",
-        default=os.environ.get("CAMERA_MCP_CONFIG", str(Path(__file__).resolve().parents[2] / "cameras.yaml")),
+        default=default_config_path(),
         help="camera YAML (default: $CAMERA_MCP_CONFIG, else cameras.yaml at the repo root)",
     )
     args = parser.parse_args(argv)

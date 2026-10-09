@@ -54,6 +54,17 @@ where `${VAR}` is expanded from the environment.
 claude mcp add cameras -e CAMERA_USER=... -e CAMERA_PASS=... -- ~/projects/camera-mcp/.venv/bin/camera-mcp --config ~/projects/camera-mcp/cameras.yaml
 ```
 
+## Probe the cameras
+
+```bash
+.venv/bin/python -m camera_mcp.probe
+```
+
+For every camera in `cameras.yaml`, this checks that it answers and accepts the login, and reports
+what its streams deliver (codec, resolution, frame rate). Tapo cameras are checked on both
+`/stream1` and `/stream2`. It's read-only: each stream is opened, its header read, and closed.
+It exits non-zero if any stream fails.
+
 ## Tests
 
 ```bash
