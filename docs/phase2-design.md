@@ -55,19 +55,30 @@ the measurements below. What that means for the design:
 
 | Camera | `/stream1` (main) | `/stream2` (sub) |
 |---|---|---|
-| east_fence, west_fence, backyard, west_deck | H.264 1920×1080, 15 fps | H.264 640×360, 15 fps |
-| east_deck | H.264 1920×1080, 20 fps | H.264 640×360, 20 fps |
-| west_alley | H.264 2560×1440, 15 fps | H.264 640×360, 15 fps |
+| all six, after raising Video Quality in the Tapo app | H.264 2560×1440, 15 fps | H.264 640×360, 15 fps (east_deck 20 fps) |
+| before: five cameras | H.264 1920×1080, 15 fps (east_deck 20 fps) | same |
 
-- **Five cameras run below the C320WS's 2560×1440;** only west_alley is at full resolution. The
-  others are probably set to 1080p in the Tapo app. Full resolution would help with small birds,
-  at the cost of more disk for clips.
-- **east_deck runs at 20 fps,** above the C320WS's 15 fps, so it may be a different model (the
-  C325WB does 20 fps). The Tapo app shows each camera's model.
+- **The Tapo app's Video Quality setting sets `/stream1`'s resolution.** Five cameras were at
+  1080p; after raising the setting, all six deliver the C320WS's full 2560×1440 within a minute.
+  `/stream2` stays at 640×360 regardless.
+- **At 1440p the C320WS runs at 15 fps;** at 1080p it can do 20 (east_deck did), so frame rate
+  follows the quality setting too. The monitor reads the rate per stream rather than assuming one.
+- **Full resolution helps the classifier, not the detector.** SpeciesNet classifies a crop cut
+  from the full frame, so a small bird gets about 1.8× the pixels at 1440p. MegaDetector shrinks
+  every frame to 1280 px wide first, so 1440p doesn't help it find small, distant animals; if that
+  becomes a problem, the fix is detecting on tiles of the frame.
+- **Wi-Fi cost is small.** Measured at 1440p (10 s per stream, early evening): main streams
+  0.20–2.86 Mbit/s, **7.5 Mbit/s for all six**; sub streams 0.08–0.26, about 1 Mbit/s in total.
+  The cameras use variable bitrate, so a still scene (the fences, 0.2–0.4) costs far less than a
+  busy one (east_deck, 2.9); wind, rain and noisy night images will push rates up, perhaps 2–3×,
+  which is still well within a working 2.4 GHz network. Keeping every main stream open 24/7 is
+  fine. If one camera's link ever can't carry it, that camera can keep only `/stream2` open and
+  open `/stream1` when motion starts (about 2 s late, so its pre-event footage is low resolution).
+- **Disk:** at 7.5 Mbit/s, recording everything would be about 80 GB a day; the monitor keeps
+  only clips of visits plus a few seconds of rolling buffer, so storage is driven by how busy the
+  cameras are, not by resolution alone.
 - **The sub stream is the same everywhere: 640×360**, so motion detection gets one fixed input
   size. At about 5 fps of 640×360 per camera, decoding six of them is light work.
-- **Frame rates differ** (15 vs 20 fps), so the monitor reads the rate per stream rather than
-  assuming one.
 - **Opening a stream takes about 2 s.** The monitor keeps its streams open, so this only matters to
   one-off reads such as `snapshot`; it's also why question 7 must be answered from the monitor's
   state, not by opening cameras on demand.
