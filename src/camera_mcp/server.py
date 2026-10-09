@@ -18,7 +18,7 @@ from mcp_types import ToolAnnotations
 from pydantic import BaseModel
 
 from camera_mcp.capture import CaptureError, grab_frame, reachable, to_jpeg
-from camera_mcp.config import Camera, default_config_path, load_cameras
+from camera_mcp.config import Camera, default_config_path, find_camera, load_cameras
 
 READ_ONLY = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
 
@@ -29,6 +29,8 @@ class CameraInfo(BaseModel):
     enabled: bool
     kind: str  # "stream" or "file"
     reachable: bool
+    tags: list[str]
+    aliases: list[str]
 
 
 def build_server(cameras: dict[str, Camera]) -> MCPServer:
@@ -41,11 +43,11 @@ def build_server(cameras: dict[str, Camera]) -> MCPServer:
     )
 
     def lookup(name: str) -> Camera:
-        cam = cameras.get(name)
+        cam = find_camera(cameras, name)
         if cam is None:
             raise ToolError(f"unknown camera {name!r}; known: {', '.join(sorted(cameras))}")
         if not cam.enabled:
-            raise ToolError(f"camera {name!r} is disabled in the config")
+            raise ToolError(f"camera {cam.name!r} is disabled in the config")
         return cam
 
     def info() -> list[CameraInfo]:
@@ -56,6 +58,8 @@ def build_server(cameras: dict[str, Camera]) -> MCPServer:
                 enabled=c.enabled,
                 kind="stream" if c.is_stream else "file",
                 reachable=c.enabled and reachable(c),
+                tags=list(c.tags),
+                aliases=list(c.aliases),
             )
             for c in cameras.values()
         ]
@@ -71,7 +75,8 @@ def build_server(cameras: dict[str, Camera]) -> MCPServer:
         """Take one current frame from a camera and return it as a JPEG image.
 
         Args:
-            camera: camera name, as returned by list_cameras
+            camera: camera name or alias, as returned by list_cameras (case, spaces and
+                underscores are ignored: "west alley" finds west_alley)
             max_width: downscale to at most this many pixels wide (160-1920)
         """
         cam = lookup(camera)

@@ -149,9 +149,10 @@ The monitor is the only writer. The MCP server opens the database read-only
   ancestor, or its class ("mammal", "bird"). This catches errors like the "domestic cattle" cat.
 - **The household dog and people are expected, not wildlife.** `domestic dog` is on the allowlist
   so the dog gets its own visits instead of being mislabelled, and it is left out of alerts and
-  the dog-yard check by default. MegaDetector's *person* boxes become `person` visits with no
-  thumbnail or clip saved, so the log shows activity without keeping images of people (open
-  question 9).
+  the dog-yard check by default. MegaDetector's *person* boxes become `person` visits. By default
+  no thumbnail or clip is saved for them, so the log shows activity without keeping images of
+  people; a camera can set `save_people_images: true` (for example one watching a driveway, where
+  a person is on the property and an image is the point).
 - **Detect on tiles for wide-view cameras.** MegaDetector shrinks each frame to 1280 px wide, so
   on a camera mounted high with a wide view (tag `wide_view`), a rat or sparrow across the yard
   may be only a few pixels. For those cameras the monitor also runs it on overlapping tiles of the
@@ -357,7 +358,7 @@ turns out too slow, the same query can back a one-tap phone shortcut or a standi
 
 Each step is its own PR.
 
-1. **2a: monitor skeleton.** Per-camera ffmpeg readers, motion, packet ring buffer, clips on
+1. **2a: monitor skeleton** *(built: `camera-monitor`)*. Per-camera ffmpeg readers, motion, packet ring buffer, clips on
    motion. No model. Testable with the recorded clips.
 2. **2b: SpeciesNet + visits.** Tier 2 and 3 on candidate windows, allowlist, visit aggregation,
    SQLite. Also re-run the eval on night clips.
@@ -412,7 +413,7 @@ Not built in phase 2; recorded here so phase 2 doesn't make it harder.
 7. Night clips with a skunk, rat, raccoon or opossum, for the eval before 2b.
 8. Deterrents (later): does playing audio through the camera speaker via go2rtc work on our
    cameras, and is it loud enough at the feeders?
-9. People: is a `person` visit with no saved image the right default, or should person
-   detections be dropped entirely?
+9. ~~People~~: answered; keep `person` visits, no images by default, `save_people_images` per
+   camera.
 10. Under-deck cameras may be dark enough to be in night mode during the day; the night eval
     should include their daytime footage.

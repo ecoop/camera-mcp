@@ -5,6 +5,8 @@ __pycache__/
 # real camera config: addresses and credential variable names live here
 cameras.yaml
 snapshots/
+# monitor output: ring buffer, clips, monitor.db
+data/
 .DS_Store
 # private household notes: context that should never be committed or published
 notes/

@@ -55,6 +55,9 @@ cameras:
   - name: parked
     source: {clip}
     enabled: false
+  - name: west_alley
+    source: {clip}
+    tags: [feeder, dog_yard]
 """
     )
     return path
@@ -182,8 +185,16 @@ async def test_snapshot_returns_an_image(config):
 async def test_snapshot_errors_are_tool_errors_without_secrets(config):
     async with Client(build_server(load_cameras(config))) as client:
         unknown = await client.call_tool("snapshot", {"camera": "nope"})
-        assert unknown.is_error and "known: demo, fence, parked" in unknown.content[0].text
+        assert unknown.is_error and "known: demo, fence, parked, west_alley" in unknown.content[0].text
         down = await client.call_tool("snapshot", {"camera": "fence"})
         assert down.is_error and "secret" not in down.content[0].text
         off = await client.call_tool("snapshot", {"camera": "parked"})
         assert off.is_error and "disabled" in off.content[0].text
+
+
+async def test_snapshot_matches_names_loosely_and_lists_tags(config):
+    async with Client(build_server(load_cameras(config))) as client:
+        result = await client.call_tool("snapshot", {"camera": "West Alley", "max_width": 320})
+        assert not result.is_error and result.content[1].text.startswith("west_alley ")
+        cams = (await client.call_tool("list_cameras", {})).structured_content["result"]
+        assert {c["name"]: c["tags"] for c in cams}["west_alley"] == ["feeder", "dog_yard"]

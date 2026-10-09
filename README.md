@@ -65,6 +65,26 @@ what its streams deliver (codec, resolution, frame rate). Tapo cameras are check
 `/stream1` and `/stream2`. It's read-only: each stream is opened, its header read, and closed.
 It exits non-zero if any stream fails.
 
+## The monitor (phase 2a)
+
+```bash
+.venv/bin/camera-monitor                          # all enabled cameras, until Ctrl-C
+.venv/bin/camera-monitor --camera "west alley" --duration 300
+```
+
+For each camera, the monitor:
+- **records** the main stream into a ring buffer of 2-second files, copied rather than re-encoded;
+- **watches** the low-resolution stream for motion, at 5 grayscale frames per second;
+- **saves a clip** when motion ends, joined from the buffer with the seconds before and after it.
+
+It logs each motion window, and each camera's status, to `data/monitor.db`. Clips go to
+`data/clips/<camera>/<date>/`. `data/` is git-ignored; set `--data-dir` or `$CAMERA_MCP_DATA` to
+put it elsewhere. Dropped streams are reopened with backoff.
+
+There is no detection model yet: phase 2b adds SpeciesNet, which turns motion into animal visits.
+Timing and sensitivity can be set site-wide under `monitor:` in `cameras.yaml`, or per camera:
+`pre_seconds`, `post_seconds`, `quiet_seconds`, `motion_fps`, `pixel_threshold` and `min_changed`.
+
 ## Tests
 
 ```bash
