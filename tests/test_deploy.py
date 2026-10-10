@@ -44,3 +44,20 @@ def test_rendered_plist_passes_plutil(tmp_path):
     out = tmp_path / "r.plist"
     out.write_text(render(tmp_path))
     subprocess.run(["plutil", "-lint", str(out)], check=True, capture_output=True)
+
+
+BRIEF_SCRIPT = REPO / "deploy" / "install-brief.sh"
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
+def test_brief_plist_renders_with_time_and_recipient(tmp_path):
+    env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "CAMERA_MCP_DATA": "/srv/cam/data",
+           "CAMERA_MCP_BRIEF_TIME": "06:30"}
+    out = subprocess.run(["bash", str(BRIEF_SCRIPT), "--dry-run", "+15551234567"],
+                         capture_output=True, text=True, env=env, check=True).stdout
+    assert "@@" not in out
+    plist = plistlib.loads(out.encode())
+    assert plist["StartCalendarInterval"] == {"Hour": 6, "Minute": 30}
+    assert plist["ProgramArguments"][1] == "+15551234567"
+    assert plist["ProgramArguments"][0].endswith("deploy/morning-brief.sh")
+    assert plist["EnvironmentVariables"]["CAMERA_MCP_DATA"] == "/srv/cam/data"

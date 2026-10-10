@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- A launchd LaunchAgent that runs the wildlife brief once each morning (local time).
+     Runs in the login session so it can read the Keychain and drive Messages. install-service.sh
+     fills LABEL, REPO, DATA, PATH, HOUR, MINUTE and RECIPIENT in. -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>@@LABEL@@</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>@@REPO@@/deploy/morning-brief.sh</string>
+        <string>@@RECIPIENT@@</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>@@REPO@@</string>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>@@HOUR@@</integer>
+        <key>Minute</key>
+        <integer>@@MINUTE@@</integer>
+    </dict>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>@@PATH@@</string>
+        <key>CAMERA_MCP_DATA</key>
+        <string>@@DATA@@</string>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>@@DATA@@/brief.log</string>
+    <key>StandardErrorPath</key>
+    <string>@@DATA@@/brief.log</string>
+</dict>
+</plist>
