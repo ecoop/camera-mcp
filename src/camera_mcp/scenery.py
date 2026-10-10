@@ -86,11 +86,21 @@ class Spot:
 
 
 class Scenery:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, roi: tuple | None = None):
         self.path = path
+        self.roi = tuple(roi) if roi else None  # learned spots are fractions of this crop
+        self.spots = []
         try:
-            self.spots = [Spot(**s) for s in json.loads(path.read_text())]
-        except (FileNotFoundError, ValueError, TypeError):
+            data = json.loads(path.read_text())
+        except (FileNotFoundError, ValueError):
+            return
+        spots = data.get("spots", []) if isinstance(data, dict) else data  # legacy: a bare spot list
+        stored_roi = tuple(data["roi"]) if isinstance(data, dict) and data.get("roi") else None
+        if stored_roi != self.roi:
+            return  # the analysis crop changed: old fractions mean a different region, so forget them
+        try:
+            self.spots = [Spot(**s) for s in spots]
+        except (TypeError, ValueError):
             self.spots = []
 
     def filter(self, t: float, detections: list[Detection],
@@ -151,7 +161,8 @@ class Scenery:
     def _save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps([asdict(s) for s in self.spots]))
+        payload = {"roi": list(self.roi) if self.roi else None, "spots": [asdict(s) for s in self.spots]}
+        tmp.write_text(json.dumps(payload))
         tmp.replace(self.path)
 
     def reset(self) -> int:

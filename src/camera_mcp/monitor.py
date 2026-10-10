@@ -178,7 +178,7 @@ class CameraWorker:
         # Detection (phase 2b), when the monitor has an analyzer:
         self.analyzer: Analyzer | None = None
         self.tracker = VisitTracker(camera.name, close_after=self.s.visit_close_seconds)
-        self.scenery = Scenery(data_dir / "scenery" / f"{camera.name}.json")
+        self.scenery = Scenery(data_dir / "scenery" / f"{camera.name}.json", roi=camera.roi)
         self.recent_windows: list[tuple[float, float]] = []  # (start, last motion) of closed windows
         self.considered_until = 0.0  # segments starting at or before this were already considered
         self.queued: dict[Path, float] = {}  # segments waiting for the analyzer -> their start
@@ -592,11 +592,17 @@ class Analyzer:
                         if behind else "caught up")
         every = max(seg.end - seg.start, s.segment_seconds) if behind else s.detect_every_seconds
         native_w, native_h = worker.frame_size(seg)
-        width, height = native_w, native_h
+        width, height = native_w, native_h  # tracks the running (post-crop, post-scale) decode size
         vf = f"fps=1/{every}"
-        if s.analysis_width and s.analysis_width < native_w:  # scale down for cheaper decode / lighter crops
-            width = s.analysis_width - (s.analysis_width % 2)
-            height = max(2, round(native_h * width / native_w / 2) * 2)
+        if (roi := worker.camera.roi):  # analyse only this region; boxes stay fractions of the crop
+            x, y, rw, rh = roi
+            cx, cy = int(x * native_w), int(y * native_h)
+            width, height = (int(rw * native_w) // 2) * 2, (int(rh * native_h) // 2) * 2
+            vf += f",crop={width}:{height}:{cx}:{cy}"
+        if s.analysis_width and s.analysis_width < width:  # scale down for cheaper decode / lighter crops
+            scaled = s.analysis_width - (s.analysis_width % 2)
+            height = max(2, round(height * scaled / width / 2) * 2)
+            width = scaled
             vf += f",scale={width}:{height}"
         proc = subprocess.run(
             [FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin", "-i", str(seg.path),

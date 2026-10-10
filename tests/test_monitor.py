@@ -240,6 +240,14 @@ def test_tile_windows_count():
     assert len(tile_windows(1, 1)) == 1 and len(tile_windows(2, 2)) == 4 and len(tile_windows(1, 2)) == 2
 
 
+def test_roi_parses_and_rejects_bad(tmp_path):
+    cams = load_cameras(write(tmp_path, "cameras: [{name: a, source: a.mp4, roi: [0.1, 0.1, 0.8, 0.8]}]"))
+    assert cams["a"].roi == (0.1, 0.1, 0.8, 0.8)
+    assert load_cameras(write(tmp_path, "cameras: [{name: b, source: b.mp4}]"))["b"].roi is None
+    with pytest.raises(ConfigError, match="out of bounds"):
+        load_cameras(write(tmp_path, "cameras: [{name: a, source: a.mp4, roi: [0.5, 0.0, 0.8, 0.5]}]"))
+
+
 def test_analysis_width_parses_and_schedules(tmp_path):
     cams = load_cameras(write(tmp_path, """
 cameras:

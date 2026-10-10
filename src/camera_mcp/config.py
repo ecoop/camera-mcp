@@ -149,6 +149,7 @@ class Camera:
     active: str = ""  # local-time "HH:MM-HH:MM" window this camera is watched; blank: always
     motion_mask: tuple[Rect, ...] = ()  # tier-1 ignore rects: motion here never wakes analysis
     motion_roi: Rect | None = None  # if set, only motion inside this rectangle counts
+    roi: Rect | None = None  # tier-2 analysis crop: inference runs on this region of the frame only
     schedule: tuple[tuple[int, int, dict], ...] = ()  # time-of-day monitor overrides (from `when:`)
 
     @property
@@ -430,6 +431,7 @@ def load_cameras(path: str | Path, *, require_login: bool = True) -> dict[str, C
             active=_active(raw, where),
             motion_mask=parse_rects(raw.get("motion_mask"), where, "motion_mask"),
             motion_roi=parse_rect(raw["motion_roi"], where, "motion_roi") if raw.get("motion_roi") else None,
+            roi=parse_rect(raw["roi"], where, "roi") if raw.get("roi") else None,
             schedule=_schedule(raw, where),
             monitor=_settings(site, raw, where, strict=False),
         )

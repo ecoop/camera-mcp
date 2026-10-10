@@ -15,6 +15,10 @@ cameras:
   - name: west_fence
     label: Back fence, west
     host: 192.0.2.11
+    # Analysis crop (tier 2): run inference only on this region [x, y, w, h] of the frame —
+    # cheaper, and nothing outside is detected. Static; changing it re-learns this camera's
+    # scenery. (Independent of motion_mask, which gates tier 1.)
+    roi: [0.0, 0.2, 1.0, 0.6]
   - name: backyard
     label: Backyard
     host: 192.0.2.12

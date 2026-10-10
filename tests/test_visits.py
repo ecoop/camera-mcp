@@ -267,6 +267,25 @@ def test_a_static_unidentified_box_is_learned_as_scenery_and_dropped(tmp_path):
     assert Scenery(tmp_path / "cam.json").reset() == 1 and not (tmp_path / "cam.json").exists()
 
 
+def test_scenery_roi_signature_and_legacy_format(tmp_path):
+    import json
+
+    from camera_mcp.scenery import Scenery
+
+    path = tmp_path / "cam.json"
+    s = Scenery(path, roi=(0.1, 0.1, 0.8, 0.8))
+    for t in (0, 150, 300, 450, 660):  # learn a spot under this analysis crop
+        s.filter(t, [_unnamed()])
+    assert any(sp.learned for sp in s.spots) and path.exists()
+    assert Scenery(path, roi=(0.1, 0.1, 0.8, 0.8)).spots  # same roi: spots persist across a restart
+    assert Scenery(path, roi=(0.0, 0.0, 0.5, 0.5)).spots == []  # changed roi: a different region, forget them
+    # A legacy bare-list file loads as whole-frame (roi None), but not once a crop is configured.
+    legacy = tmp_path / "legacy.json"
+    legacy.write_text(json.dumps(json.loads(path.read_text())["spots"]))
+    assert Scenery(legacy).spots
+    assert Scenery(legacy, roi=(0.1, 0.1, 0.8, 0.8)).spots == []
+
+
 def test_moving_or_brief_unidentified_boxes_are_not_scenery(tmp_path):
     from camera_mcp.scenery import Scenery
 
