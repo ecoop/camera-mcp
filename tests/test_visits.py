@@ -340,3 +340,36 @@ def test_a_visit_open_at_shutdown_is_saved_with_a_capped_clip(tmp_path, busy):
     dur = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "json", str(data / visit["clip"])],
                          capture_output=True, text=True).stdout
     assert float(_json.loads(dur)["format"]["duration"]) <= 4 + 2 * s.segment_seconds  # capped (segments are 2 s)
+
+
+def test_a_species_label_on_learned_scenery_is_dropped_only_with_matching_appearance(tmp_path):
+    """The crux fix: the feeder cap gets labelled 'opossum' sometimes. Drop it when it looks like
+    the learned spot; keep a real animal (different look); keep when there's no frame to judge."""
+    import cv2
+    import numpy as np
+    from camera_mcp.scenery import Scenery
+
+    rng = np.random.default_rng(5)
+    base = np.clip(rng.normal(110, 25, (360, 640, 3)), 0, 255).astype(np.uint8)
+    base[40:70, 230:300] = np.clip(rng.normal(45, 12, (30, 70, 3)), 0, 255)  # a dark, textured cap
+    cap_box = Box(230 / 640, 40 / 360, 70 / 640, 30 / 360, 0.4)
+    cap_animal = Detection(cap_box, Label("animal"), "animal")
+    opossum = Detection(cap_box, Label("virginia opossum", "mammalia;didelphimorphia;didelphidae;didelphis;virginiana", 0.5), "opossum")
+
+    scenery = Scenery(tmp_path / "cam.json")
+    for t in (0, 200, 400, 600, 800):  # learn the cap as scenery (unconfirmed "animal")
+        scenery.filter(t, [cap_animal], base)
+    assert any(s.learned for s in scenery.spots)
+    assert scenery.filter(900, [opossum], base)[0] == []        # same look: the mislabelled cap -> dropped
+    real = base.copy(); real[44:64, 250:272] = 210              # something pale on the cap
+    assert scenery.filter(1000, [opossum], real)[0] == [opossum]  # different look: a real animal -> kept
+    assert scenery.filter(1100, [opossum])[0] == [opossum]        # no frame: can't confirm -> kept (never miss)
+
+
+def test_scenery_prunes_one_off_detections(tmp_path):
+    from camera_mcp.scenery import Scenery, SINGLE_HIT_TTL
+    scenery = Scenery(tmp_path / "cam.json")
+    scenery.filter(0, [_unnamed(x=0.1)])  # a single stray detection
+    assert len(scenery.spots) == 1
+    scenery.filter(SINGLE_HIT_TTL + 10, [_unnamed(x=0.9)])  # much later, elsewhere: the stray is pruned
+    assert all(abs(s.x - 0.1) > 0.05 for s in scenery.spots) and len(scenery.spots) == 1

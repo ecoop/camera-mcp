@@ -8,11 +8,13 @@ Camera-trap tools call the fix repeat-detection elimination: a box that keeps tu
 the same place at the same size, over a long enough stretch, is scenery, and is ignored from
 then on. Real people and animals move, so their boxes don't line up that closely.
 
-Only boxes the classifier didn't confirm (unidentified "animal", and the detector's "person"
-and "vehicle") are ever learned or dropped. A named animal holding still (a cat stalking the
-feeder) is never treated as scenery. And a learned spot keeps a small picture of itself: a box
-there is dropped only while the spot still looks the same, so a bird sitting on a learned
-feeder roof changes the picture and is kept.
+Only unconfirmed detections ("animal"/"person"/"vehicle") ever *train* a spot, so a real animal
+(which gets a species label) never becomes scenery. But once a spot is learned, ANY detection on
+it is judged by appearance, not its label: SpeciesNet sometimes labels the same fixed object a
+species (an empty feeder cap read as "opossum"), and that must be dropped too. A learned spot
+keeps a small picture of itself; a detection on it is dropped only when it matches that picture.
+A species-labelled box is dropped only on a positive match (so a real animal on the spot, which
+looks different, is kept — never missed for lack of evidence).
 """
 
 from __future__ import annotations
@@ -32,6 +34,7 @@ MATCH_IOU = 0.6  # the same spot: boxes overlap this much (small boxes jitter by
 MIN_HITS = 5  # seen at least this many times...
 MIN_SPAN = 600.0  # ...over at least this many seconds (separate motion events, not one animal pausing)
 FORGET_AFTER = 86400.0  # a spot not seen for a day is forgotten (the object was moved)
+SINGLE_HIT_TTL = 1800.0  # a one-off detection that never recurs is dropped after this (prunes noise)
 PATCH = 24  # the spot's picture: this many pixels square, grayscale
 SAME_LOOK = 0.6  # correlation with that picture above which the spot "looks the same" (light-adjusted)
 
@@ -52,11 +55,13 @@ def patch(frame: np.ndarray | None, box: Box) -> list[float] | None:
     return ((small - small.mean()) / (std if std > 1e-3 else 1.0)).ravel().round(3).tolist()
 
 
-def looks_same(a: list[float] | None, b: list[float] | None) -> bool:
-    """Correlation of two normalised patches; unknown (no picture) counts as the same."""
-    if a is None or b is None:
-        return True
-    return float(np.dot(a, b)) / len(a) >= SAME_LOOK
+def matches_reference(now: list[float] | None, reference: list[float] | None) -> bool:
+    """True only when both patches exist and correlate: positive evidence the spot looks like its
+    learned reference. Unknown (no picture on either side) is NOT a match — so nothing is dropped
+    without evidence."""
+    if now is None or reference is None:
+        return False
+    return float(np.dot(now, reference)) / len(now) >= SAME_LOOK
 
 
 @dataclass
@@ -90,40 +95,58 @@ class Scenery:
 
     def filter(self, t: float, detections: list[Detection],
                frame: np.ndarray | None = None) -> tuple[list[Detection], list[Spot]]:
-        """Drop unconfirmed boxes on learned scenery. Returns the rest, and any spots that
-        became scenery with this frame (to log)."""
+        """Drop detections that are part of the learned scenery. Returns the rest, and any spots
+        that became scenery with this frame (to log)."""
         kept: list[Detection] = []
         newly: list[Spot] = []
         changed = False
         for d in detections:
-            if d.key not in LEARNABLE:
-                kept.append(d)
+            learned = [s for s in self.spots if s.learned and iou(s.box, d.box) >= MATCH_IOU]
+            if learned:
+                spot = max(learned, key=lambda s: iou(s.box, d.box))
+                same = matches_reference(patch(frame, spot.box), spot.look)
+                if d.key in LEARNABLE:
+                    drop = same or patch(frame, spot.box) is None  # unconfirmed: scenery unless it looks different
+                else:
+                    drop = same  # species-labelled: drop only on positive evidence it's the fixed object
+                if drop:
+                    spot.hits += 1
+                    spot.last = t
+                    changed = True
+                    continue
+                kept.append(d)  # something really is on the spot
                 continue
-            spot = max((s for s in self.spots if s.kind == d.key), key=lambda s: iou(s.box, d.box), default=None)
+            if d.key not in LEARNABLE:
+                kept.append(d)  # identified species off any learned spot: a real animal
+                continue
+            spot = max((s for s in self.spots if s.kind == d.key and not s.learned),
+                       key=lambda s: iou(s.box, d.box), default=None)
             if spot is None or iou(spot.box, d.box) < MATCH_IOU:
                 self.spots.append(Spot(d.box.x, d.box.y, d.box.w, d.box.h, 1, t, t, d.key, patch(frame, d.box)))
                 kept.append(d)
                 changed = True
                 continue
-            now = patch(frame, spot.box)
-            if spot.learned and not looks_same(now, spot.look):
-                kept.append(d)  # something is on the spot (a bird on the feeder roof): keep it
-                continue
             was = spot.learned
             spot.hits += 1
             spot.last = t
-            if spot.look is None or not spot.learned:
-                spot.look = now or spot.look  # while learning, keep the latest look of the empty spot
+            spot.look = patch(frame, spot.box) or spot.look  # keep the latest look while learning
             changed = True
             if spot.learned and not was:
                 newly.append(spot)
             if not spot.learned:
                 kept.append(d)
-        before = len(self.spots)
-        self.spots = [s for s in self.spots if t - s.last < FORGET_AFTER]
-        if changed or len(self.spots) != before:
+        if self._prune(t):
+            changed = True
+        if changed:
             self._save()
         return kept, newly
+
+    def _prune(self, t: float) -> bool:
+        """Drop spots not seen for a day, and one-off detections that never recurred."""
+        before = len(self.spots)
+        self.spots = [s for s in self.spots
+                      if t - s.last < FORGET_AFTER and not (s.hits <= 1 and t - s.first > SINGLE_HIT_TTL)]
+        return len(self.spots) != before
 
     def _save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
