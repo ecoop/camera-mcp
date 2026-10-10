@@ -31,8 +31,12 @@ _USERINFO = re.compile(r"(?<=://)[^/@\s]*@")
 MAIN_STREAM, SUB_STREAM = "/stream1", "/stream2"
 USER_ENV, PASS_ENV = "CAMERA_USER", "CAMERA_PASS"
 KEYCHAIN_SERVICE = "camera-mcp"
-NO_LOGIN = (f"no camera login: set {USER_ENV} and {PASS_ENV}, or store it in the macOS Keychain with "
-            f"`security add-generic-password -U -s {KEYCHAIN_SERVICE} -a <camera user> -w` (it asks for the password)")
+CREDENTIALS_ENV = "CAMERA_MCP_CREDENTIALS"  # path override for the credentials file
+DEFAULT_CREDENTIALS = "~/.config/camera-mcp/credentials"  # CAMERA_USER=.. / CAMERA_PASS=.. lines, chmod 600
+NO_LOGIN = (f"no camera login: set {USER_ENV} and {PASS_ENV}, store it in the macOS Keychain with "
+            f"`security add-generic-password -U -s {KEYCHAIN_SERVICE} -a <camera user> -w`, or put "
+            f"{USER_ENV}=.. and {PASS_ENV}=.. lines in {DEFAULT_CREDENTIALS} (chmod 600). The Keychain is "
+            "unreadable in an SSH session, so a headless/remote host uses the file.")
 
 
 class ConfigError(ValueError):
@@ -143,11 +147,31 @@ def _keychain_login() -> tuple[str, str] | None:
     return account.group(1), secret.stdout.rstrip("\n")
 
 
+def _file_login() -> tuple[str, str] | None:
+    """The login from a credentials file ($CAMERA_MCP_CREDENTIALS, else ~/.config/camera-mcp/
+    credentials): `CAMERA_USER=..` / `CAMERA_PASS=..` lines. For headless/remote hosts, where the
+    login Keychain is locked in an SSH session. None if the file is absent or incomplete."""
+    path = Path(os.environ.get(CREDENTIALS_ENV) or DEFAULT_CREDENTIALS).expanduser()
+    try:
+        text = path.read_text()
+    except OSError:
+        return None
+    creds: dict[str, str] = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            key, value = line.split("=", 1)
+            creds[key.strip()] = value.strip()
+    user, password = creds.get(USER_ENV), creds.get(PASS_ENV)
+    return (user, password) if user and password else None
+
+
 def camera_login() -> tuple[str, str] | None:
-    """(user, password) for the cameras: the environment first, then the Keychain."""
+    """(user, password) for the cameras: the environment, then the Keychain (desktop session),
+    then a credentials file (headless/SSH, where the Keychain is locked)."""
     if os.environ.get(USER_ENV) and os.environ.get(PASS_ENV):
         return os.environ[USER_ENV], os.environ[PASS_ENV]
-    return _keychain_login()
+    return _keychain_login() or _file_login()
 
 
 def _rtsp_url(host: str, login: tuple[str, str] | None) -> str:

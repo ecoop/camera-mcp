@@ -64,3 +64,16 @@ claude mcp add cameras -- ssh <studio> ~/projects/camera-mcp/.venv/bin/camera-mc
 `cameras.yaml` is git-ignored, so it does not come from the clone — copy or recreate it on the
 Studio. Put the Studio on the same LAN as the cameras, and reserve its address in the router so
 the SSH line does not break if it changes.
+
+History tools work over SSH, but `snapshot` needs the camera login, and the Keychain is locked in
+an SSH session. For remote `snapshot`, put the login in a file the SSH-launched server can read
+(readable only by you):
+
+```bash
+mkdir -p ~/.config/camera-mcp
+umask 077; { echo "CAMERA_USER=<camera user>"; printf "CAMERA_PASS="; read -rs p; echo "$p"; } \
+    > ~/.config/camera-mcp/credentials; unset p
+```
+
+The monitor keeps using the Keychain (it runs in the desktop session); only the SSH server falls
+back to the file.

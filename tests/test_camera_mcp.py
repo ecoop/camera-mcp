@@ -94,7 +94,7 @@ def test_host_without_credentials_is_an_error(tmp_path, monkeypatch):
     _no_env_login(monkeypatch)
     path = tmp_path / "c.yaml"
     path.write_text("cameras:\n  - name: x\n    host: 10.0.0.2\n")
-    with pytest.raises(ConfigError, match="CAMERA_USER and CAMERA_PASS, or store it in the macOS Keychain"):
+    with pytest.raises(ConfigError, match="no camera login"):
         load_cameras(path)
 
 
@@ -281,3 +281,32 @@ def test_find_tool_prefers_override_then_path_then_homebrew(monkeypatch, tmp_pat
     assert find_tool("ffmpeg", "CAMERA_MCP_TESTTOOL") == "/usr/bin/ffmpeg"
     monkeypatch.setattr("shutil.which", lambda n: None)
     assert find_tool("nope-xyz", "CAMERA_MCP_TESTTOOL") == "nope-xyz"  # nothing found: the bare name
+
+
+def test_login_falls_back_to_a_credentials_file(tmp_path, monkeypatch):
+    _no_env_login(monkeypatch)  # no env, and stub the Keychain to miss
+    creds = tmp_path / "credentials"
+    creds.write_text("# camera login\nCAMERA_USER = filecam \nCAMERA_PASS=f1le:p@ss\n")
+    monkeypatch.setenv("CAMERA_MCP_CREDENTIALS", str(creds))
+    assert camera_config.camera_login() == ("filecam", "f1le:p@ss")
+    # env still wins over the file
+    monkeypatch.setenv("CAMERA_USER", "envu"); monkeypatch.setenv("CAMERA_PASS", "envp")
+    assert camera_config.camera_login() == ("envu", "envp")
+
+
+def test_credentials_file_missing_or_incomplete_is_none(tmp_path, monkeypatch):
+    _no_env_login(monkeypatch)
+    monkeypatch.setenv("CAMERA_MCP_CREDENTIALS", str(tmp_path / "nope"))
+    assert camera_config._file_login() is None
+    half = tmp_path / "half"; half.write_text("CAMERA_USER=only\n")
+    monkeypatch.setenv("CAMERA_MCP_CREDENTIALS", str(half))
+    assert camera_config._file_login() is None
+
+
+def test_host_camera_uses_the_credentials_file_when_set(tmp_path, monkeypatch):
+    _no_env_login(monkeypatch)
+    creds = tmp_path / "c"; creds.write_text("CAMERA_USER=filecam\nCAMERA_PASS=secret\n")
+    monkeypatch.setenv("CAMERA_MCP_CREDENTIALS", str(creds))
+    path = tmp_path / "cams.yaml"; path.write_text("cameras:\n  - name: x\n    host: 10.0.0.2\n")
+    cam = load_cameras(path)["x"]
+    assert cam.source == "rtsp://filecam:secret@10.0.0.2/stream1" and not cam.needs_login

@@ -70,7 +70,10 @@ Keychain; `security` asks for the password, so it isn't typed on the command lin
 security add-generic-password -U -s camera-mcp -a <camera user> -w
 ```
 
-`$CAMERA_USER` and `$CAMERA_PASS`, if set, take precedence (for other systems, and the tests).
+`$CAMERA_USER` and `$CAMERA_PASS`, if set, take precedence (for other systems, and the tests). On a
+headless or remote host the login Keychain is locked in an SSH session, so put
+`CAMERA_USER=` and `CAMERA_PASS=` lines in `~/.config/camera-mcp/credentials` (`chmod 600`,
+or `$CAMERA_MCP_CREDENTIALS` to point elsewhere) and that is used instead.
 Anything else goes in `source` instead of `host`: a video file (which is how the tests run, and
 how to try the server away from home) or a full URL for a non-Tapo camera, where `${VAR}` is
 expanded from the environment.
