@@ -81,7 +81,7 @@ def build_brief(history: History, since: str = "14h") -> str:
     else:
         lines.append("Overnight: nothing detected")
 
-    # Gaps worth flagging: a camera down or barely watched, a big unanalysed backlog, or a
+    # Gaps worth flagging: a camera down or barely watched, a big unanalyzed backlog, or a
     # camera that looks moved. (A uniformly < 100% watched just means the monitor started
     # mid-window; that's not an ongoing problem, so it isn't flagged.) Streams only.
     streams = {c.name for c in history.cameras.values() if c.is_stream}
@@ -89,11 +89,11 @@ def build_brief(history: History, since: str = "14h") -> str:
     for c in summary["coverage"]:
         if c["camera"] not in streams:
             continue
-        watched, unseen = c.get("watched"), c.get("unanalysed_motion_seconds") or 0
+        watched, unseen = c.get("watched"), c.get("unanalyzed_motion_seconds") or 0
         if watched is not None and watched < 0.5:
             gaps.append(f"{c['camera']} down/partial ({watched * 100:.0f}%)")
         elif unseen > 600:
-            gaps.append(f"{c['camera']} {unseen // 60}m motion unanalysed")
+            gaps.append(f"{c['camera']} {unseen // 60}m motion unanalyzed")
         if c.get("looks_moved_since"):
             gaps.append(f"{c['camera']} looks moved")
     if gaps:

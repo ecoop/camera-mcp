@@ -157,7 +157,7 @@ class History:
             out.append({
                 "camera": name,
                 "watched": round(min(watched[name] / span, 1.0), 3) if known else None,  # None: unknown
-                "unanalysed_motion_seconds": round(skipped[name]),  # motion the detector was too far behind to see
+                "unanalyzed_motion_seconds": round(skipped[name]),  # motion the detector was too far behind to see
                 "last_frame": self._local(_get(st, "last_frame_at")),
                 "looks_moved_since": self._local(_get(st, "view_moved_since")),
             })

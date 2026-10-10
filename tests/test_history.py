@@ -242,8 +242,8 @@ def iso_ago(seconds: float) -> str:
 def test_coverage_reports_motion_that_was_never_analysed(log):
     history, _ = log
     coverage = {c["camera"]: c for c in history.find_visits("24h")["coverage"]}
-    assert coverage["backyard"]["unanalysed_motion_seconds"] == 60
-    assert coverage["east_deck"]["unanalysed_motion_seconds"] == 0
+    assert coverage["backyard"]["unanalyzed_motion_seconds"] == 60
+    assert coverage["east_deck"]["unanalyzed_motion_seconds"] == 0
     import sqlite3
 
     rows = sqlite3.connect(history.db_path).execute("SELECT COUNT(*) FROM analysis_skipped").fetchone()[0]
