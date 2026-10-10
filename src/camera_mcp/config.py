@@ -61,6 +61,7 @@ class MonitorSettings:
     detect_every_seconds: float = 1.0  # while there's motion or an open visit, analyse a frame this often
     tile_rows: int = 0  # analysis tiling grid rows (0 = the wide_view default: 2 if tagged, else 1)
     tile_cols: int = 0  # analysis tiling grid cols; rows*cols <= 1 means the whole frame, no tiling
+    analysis_width: int = 0  # scale the analysis frame to this width before inference (0 = native)
     max_analysis_lag: float = 120.0  # a segment still waiting this long is skipped, and logged as unanalyzed
     max_clip_seconds: float = 120.0  # clips are cut off this long after the visit starts (a dove can sit for an hour)
     visit_close_seconds: float = 30.0  # a visit ends after this long without its animal being detected
@@ -330,7 +331,7 @@ def _active(raw: dict, where: str) -> str:
     return spec
 
 
-SCHEDULE_KEYS = {"tile_rows", "tile_cols", "detect_every_seconds"}  # monitor settings a `when:` may override
+SCHEDULE_KEYS = {"tile_rows", "tile_cols", "detect_every_seconds", "analysis_width"}  # a `when:` may override these
 
 
 def _schedule(raw: dict, where: str) -> tuple[tuple[int, int, dict], ...]:

@@ -240,6 +240,35 @@ def test_tile_windows_count():
     assert len(tile_windows(1, 1)) == 1 and len(tile_windows(2, 2)) == 4 and len(tile_windows(1, 2)) == 2
 
 
+def test_analysis_width_parses_and_schedules(tmp_path):
+    cams = load_cameras(write(tmp_path, """
+cameras:
+  - name: a
+    source: a.mp4
+    analysis_width: 1280
+    when:
+      - { hours: "22:00-06:00", analysis_width: 960 }
+"""))
+    a = cams["a"]
+    assert a.monitor.analysis_width == 1280
+    assert a.settings_at(_at("12:00")).analysis_width == 1280
+    assert a.settings_at(_at("23:00")).analysis_width == 960
+
+
+def test_scaled_decode_frames_reshape(tmp_path):
+    # _analyze decodes with an explicit even scale=W:H, so every frame is exactly W*H*3 bytes.
+    from camera_mcp.capture import FFMPEG
+    clip = tmp_path / "c.mp4"
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi",
+                    "-i", "testsrc=size=640x360:rate=5:d=2", "-c:v", "libx264", "-pix_fmt", "yuv420p", str(clip)],
+                   check=True)
+    out = subprocess.run([FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin", "-i", str(clip),
+                          "-vf", "fps=1/1,scale=160:90", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+                         capture_output=True, timeout=30).stdout
+    size = 160 * 90 * 3
+    assert len(out) > 0 and len(out) % size == 0
+
+
 def test_segments_are_listed_selected_and_pruned(tmp_path):
     base = 1_800_000_000  # 2027-01-15T08:00:00Z
     for i in range(5):  # five 2-second segments

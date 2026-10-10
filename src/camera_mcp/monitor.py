@@ -591,10 +591,16 @@ class Analyzer:
             log.warning("analysis is %s", "falling behind: one frame per segment until it catches up"
                         if behind else "caught up")
         every = max(seg.end - seg.start, s.segment_seconds) if behind else s.detect_every_seconds
-        width, height = worker.frame_size(seg)
+        native_w, native_h = worker.frame_size(seg)
+        width, height = native_w, native_h
+        vf = f"fps=1/{every}"
+        if s.analysis_width and s.analysis_width < native_w:  # scale down for cheaper decode / lighter crops
+            width = s.analysis_width - (s.analysis_width % 2)
+            height = max(2, round(native_h * width / native_w / 2) * 2)
+            vf += f",scale={width}:{height}"
         proc = subprocess.run(
             [FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin", "-i", str(seg.path),
-             "-vf", f"fps=1/{every}", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+             "-vf", vf, "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
             capture_output=True, timeout=60,
         )
         size = width * height * 3

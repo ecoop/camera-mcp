@@ -21,10 +21,11 @@ cameras:
     tags: [wide_view]       # long-range view: tile the frame so far animals aren't lost
     tile_rows: 2            # analysis tiling grid (0 = the wide_view default of 2x2)
     tile_cols: 2            # rows*cols <= 1 means whole frame only (no tiling)
+    analysis_width: 1920    # scale the analysis frame to this width (0 = native); sharper far-animal crops
     # Vary settings by local time of day (wraps midnight). Each entry may override
     # tile_rows, tile_cols, and detect_every_seconds. Quiet nights cost less:
     when:
-      - { hours: "22:00-06:00", tile_rows: 1, tile_cols: 1, detect_every_seconds: 2 }
+      - { hours: "22:00-06:00", tile_rows: 1, tile_cols: 1, detect_every_seconds: 2, analysis_width: 1280 }
   - name: east_deck
     label: Deck, east
     host: 192.0.2.13
