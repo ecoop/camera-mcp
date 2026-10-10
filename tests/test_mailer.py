@@ -90,3 +90,13 @@ def test_send_email_wraps_failures(creds_file, monkeypatch):
     monkeypatch.setattr(mailer.smtplib, "SMTP", boom)
     with pytest.raises(mailer.MailError, match="connection refused"):
         mailer.send_email("s", "b", mailer.email_settings())
+
+
+def test_tls_context_uses_a_ca_bundle_and_honours_insecure():
+    import ssl
+    from camera_mcp.mailer import _tls_context
+    secure = _tls_context({})
+    assert secure.verify_mode == ssl.CERT_VERIFY if hasattr(ssl, "CERT_VERIFY") else secure.verify_mode == ssl.CERT_REQUIRED
+    assert secure.check_hostname is True
+    insecure = _tls_context({"SMTP_INSECURE": "1"})
+    assert insecure.verify_mode == ssl.CERT_NONE and insecure.check_hostname is False

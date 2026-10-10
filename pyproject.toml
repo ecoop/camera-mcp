@@ -9,6 +9,7 @@ dependencies = [
     "mcp>=2.3",
     "opencv-python-headless>=4.9",  # image ops only; video comes from the ffmpeg binary
     "pyyaml>=6",
+    "certifi",  # a current CA bundle for verifying mail-server TLS (Python default can miss valid chains)
 ]
 
 [project.optional-dependencies]

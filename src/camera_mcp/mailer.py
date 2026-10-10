@@ -25,7 +25,8 @@ from pathlib import Path
 
 from camera_mcp.config import read_credentials_file
 
-SETTINGS = ("SMTP_HOST", "SMTP_PORT", "SMTP_FROM", "SMTP_TO", "SMTP_USER", "SMTP_PASS")
+SETTINGS = ("SMTP_HOST", "SMTP_PORT", "SMTP_FROM", "SMTP_TO", "SMTP_USER", "SMTP_PASS",
+            "SMTP_CA_FILE", "SMTP_INSECURE")
 
 
 class MailError(RuntimeError):
@@ -40,6 +41,26 @@ def email_settings() -> dict[str, str] | None:
     if not all(settings.get(k) for k in ("SMTP_HOST", "SMTP_FROM", "SMTP_TO")):
         return None
     return settings
+
+
+def _tls_context(settings: dict[str, str]) -> ssl.SSLContext:
+    """A TLS context that actually verifies the mail server. Python's default context can miss a
+    valid chain (its CA paths differ from the system's); certifi's current bundle verifies them.
+    SMTP_CA_FILE overrides the bundle; SMTP_INSECURE=1 disables verification (for a mail server
+    with a private/self-signed cert you trust)."""
+    if str(settings.get("SMTP_INSECURE", "")).lower() in ("1", "true", "yes"):
+        context = ssl.create_default_context()
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+        return context
+    ca_file = settings.get("SMTP_CA_FILE")
+    if not ca_file:
+        try:
+            import certifi
+            ca_file = certifi.where()
+        except ImportError:
+            ca_file = None
+    return ssl.create_default_context(cafile=ca_file)
 
 
 def _message(subject: str, body: str, settings: dict[str, str], image: Path | None) -> EmailMessage:
@@ -63,7 +84,7 @@ def send_email(subject: str, body: str, settings: dict[str, str], image: Path | 
     port = int(settings.get("SMTP_PORT") or 587)
     recipients = [a.strip() for a in settings["SMTP_TO"].split(",") if a.strip()]
     msg = _message(subject, body, settings, image)
-    context = ssl.create_default_context()
+    context = _tls_context(settings)
     try:
         if port == 465:
             server = smtplib.SMTP_SSL(host, port, context=context, timeout=30)
