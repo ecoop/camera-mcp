@@ -98,6 +98,10 @@ It exits non-zero if any stream fails.
 
 ## The monitor
 
+To run the monitor as an always-on service (its real home is the Mac Studio, where the GPU keeps
+SpeciesNet fast enough), see [deploy/README.md](deploy/README.md).
+
+
 ```bash
 uv pip install --python .venv/bin/python -e '.[detect]'   # SpeciesNet, for animal identification
 .venv/bin/camera-monitor                                    # all enabled cameras, until Ctrl-C

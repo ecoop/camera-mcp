@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- A launchd LaunchAgent: runs the camera monitor in the login session, where the login
+     Keychain (which holds the camera password) is unlocked. install-service.sh fills the
+     LABEL, REPO and DATA fields in from the repo it is run from. -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>@@LABEL@@</string>
+    <key>ProgramArguments</key>
+    <array>
+        <!-- caffeinate -s keeps the Mac awake while the monitor runs (a desktop on AC power). -->
+        <string>/usr/bin/caffeinate</string>
+        <string>-s</string>
+        <string>@@REPO@@/.venv/bin/camera-monitor</string>
+        <string>--config</string>
+        <string>@@REPO@@/cameras.yaml</string>
+        <string>--data-dir</string>
+        <string>@@DATA@@</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>@@REPO@@</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <!-- Restart only on a crash (non-zero exit); a clean stop (launchctl / SIGTERM) stays stopped. -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+    <key>ProcessType</key>
+    <string>Background</string>
+    <key>StandardOutPath</key>
+    <string>@@DATA@@/monitor.log</string>
+    <key>StandardErrorPath</key>
+    <string>@@DATA@@/monitor.log</string>
+</dict>
+</plist>
