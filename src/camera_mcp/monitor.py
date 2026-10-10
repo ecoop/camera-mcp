@@ -36,7 +36,7 @@ import sys
 import threading
 import time
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timezone, tzinfo
 from pathlib import Path
 
 import cv2
@@ -77,6 +77,7 @@ def watermark(frame: np.ndarray, text: str) -> np.ndarray:
 
 BACKOFF = (2, 5, 10, 30, 60)  # seconds between reconnect attempts
 STATUS_EVERY = 5.0  # seconds between status writes while watching
+PAUSE_RECHECK = 30.0  # seconds between clock checks while a camera is outside its active window
 SHUTDOWN_SECONDS = 120.0  # at most this long, after stopping, to save open visits and their media
 
 
@@ -159,8 +160,10 @@ def _tail(proc: subprocess.Popen) -> collections.deque[str]:
 
 
 class CameraWorker:
-    def __init__(self, camera: Camera, data_dir: Path, store: Store, stop: threading.Event):
+    def __init__(self, camera: Camera, data_dir: Path, store: Store, stop: threading.Event,
+                 tz: tzinfo | None = None):
         self.camera = camera
+        self.tz = tz or datetime.now().astimezone().tzinfo  # local time for the active window
         self.s = camera.monitor
         self.data_dir = data_dir
         self.seg_dir = data_dir / "buffer" / camera.name
@@ -211,6 +214,22 @@ class CameraWorker:
         return (self.recorder_done.is_set() and self.watcher_done.is_set() and not self.pending
                 and not self.pending_visits and (self.analyzer is None or self.analysis_finished.is_set()))
 
+    def _active_now(self) -> bool:
+        """Is the camera inside its watch window right now? (Always, with no window.)"""
+        return self.camera.is_active(datetime.now(self.tz))
+
+    def _await_active(self) -> bool:
+        """Block while the camera is outside its active window. False means stop was set."""
+        if self._active_now():
+            return True
+        self.store.set_status(self.camera.name, "paused", now=time.time())
+        log.info("%s: outside its active window (%s); paused until it reopens",
+                 self.camera.name, self.camera.active)
+        while not self.stop.wait(PAUSE_RECHECK):
+            if self._active_now():
+                return True
+        return False
+
     def _reap(self) -> None:
         """On stop, end this camera's ffmpeg processes so blocked reads return."""
         self.stop.wait()
@@ -239,6 +258,8 @@ class CameraWorker:
         attempt = 0
         try:
             while not self.stop.is_set():
+                if not self._await_active():
+                    break
                 args = ringbuffer.recorder_args(self.camera, self.seg_dir, self.s.segment_seconds)
                 proc = self._run(args, stdout=subprocess.DEVNULL, env=ringbuffer.recorder_env())
                 self.pid_file.write_text(str(proc.pid))
@@ -249,6 +270,8 @@ class CameraWorker:
                 self.pid_file.unlink(missing_ok=True)
                 if time.monotonic() - started > 60:
                     attempt = 0  # it ran for a while: start the backoff over
+                if not self._active_now():
+                    continue  # window closed: re-gate and pause, not a stream error
                 if not self._retry(attempt, errors[-1] if errors else f"recorder exited ({code})"):
                     break
                 attempt += 1
@@ -262,6 +285,8 @@ class CameraWorker:
         attempt = 0
         try:
             while not self.stop.is_set():
+                if not self._await_active():
+                    break
                 try:
                     info = probe_stream(source)
                 except ProbeError as e:
@@ -280,6 +305,8 @@ class CameraWorker:
                 self.procs.discard(proc)
                 if frames:
                     attempt = 0
+                if not self._active_now():
+                    continue  # window closed: re-gate and pause, not a stream error
                 if not self._retry(attempt, errors[-1] if errors else "motion stream ended"):
                     break
                 attempt += 1
@@ -350,6 +377,9 @@ class CameraWorker:
 
     def _housekeep(self) -> None:
         while True:
+            if self.camera.active and not self._active_now():
+                for proc in list(self.procs):  # window closed mid-stream: end it so we pause
+                    stop_process(proc)
             finished = self.recorder_done.is_set() and self.watcher_done.is_set()
             for step in (lambda: self.analyzer and self._schedule(finished),
                          lambda: self._finish_pending(final=finished),
@@ -595,11 +625,12 @@ class Analyzer:
 
 
 class Monitor:
-    def __init__(self, cameras: list[Camera], data_dir: Path, detector: Detector | None = None):
+    def __init__(self, cameras: list[Camera], data_dir: Path, detector: Detector | None = None,
+                 tz: tzinfo | None = None):
         self.data_dir = data_dir
         self.store = Store(data_dir / "monitor.db")
         self.stop = threading.Event()
-        self.workers = [CameraWorker(c, data_dir, self.store, self.stop) for c in cameras]
+        self.workers = [CameraWorker(c, data_dir, self.store, self.stop, tz) for c in cameras]
         self.analyzer = Analyzer(detector, self.stop) if detector else None
         for w in self.workers:
             w.analyzer = self.analyzer
@@ -680,7 +711,7 @@ def main(argv: list[str] | None = None) -> None:
             raise SystemExit(2)
         else:
             log.info("SpeciesNet isn't installed: watching for motion only")
-    monitor = Monitor(chosen, args.data_dir, detector)
+    monitor = Monitor(chosen, args.data_dir, detector, tz=load_site(args.config).tz())
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: monitor.stop.set())
     log.info("watching %s; data in %s", ", ".join(c.name for c in chosen), args.data_dir)

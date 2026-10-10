@@ -18,6 +18,12 @@ cameras:
   - name: backyard
     label: Backyard
     host: 192.0.2.12
+  - name: east_deck
+    label: Deck, east
+    host: 192.0.2.13
+    # Watch only during these local hours (wraps midnight, so this is night-only). Blank /
+    # omitted means always. Pausing low-value cameras by day frees the detector for the rest.
+    active: "19:00-07:00"
   # Anything else goes in `source`: a video file (handy for testing away from home), or a
   # full URL for a non-Tapo camera, where ${VAR} is expanded from the environment.
   # - name: test_clip

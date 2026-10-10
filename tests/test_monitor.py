@@ -16,7 +16,8 @@ import cv2
 import numpy as np
 import pytest
 
-from camera_mcp.config import Camera, ConfigError, MonitorSettings, find_camera, load_cameras
+from camera_mcp.config import (Camera, ConfigError, MonitorSettings, find_camera, load_cameras,
+                               parse_active_window)
 from camera_mcp.monitor import Monitor, stop_stale_recorder
 from camera_mcp.motion import MotionDetector, MotionWindows
 from camera_mcp.probe import probe_stream
@@ -104,6 +105,56 @@ def test_motion_windows_open_and_close_after_quiet():
 
 
 # ---- ring buffer ----------------------------------------------------------------------
+
+def _at(hhmm):
+    from datetime import datetime
+    h, m = map(int, hhmm.split(":"))
+    return datetime(2026, 10, 10, h, m)
+
+
+@pytest.mark.parametrize("spec, expected", [
+    ("", None),
+    ("07:00-19:00", (420, 1140)),
+    (" 19:00 - 07:00 ", (1140, 420)),
+])
+def test_parse_active_window(spec, expected):
+    assert parse_active_window(spec) == expected
+
+
+@pytest.mark.parametrize("spec", ["19:00", "9-5", "24:00-07:00", "07:60-08:00", "08:00-08:00"])
+def test_bad_active_window_is_rejected(spec):
+    with pytest.raises(ConfigError):
+        parse_active_window(spec)
+
+
+def test_is_active_daytime_window():
+    cam = Camera("deck", "d.mp4", active="07:00-19:00")  # watched by day only
+    assert cam.is_active(_at("07:00")) and cam.is_active(_at("12:00"))
+    assert not cam.is_active(_at("06:59")) and not cam.is_active(_at("19:00"))
+
+
+def test_is_active_overnight_window_wraps_midnight():
+    cam = Camera("deck", "d.mp4", active="19:00-07:00")  # the deck cameras: night only
+    assert cam.is_active(_at("23:00")) and cam.is_active(_at("02:00")) and cam.is_active(_at("06:59"))
+    assert not cam.is_active(_at("07:00")) and not cam.is_active(_at("12:00"))
+
+
+def test_no_window_is_always_active():
+    assert Camera("a", "a.mp4").is_active(_at("03:00")) is True
+
+
+def test_active_window_loaded_and_validated(tmp_path):
+    cams = load_cameras(write(tmp_path, """
+cameras:
+  - {name: backyard, source: b.mp4}
+  - {name: east_deck, source: d.mp4, active: "19:00-07:00"}
+"""))
+    assert cams["backyard"].active == "" and cams["backyard"].is_active(_at("12:00"))
+    assert cams["east_deck"].active == "19:00-07:00"
+    assert not cams["east_deck"].is_active(_at("12:00"))
+    with pytest.raises(ConfigError, match="active window"):
+        load_cameras(write(tmp_path, 'cameras: [{name: a, source: a.mp4, active: "9-5"}]'))
+
 
 def test_segments_are_listed_selected_and_pruned(tmp_path):
     base = 1_800_000_000  # 2027-01-15T08:00:00Z

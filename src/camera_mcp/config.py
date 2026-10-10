@@ -82,6 +82,33 @@ class Site:
         return ZoneInfo(self.timezone) if self.timezone else datetime.now().astimezone().tzinfo
 
 
+def parse_active_window(spec: str) -> tuple[int, int] | None:
+    """Parse a local-time "HH:MM-HH:MM" watch window into (start_minute, end_minute).
+
+    Blank means always watched (None). A window whose start is after its end wraps past
+    midnight, so "19:00-07:00" is the overnight hours. Raises ConfigError on a bad spec.
+    """
+    spec = spec.strip()
+    if not spec:
+        return None
+
+    def _minute(t: str) -> int:
+        h, m = t.strip().split(":")
+        h, m = int(h), int(m)
+        if not (0 <= h < 24 and 0 <= m < 60):
+            raise ValueError
+        return h * 60 + m
+
+    try:
+        start_s, end_s = spec.split("-")
+        start, end = _minute(start_s), _minute(end_s)
+    except ValueError:
+        raise ConfigError(f"active window must be HH:MM-HH:MM, got {spec!r}") from None
+    if start == end:
+        raise ConfigError(f"active window is empty (start equals end): {spec!r}")
+    return (start, end)
+
+
 @dataclass(frozen=True)
 class Camera:
     name: str
@@ -93,10 +120,20 @@ class Camera:
     watermark: str = ""  # tiny label stamped on this camera's thumbnails; defaults to the name
     monitor: MonitorSettings = field(default_factory=MonitorSettings)
     needs_login: bool = False  # a host camera loaded without a login: it can't be opened
+    active: str = ""  # local-time "HH:MM-HH:MM" window this camera is watched; blank: always
 
     @property
     def is_stream(self) -> bool:
         return "://" in self.source
+
+    def is_active(self, now: datetime) -> bool:
+        """Whether this camera should be watched at local time `now` (always, with no window)."""
+        window = parse_active_window(self.active)
+        if window is None:
+            return True
+        start, end = window
+        minute = now.hour * 60 + now.minute
+        return start <= minute < end if start < end else (minute >= start or minute < end)
 
     @property
     def short(self) -> str:
@@ -244,6 +281,16 @@ def _strings(value, where: str, key: str) -> tuple[str, ...]:
     return tuple(items)
 
 
+def _active(raw: dict, where: str) -> str:
+    """The camera's `active:` window spec, validated now so a bad one fails at load."""
+    spec = str(raw.get("active", ""))
+    try:
+        parse_active_window(spec)
+    except ConfigError as e:
+        raise ConfigError(f"{where}: {e}") from None
+    return spec
+
+
 def load_site(path: str | Path) -> Site:
     """The `site:` section of the camera config (defaults if there is none)."""
     data = yaml.safe_load(Path(path).expanduser().read_text()) or {}
@@ -311,6 +358,7 @@ def load_cameras(path: str | Path, *, require_login: bool = True) -> dict[str, C
             tags=_strings(raw.get("tags"), where, "tags"),
             aliases=aliases,
             watermark=str(raw.get("watermark", "")),
+            active=_active(raw, where),
             monitor=_settings(site, raw, where, strict=False),
         )
     if not cameras:
