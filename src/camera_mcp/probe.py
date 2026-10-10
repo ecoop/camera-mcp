@@ -14,7 +14,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
 import subprocess
 import sys
 import time
@@ -23,7 +22,9 @@ from fractions import Fraction
 
 from camera_mcp.config import Camera, ConfigError, default_config_path, load_cameras, redact
 
-FFPROBE = os.environ.get("CAMERA_MCP_FFPROBE") or shutil.which("ffprobe") or "ffprobe"
+from camera_mcp.capture import find_tool
+
+FFPROBE = find_tool("ffprobe", "CAMERA_MCP_FFPROBE")
 
 
 class ProbeError(RuntimeError):

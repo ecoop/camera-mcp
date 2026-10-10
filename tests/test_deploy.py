@@ -30,6 +30,7 @@ def test_template_renders_with_no_placeholders_left(tmp_path):
     assert args[0] == "/usr/bin/caffeinate" and args[2].endswith("/.venv/bin/camera-monitor")
     assert "/srv/cam/data" in args and plist["StandardOutPath"] == "/srv/cam/data/monitor.log"
     assert plist["RunAtLoad"] is True and plist["KeepAlive"] == {"SuccessfulExit": False}
+    assert "bin" in plist["EnvironmentVariables"]["PATH"]  # Homebrew/ffmpeg reachable under launchd
 
 
 @pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")

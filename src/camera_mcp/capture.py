@@ -25,7 +25,23 @@ import numpy as np
 
 from camera_mcp.config import NO_LOGIN, Camera, redact
 
-FFMPEG = os.environ.get("CAMERA_MCP_FFMPEG") or shutil.which("ffmpeg") or "ffmpeg"
+def find_tool(name: str, override_env: str) -> str:
+    """Locate an ffmpeg-family binary: an explicit override, then PATH, then the usual Homebrew
+    locations (launchd and cron run with a bare PATH that omits /opt/homebrew/bin)."""
+    import os.path
+    explicit = os.environ.get(override_env)
+    if explicit:
+        return explicit
+    found = shutil.which(name)
+    if found:
+        return found
+    for d in ("/opt/homebrew/bin", "/usr/local/bin"):
+        if os.path.exists(f"{d}/{name}"):
+            return f"{d}/{name}"
+    return name
+
+
+FFMPEG = find_tool("ffmpeg", "CAMERA_MCP_FFMPEG")
 
 
 class CaptureError(RuntimeError):

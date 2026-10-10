@@ -14,9 +14,12 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DATA="${CAMERA_MCP_DATA:-$REPO/data}"
 PLIST="${CAMERA_MCP_PLIST_DIR:-$HOME/Library/LaunchAgents}/$LABEL.plist"
 TEMPLATE="$REPO/deploy/camera-monitor.plist.template"
+BREW_BIN="$( { command -v brew >/dev/null && dirname "$(command -v brew)"; } || echo /opt/homebrew/bin )"
+SVC_PATH="${CAMERA_MCP_PATH:-$BREW_BIN:$HOME/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin}"
 
 render() {  # template -> stdout, placeholders filled in
-    sed -e "s|@@LABEL@@|$LABEL|g" -e "s|@@REPO@@|$REPO|g" -e "s|@@DATA@@|$DATA|g" "$TEMPLATE"
+    sed -e "s|@@LABEL@@|$LABEL|g" -e "s|@@REPO@@|$REPO|g" -e "s|@@DATA@@|$DATA|g" \
+        -e "s|@@PATH@@|$SVC_PATH|g" "$TEMPLATE"
 }
 
 case "${1:-install}" in

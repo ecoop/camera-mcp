@@ -22,7 +22,9 @@ if [ "${#missing[@]}" -gt 0 ]; then
 fi
 
 note "virtualenv with SpeciesNet (camera-mcp[detect])"
-uv venv .venv
+# SpeciesNet needs Python < 3.14; pin it, or uv picks a newer one and silently drops SpeciesNet
+# (its dependency is gated on python_version < '3.14').
+uv venv -p "${CAMERA_MCP_PYTHON:-3.13}" .venv
 uv pip install --python .venv/bin/python -e '.[detect]'
 .venv/bin/python -c "from camera_mcp.detect import available; import sys; sys.exit(0 if available() else 1)" \
     && echo "  SpeciesNet: installed" || { echo "  SpeciesNet failed to import"; exit 1; }

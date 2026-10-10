@@ -16,7 +16,7 @@ git clone https://github.com/ecoop/camera-mcp ~/projects/camera-mcp
 cd ~/projects/camera-mcp
 cp cameras.example.yaml cameras.yaml                     # then edit: your camera IPs and site
 security add-generic-password -U -s camera-mcp -a <camera user> -w   # prompts for the password
-deploy/setup.sh                                          # venv + SpeciesNet, then probe + benchmark
+deploy/setup.sh                                          # venv (Python 3.13) + SpeciesNet, probe, benchmark
 ```
 
 `setup.sh` is safe to re-run. It checks the tools, builds `.venv` with `camera-mcp[detect]`,

@@ -270,3 +270,14 @@ def test_snapshot_falls_back_to_the_low_res_stream(monkeypatch):
     assert [c.rsplit("/", 1)[1] for c in calls] == ["stream1", "stream2"]
     with pytest.raises(capture.CaptureError):  # not a Tapo RTSP camera: no low-res stream to fall back to
         capture.grab_any(Camera("other", "rtsps://u:p@10.0.0.2/stream1"))
+
+
+def test_find_tool_prefers_override_then_path_then_homebrew(monkeypatch, tmp_path):
+    from camera_mcp.capture import find_tool
+    monkeypatch.setenv("CAMERA_MCP_TESTTOOL", "/custom/ffmpeg")
+    assert find_tool("ffmpeg", "CAMERA_MCP_TESTTOOL") == "/custom/ffmpeg"
+    monkeypatch.delenv("CAMERA_MCP_TESTTOOL", raising=False)
+    monkeypatch.setattr("shutil.which", lambda n: "/usr/bin/ffmpeg")
+    assert find_tool("ffmpeg", "CAMERA_MCP_TESTTOOL") == "/usr/bin/ffmpeg"
+    monkeypatch.setattr("shutil.which", lambda n: None)
+    assert find_tool("nope-xyz", "CAMERA_MCP_TESTTOOL") == "nope-xyz"  # nothing found: the bare name

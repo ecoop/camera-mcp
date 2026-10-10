@@ -32,6 +32,15 @@
     <integer>30</integer>
     <key>ProcessType</key>
     <string>Background</string>
+    <!-- launchd runs with a bare PATH; add Homebrew and ~/.local/bin so ffmpeg/ffprobe/uv are found. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>@@PATH@@</string>
+        <!-- Unbuffered, so log lines reach monitor.log promptly (launchd block-buffers a file). -->
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+    </dict>
     <key>StandardOutPath</key>
     <string>@@DATA@@/monitor.log</string>
     <key>StandardErrorPath</key>
