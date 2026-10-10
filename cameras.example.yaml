@@ -18,6 +18,13 @@ cameras:
   - name: backyard
     label: Backyard
     host: 192.0.2.12
+    tags: [wide_view]       # long-range view: tile the frame so far animals aren't lost
+    tile_rows: 2            # analysis tiling grid (0 = the wide_view default of 2x2)
+    tile_cols: 2            # rows*cols <= 1 means whole frame only (no tiling)
+    # Vary settings by local time of day (wraps midnight). Each entry may override
+    # tile_rows, tile_cols, and detect_every_seconds. Quiet nights cost less:
+    when:
+      - { hours: "22:00-06:00", tile_rows: 1, tile_cols: 1, detect_every_seconds: 2 }
   - name: east_deck
     label: Deck, east
     host: 192.0.2.13

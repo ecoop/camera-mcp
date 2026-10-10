@@ -582,7 +582,9 @@ class Analyzer:
             self._last_report = now
 
     def _analyze(self, worker: CameraWorker, seg: ringbuffer.Segment) -> None:
-        s = worker.s
+        s = worker.camera.settings_at(datetime.now(worker.tz))  # base settings + any time-of-day overrides
+        wide = "wide_view" in worker.camera.tags
+        tiles = (s.tile_rows or (2 if wide else 1), s.tile_cols or (2 if wide else 1))
         behind = self.queue.qsize() > self.BACKLOG
         if behind != self._behind:
             self._behind = behind
@@ -601,7 +603,7 @@ class Analyzer:
                 return
             frame = np.frombuffer(proc.stdout[i * size:(i + 1) * size], np.uint8).reshape(height, width, 3)
             t = seg.start + i * every
-            detections = self.detector.analyze(frame, tiles="wide_view" in worker.camera.tags,
+            detections = self.detector.analyze(frame, tiles=tiles,
                                                min_conf=s.min_box_conf, max_boxes=s.max_boxes,
                                                vehicles=s.detect_vehicles)
             detections, learned = worker.scenery.filter(t, detections, frame)

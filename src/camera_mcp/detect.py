@@ -35,9 +35,10 @@ log = logging.getLogger("camera_mcp.detect")
 class Detector(Protocol):
     model: str  # recorded with every visit, so labels can be recomputed after a model change
 
-    def analyze(self, frame: np.ndarray, *, tiles: bool = False, min_conf: float = 0.2,
+    def analyze(self, frame: np.ndarray, *, tiles: bool | tuple[int, int] = False, min_conf: float = 0.2,
                 max_boxes: int = 8, vehicles: bool = False) -> list[Detection]:
-        """Boxes in an RGB frame, each with a label and visit key."""
+        """Boxes in an RGB frame, each with a label and visit key. `tiles`: False/True (whole frame
+        or a 2x2 grid), or an explicit (rows, cols) grid; rows*cols <= 1 means the whole frame."""
         ...
 
 
@@ -105,17 +106,18 @@ class SpeciesNetDetector:
             self.model = f"speciesnet {version('speciesnet')} / {name.rsplit('/', 2)[-2] if '/' in name else name}"
         return self._parts
 
-    def analyze(self, frame: np.ndarray, *, tiles: bool = False, min_conf: float = 0.2,
+    def analyze(self, frame: np.ndarray, *, tiles: bool | tuple[int, int] = False, min_conf: float = 0.2,
                 max_boxes: int = 8, vehicles: bool = False) -> list[Detection]:
         from PIL import Image
         from speciesnet.utils import BBox
 
+        rows, cols = (2, 2) if tiles is True else (1, 1) if tiles is False else tiles
         with self._lock:  # one model, shared by every camera
             mega, classifier, ensemble = self._load()
             image = Image.fromarray(frame)
             found = self._boxes(mega, image, (0.0, 0.0, 1.0, 1.0))
-            if tiles:
-                for window in tile_windows():
+            if rows * cols > 1:
+                for window in tile_windows(rows, cols):
                     found += self._boxes(mega, image, window)
             found = [(b, k) for b, k in merge_boxes(found) if b.conf >= min_conf and (vehicles or k != "vehicle")]
 

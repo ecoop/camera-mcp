@@ -202,6 +202,44 @@ def test_bad_motion_regions_rejected(tmp_path, snippet, msg):
         load_cameras(write(tmp_path, f"cameras: [{{name: a, source: a.mp4, {snippet}}}]"))
 
 
+def test_schedule_overrides_by_time_of_day(tmp_path):
+    cams = load_cameras(write(tmp_path, """
+cameras:
+  - name: backyard
+    source: b.mp4
+    tags: [wide_view]
+    tile_rows: 2
+    tile_cols: 2
+    when:
+      - { hours: "22:00-06:00", tile_rows: 1, tile_cols: 1, detect_every_seconds: 2 }
+  - name: fence
+    source: f.mp4
+"""))
+    b = cams["backyard"]
+    day = b.settings_at(_at("12:00"))
+    assert (day.tile_rows, day.tile_cols, day.detect_every_seconds) == (2, 2, 1.0)
+    for t in ("23:00", "03:00", "05:59"):  # the window wraps midnight
+        night = b.settings_at(_at(t))
+        assert (night.tile_rows, night.tile_cols, night.detect_every_seconds) == (1, 1, 2.0)
+    assert cams["fence"].schedule == () and cams["fence"].settings_at(_at("03:00")) == cams["fence"].monitor
+
+
+@pytest.mark.parametrize("when, msg", [
+    ("[{tile_rows: 1}]", "needs an 'hours'"),
+    ('[{hours: "9-5", tile_rows: 1}]', "HH:MM"),
+    ('[{hours: "22:00-06:00", max_boxes: 2}]', "cannot override"),
+    ('[{hours: "22:00-06:00"}]', "no overrides"),
+])
+def test_bad_schedule_rejected(tmp_path, when, msg):
+    with pytest.raises(ConfigError, match=msg):
+        load_cameras(write(tmp_path, f"cameras: [{{name: a, source: a.mp4, when: {when}}}]"))
+
+
+def test_tile_windows_count():
+    from camera_mcp.detect import tile_windows
+    assert len(tile_windows(1, 1)) == 1 and len(tile_windows(2, 2)) == 4 and len(tile_windows(1, 2)) == 2
+
+
 def test_segments_are_listed_selected_and_pruned(tmp_path):
     base = 1_800_000_000  # 2027-01-15T08:00:00Z
     for i in range(5):  # five 2-second segments

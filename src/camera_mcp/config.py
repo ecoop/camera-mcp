@@ -59,6 +59,8 @@ class MonitorSettings:
     view_check_seconds: float = 300.0  # how often to check whether the camera has been moved (0: never)
     view_threshold: float = 0.5  # below this edge match (0-1), a check counts as "looks moved"
     detect_every_seconds: float = 1.0  # while there's motion or an open visit, analyse a frame this often
+    tile_rows: int = 0  # analysis tiling grid rows (0 = the wide_view default: 2 if tagged, else 1)
+    tile_cols: int = 0  # analysis tiling grid cols; rows*cols <= 1 means the whole frame, no tiling
     max_analysis_lag: float = 120.0  # a segment still waiting this long is skipped, and logged as unanalyzed
     max_clip_seconds: float = 120.0  # clips are cut off this long after the visit starts (a dove can sit for an hour)
     visit_close_seconds: float = 30.0  # a visit ends after this long without its animal being detected
@@ -146,6 +148,7 @@ class Camera:
     active: str = ""  # local-time "HH:MM-HH:MM" window this camera is watched; blank: always
     motion_mask: tuple[Rect, ...] = ()  # tier-1 ignore rects: motion here never wakes analysis
     motion_roi: Rect | None = None  # if set, only motion inside this rectangle counts
+    schedule: tuple[tuple[int, int, dict], ...] = ()  # time-of-day monitor overrides (from `when:`)
 
     @property
     def is_stream(self) -> bool:
@@ -159,6 +162,17 @@ class Camera:
         start, end = window
         minute = now.hour * 60 + now.minute
         return start <= minute < end if start < end else (minute >= start or minute < end)
+
+    def settings_at(self, now: datetime, base: MonitorSettings | None = None) -> MonitorSettings:
+        """The monitor settings in force at local time `now`: the base, with the first matching
+        `when:` period's overrides applied (periods wrap past midnight, like the active window)."""
+        base = base or self.monitor
+        minute = now.hour * 60 + now.minute
+        for start, end, overrides in self.schedule:
+            inside = start <= minute < end if start < end else (minute >= start or minute < end)
+            if inside:
+                return replace(base, **overrides)
+        return base
 
     @property
     def short(self) -> str:
@@ -316,6 +330,35 @@ def _active(raw: dict, where: str) -> str:
     return spec
 
 
+SCHEDULE_KEYS = {"tile_rows", "tile_cols", "detect_every_seconds"}  # monitor settings a `when:` may override
+
+
+def _schedule(raw: dict, where: str) -> tuple[tuple[int, int, dict], ...]:
+    """Parse a camera's `when:` list into (start_minute, end_minute, overrides) periods."""
+    entries = raw.get("when")
+    if entries is None:
+        return ()
+    if not isinstance(entries, list) or not all(isinstance(e, dict) for e in entries):
+        raise ConfigError(f"{where}: when must be a list of {{hours: ..., <overrides>}} entries")
+    periods = []
+    for i, entry in enumerate(entries):
+        at = f"{where}: when[{i}]"
+        if "hours" not in entry:
+            raise ConfigError(f"{at} needs an 'hours' window")
+        window = parse_active_window(str(entry["hours"]))
+        if window is None:
+            raise ConfigError(f"{at}: hours must be HH:MM-HH:MM")
+        overrides = {k: v for k, v in entry.items() if k != "hours"}
+        if bad := sorted(set(overrides) - SCHEDULE_KEYS):
+            raise ConfigError(f"{at} cannot override {', '.join(bad)} (only {', '.join(sorted(SCHEDULE_KEYS))})")
+        if not overrides:
+            raise ConfigError(f"{at} has no overrides")
+        # Reuse _settings to type-check and convert, then keep only the overridden fields.
+        converted = _settings(MonitorSettings(), overrides, at, strict=True)
+        periods.append((window[0], window[1], {k: getattr(converted, k) for k in overrides}))
+    return tuple(periods)
+
+
 def load_site(path: str | Path) -> Site:
     """The `site:` section of the camera config (defaults if there is none)."""
     data = yaml.safe_load(Path(path).expanduser().read_text()) or {}
@@ -386,6 +429,7 @@ def load_cameras(path: str | Path, *, require_login: bool = True) -> dict[str, C
             active=_active(raw, where),
             motion_mask=parse_rects(raw.get("motion_mask"), where, "motion_mask"),
             motion_roi=parse_rect(raw["motion_roi"], where, "motion_roi") if raw.get("motion_roi") else None,
+            schedule=_schedule(raw, where),
             monitor=_settings(site, raw, where, strict=False),
         )
     if not cameras:
