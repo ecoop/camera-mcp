@@ -47,7 +47,7 @@ def _history(tmp_path, with_critters=True):
 def test_brief_leads_with_dog_yard_and_cats(tmp_path):
     brief = build_brief(_history(tmp_path), since="14h")
     assert "Wildlife brief" in brief
-    assert "Dog yard:" in brief and "2 visits" in brief  # the two raccoons under the deck
+    assert "Backyard:" in brief and "2 visits" in brief  # the two raccoons under the deck
     assert "Cats at feeders:" in brief
     assert "raccoon 2" in brief and "songbirds 1" in brief
     assert "clip" not in brief  # the file stand-in isn't in the note
@@ -91,3 +91,40 @@ def test_write_montage_returns_false_when_nothing_notable(tmp_path):
     out = tmp_path / "m.jpg"
     assert write_montage(History(tmp_path / "data" / "monitor.db", cams, Site()), "14h", tmp_path / "data", out) is False
     assert not out.exists()
+
+
+def test_main_email_path_sends_and_writes_file(tmp_path, monkeypatch):
+    from camera_mcp import brief, mailer
+
+    history = _history(tmp_path)  # builds the log + a cameras.yaml-free History
+    data = tmp_path / "data"
+    cfg = tmp_path / "cams.yaml"
+    cfg.write_text("site: {timezone: America/Los_Angeles}\ncameras:\n  - {name: east_deck, host: 10.0.0.1, tags: [dog_yard]}\n")
+    monkeypatch.setenv("CAMERA_USER", "u"); monkeypatch.setenv("CAMERA_PASS", "p")
+    monkeypatch.setattr(mailer, "email_settings", lambda: {"SMTP_HOST": "h", "SMTP_FROM": "f", "SMTP_TO": "t"})
+    sent = {}
+    monkeypatch.setattr("camera_mcp.brief.send_email", lambda subj, body, s, image=None: sent.update(
+        subject=subj, body=body, image=image), raising=False)
+    # send_email is imported inside main(); patch mailer.send_email too
+    monkeypatch.setattr(mailer, "send_email", lambda subj, body, s, image=None: sent.update(
+        subject=subj, body=body, image=image))
+
+    brief.main(["--email", "--config", str(cfg), "--data-dir", str(data), "--since", "14h"])
+    assert "Overnight visitors" in sent["subject"]
+    assert (data / "briefs").glob("*.txt")  # dated file written
+
+
+def test_brief_handles_a_site_with_no_tagged_cameras(tmp_path):
+    from camera_mcp.store import Store
+    Store(tmp_path / "data" / "monitor.db").close()
+    cams = {"a": Camera("a", "rtsp://h/stream1")}  # no feeder/dog_yard tags
+    brief = build_brief(History(tmp_path / "data" / "monitor.db", cams, Site()), "14h")
+    assert "Wildlife brief" in brief and "Backyard" not in brief  # no dog_yard camera -> no line
+
+
+def test_build_subject_leads_with_species(tmp_path):
+    from camera_mcp.brief import build_subject
+    subject = build_subject(_history(tmp_path), "14h")
+    assert subject.startswith("Overnight visitors")
+    assert "raccoon" in subject or "northern raccoon" in subject  # an identified species, not "animal"
+    assert "animal" not in subject and "mammal" not in subject

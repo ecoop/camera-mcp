@@ -29,7 +29,7 @@ case "${1:-}" in
         launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
         rm -f "$PLIST"; echo "removed $LABEL"; exit 0 ;;
     --dry-run) RECIPIENT="${2:-}"; render; exit 0 ;;
-    "") echo "usage: $0 <imessage-recipient> | --dry-run <recipient> | --uninstall" >&2; exit 2 ;;
+    "") RECIPIENT="" ;;  # no iMessage recipient: the brief uses email if SMTP is set, else writes the file only
     *) RECIPIENT="$1" ;;
 esac
 

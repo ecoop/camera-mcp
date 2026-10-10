@@ -10,3 +10,5 @@ data/
 .DS_Store
 # private household notes: context that should never be committed or published
 notes/
+# dev secrets (SMTP etc.); real values live in ~/.config/camera-mcp/credentials on hosts
+.env

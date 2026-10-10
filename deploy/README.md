@@ -77,3 +77,26 @@ umask 077; { echo "CAMERA_USER=<camera user>"; printf "CAMERA_PASS="; read -rs p
 
 The monitor keeps using the Keychain (it runs in the desktop session); only the SSH server falls
 back to the file.
+
+## Morning brief by email
+
+The brief can be emailed (montage inline) instead of iMessaged. Add the mail settings to the same
+credentials file (real values stay on the host, never in git):
+
+```
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_FROM=camera@example.com
+SMTP_TO=you@example.com
+SMTP_USER=camera@example.com
+SMTP_PASS=...
+```
+
+Then install the 7am agent (no iMessage recipient needed — it uses email when SMTP is set):
+
+```bash
+CAMERA_MCP_BRIEF_TIME=07:00 deploy/install-brief.sh
+```
+
+Test it now: `deploy/morning-brief.sh` (writes `data/briefs/<date>.txt` and emails it). Port 587
+uses STARTTLS, 465 uses SSL.

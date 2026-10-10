@@ -13,11 +13,22 @@ DATA="${CAMERA_MCP_DATA:-$REPO/data}"
 RECIPIENT="${1:-${CAMERA_MCP_IMESSAGE:-}}"
 cd "$REPO"
 mkdir -p "$DATA/briefs"
+since="${CAMERA_MCP_BRIEF_SINCE:-14h}"
+py="$REPO/.venv/bin/python"
+
+# Prefer email when SMTP is configured (the brief writes the file + montage and sends it itself).
+if "$py" -c "import sys; from camera_mcp.mailer import email_settings; sys.exit(0 if email_settings() else 1)" 2>/dev/null; then
+    "$py" -W ignore -m camera_mcp.brief --since "$since" --email >>"$DATA/brief.log" 2>&1
+    rc=$?
+    echo "$(date '+%F %T') email rc=$rc" >> "$DATA/brief.log"
+    exit $rc
+fi
+
+# Otherwise: write the dated file, and optionally iMessage it.
 montage="$DATA/briefs/$(date +%F).jpg"
 rm -f "$montage"
-
-brief="$("$REPO/.venv/bin/python" -W ignore -m camera_mcp.brief \
-    --since "${CAMERA_MCP_BRIEF_SINCE:-14h}" --montage "$montage" 2>>"$DATA/brief.log")"
+brief="$("$py" -W ignore -m camera_mcp.brief \
+    --since "$since" --montage "$montage" 2>>"$DATA/brief.log")"
 if [ -z "$brief" ]; then
     echo "$(date '+%F %T') brief was empty (see brief.log)" >> "$DATA/brief.log"
     exit 1

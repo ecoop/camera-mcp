@@ -29,24 +29,49 @@ def _times(visits: list[dict], n: int = 3) -> str:
     return ", ".join(stamps) + more
 
 
+GENERIC_GROUPS = {"animal", "mammal", "rodent", "bird", "person", "vehicle"}  # not a species worth naming
+
+
+def build_subject(history: History, since: str = "14h") -> str:
+    """An email subject that leads with the content: the identified species seen overnight."""
+    from datetime import datetime
+
+    summary = history.activity_summary(since=since, group_by="group")
+    try:
+        day = datetime.fromisoformat(summary["to"]).strftime("%b %-d")
+    except (ValueError, TypeError):
+        day = summary["to"][:10]
+    named = [r["key"] for r in summary["rows"] if r["key"] not in GENERIC_GROUPS]
+    tail = f" ({', '.join(named[:4])})" if named else ""
+    return f"Overnight visitors — {day}{tail}"
+
+
 def build_brief(history: History, since: str = "14h") -> str:
     lines: list[str] = []
     summary = history.activity_summary(since=since, group_by="group")
     window = f"{summary['from'][5:16].replace('T', ' ')} → {summary['to'][11:16]}"
     lines.append(f"\U0001f426 Wildlife brief — last night ({window})")
 
-    # The two questions worth leading with.
-    critters = history.find_visits(since=since, tag="dog_yard", taxon="night-critters", limit=50)
-    if critters["visits"]:
-        where = sorted({v["camera"] for v in critters["visits"]})
-        lines.append(f"⚠ Dog yard: {_count(critters['visits'])} (raccoon/skunk/opossum) on "
-                     f"{', '.join(where)} — {_times(critters['visits'])}")
-    else:
-        lines.append("✓ Dog yard: clear of raccoons/skunks/opossums overnight")
+    def by_tag(tag: str, taxon: str) -> list[dict]:
+        """find_visits for a tag, or [] if no camera has that tag (not every site has every role)."""
+        try:
+            return history.find_visits(since=since, tag=tag, taxon=taxon, limit=50)["visits"]
+        except HistoryError:
+            return []
 
-    cats = history.find_visits(since=since, tag="feeder", taxon="cat", limit=50)
-    if cats["visits"]:
-        lines.append(f"\U0001f408 Cats at feeders: {_count(cats['visits'])} — {_times(cats['visits'])}")
+    # The two questions worth leading with.
+    if any("dog_yard" in c.tags for c in history.cameras.values()):
+        critters = by_tag("dog_yard", "night-critters")
+        if critters:
+            where = sorted({v["camera"] for v in critters})
+            lines.append(f"⚠ Backyard: {_count(critters)} (raccoon/skunk/opossum) on "
+                         f"{', '.join(where)} — {_times(critters)}")
+        else:
+            lines.append("✓ Backyard: clear of raccoons/skunks/opossums overnight")
+
+    cats = by_tag("feeder", "cat")
+    if cats:
+        lines.append(f"\U0001f408 Cats at feeders: {_count(cats)} — {_times(cats)}")
 
     # Overall counts by group.
     rows = [r for r in summary["rows"] if r["key"] not in ("person",)]
@@ -128,15 +153,40 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--config", default=default_config_path())
     parser.add_argument("--data-dir", default=None, help="monitor data dir (default: $CAMERA_MCP_DATA, else data/)")
     parser.add_argument("--montage", default=None, help="also write a labelled image of notable visitors here")
+    parser.add_argument("--email", action="store_true", help="send the brief by email (SMTP_* settings) instead "
+                        "of printing; also writes the dated file and montage under the data dir")
     args = parser.parse_args(argv)
-    data_dir = args.data_dir or default_data_dir()
+    data_dir = Path(args.data_dir) if args.data_dir else default_data_dir()
     try:
         cameras = load_cameras(args.config, require_login=False)
         site = load_site(args.config)
         history = History(data_dir / "monitor.db", cameras, site)
-        print(build_brief(history, args.since))
-        if args.montage:
-            write_montage(history, args.since, data_dir, Path(args.montage))
+        text = build_brief(history, args.since)
+        if not args.email:
+            print(text)
+            if args.montage:
+                write_montage(history, args.since, data_dir, Path(args.montage))
+            return
+        # --email: write the dated file + montage, then send.
+        from datetime import datetime
+
+        from camera_mcp.mailer import MailError, email_settings, send_email
+
+        settings = email_settings()
+        if not settings:
+            print("brief: no mail settings (set SMTP_HOST, SMTP_FROM, SMTP_TO)", file=sys.stderr)
+            raise SystemExit(1)
+        stamp = datetime.now(site.tz()).strftime("%Y-%m-%d")
+        briefs = data_dir / "briefs"
+        briefs.mkdir(parents=True, exist_ok=True)
+        (briefs / f"{stamp}.txt").write_text(text)
+        montage = briefs / f"{stamp}.jpg"
+        image = montage if write_montage(history, args.since, data_dir, montage) else None
+        try:
+            send_email(build_subject(history, args.since), text, settings, image)
+        except MailError as e:
+            print(f"brief: {e}", file=sys.stderr)
+            raise SystemExit(1) from None
     except (ConfigError, HistoryError) as e:
         print(f"brief: {e}", file=sys.stderr)
         raise SystemExit(1) from None

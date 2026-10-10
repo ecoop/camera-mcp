@@ -147,21 +147,32 @@ def _keychain_login() -> tuple[str, str] | None:
     return account.group(1), secret.stdout.rstrip("\n")
 
 
+def read_credentials_file() -> dict[str, str]:
+    """`KEY=VALUE` lines from the credentials file ($CAMERA_MCP_CREDENTIALS, else
+    ~/.config/camera-mcp/credentials), the git-ignored secrets store on a host. Empty if absent.
+    Holds the camera login (CAMERA_USER/PASS) and, optionally, the mail settings (SMTP_*)."""
+    for candidate in (os.environ.get(CREDENTIALS_ENV), DEFAULT_CREDENTIALS, ".env"):
+        if not candidate:
+            continue
+        try:
+            text = Path(candidate).expanduser().read_text()
+        except OSError:
+            continue
+        out: dict[str, str] = {}
+        for line in text.splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                key, value = line.split("=", 1)
+                out[key.strip()] = value.strip().strip('"').strip("'")
+        if out:
+            return out
+    return {}
+
+
 def _file_login() -> tuple[str, str] | None:
-    """The login from a credentials file ($CAMERA_MCP_CREDENTIALS, else ~/.config/camera-mcp/
-    credentials): `CAMERA_USER=..` / `CAMERA_PASS=..` lines. For headless/remote hosts, where the
-    login Keychain is locked in an SSH session. None if the file is absent or incomplete."""
-    path = Path(os.environ.get(CREDENTIALS_ENV) or DEFAULT_CREDENTIALS).expanduser()
-    try:
-        text = path.read_text()
-    except OSError:
-        return None
-    creds: dict[str, str] = {}
-    for line in text.splitlines():
-        line = line.strip()
-        if line and not line.startswith("#") and "=" in line:
-            key, value = line.split("=", 1)
-            creds[key.strip()] = value.strip()
+    """The camera login from the credentials file, for headless/remote hosts where the login
+    Keychain is locked in an SSH session. None if absent or incomplete."""
+    creds = read_credentials_file()
     user, password = creds.get(USER_ENV), creds.get(PASS_ENV)
     return (user, password) if user and password else None
 
