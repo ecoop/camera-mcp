@@ -57,6 +57,24 @@ from camera_mcp.visits import Visit, VisitTracker
 
 log = logging.getLogger("camera_mcp.monitor")
 
+
+def watermark(frame: np.ndarray, text: str) -> np.ndarray:
+    """A small camera label in the bottom-left corner over a dim strip, so a crop can be traced to
+    its camera without occluding much. `frame` is RGB uint8; returns a labelled copy."""
+    if not text:
+        return frame
+    out = frame.copy()
+    h, w = out.shape[:2]
+    scale = max(0.35, min(w, h) / 320 * 0.45)
+    (tw, th), base = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, 1)
+    pad = 3
+    band_h = min(h, th + base + 2 * pad)
+    band_w = min(w, tw + 2 * pad)
+    region = out[h - band_h:h, 0:band_w].astype(np.float32)
+    out[h - band_h:h, 0:band_w] = (region * 0.35).astype(np.uint8)  # dim the strip behind the text
+    cv2.putText(out, text, (pad, h - base - pad), cv2.FONT_HERSHEY_SIMPLEX, scale, (255, 255, 255), 1, cv2.LINE_AA)
+    return out
+
 BACKOFF = (2, 5, 10, 30, 60)  # seconds between reconnect attempts
 STATUS_EVERY = 5.0  # seconds between status writes while watching
 SHUTDOWN_SECONDS = 120.0  # at most this long, after stopping, to save open visits and their media
@@ -416,8 +434,9 @@ class CameraWorker:
             return None
         out = self.data_dir / "media" / self.camera.name / rel
         out.parent.mkdir(parents=True, exist_ok=True)
+        labelled = watermark(visit.thumbnail, self.camera.short)  # which camera this crop came from
         # imencode, not imwrite: SpeciesNet's yolov5 replaces cv2.imwrite with a 2-argument version.
-        ok, jpeg = cv2.imencode(".jpg", cv2.cvtColor(visit.thumbnail, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 85])
+        ok, jpeg = cv2.imencode(".jpg", cv2.cvtColor(labelled, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 85])
         if not ok:
             return None
         out.write_bytes(jpeg.tobytes())

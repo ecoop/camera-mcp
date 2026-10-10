@@ -10,6 +10,8 @@ cameras:
   - name: east_fence
     label: Back fence, east
     host: 192.0.2.10
+    aliases: ["east fence"]   # extra names to match in questions (loose: case/spacing ignored)
+    watermark: fe             # tiny label stamped on this camera's thumbnails
   - name: west_fence
     label: Back fence, west
     host: 192.0.2.11

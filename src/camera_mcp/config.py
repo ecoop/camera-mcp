@@ -90,12 +90,18 @@ class Camera:
     enabled: bool = True
     tags: tuple[str, ...] = ()
     aliases: tuple[str, ...] = ()
+    watermark: str = ""  # tiny label stamped on this camera's thumbnails; defaults to the name
     monitor: MonitorSettings = field(default_factory=MonitorSettings)
     needs_login: bool = False  # a host camera loaded without a login: it can't be opened
 
     @property
     def is_stream(self) -> bool:
         return "://" in self.source
+
+    @property
+    def short(self) -> str:
+        """The thumbnail watermark label: the `watermark` field if set, else the name."""
+        return self.watermark or self.name
 
     def substream(self) -> Camera | None:
         """The same camera on its low-resolution stream, for a Tapo RTSP source; else None."""
@@ -304,6 +310,7 @@ def load_cameras(path: str | Path, *, require_login: bool = True) -> dict[str, C
             enabled=bool(raw.get("enabled", True)),
             tags=_strings(raw.get("tags"), where, "tags"),
             aliases=aliases,
+            watermark=str(raw.get("watermark", "")),
             monitor=_settings(site, raw, where, strict=False),
         )
     if not cameras:

@@ -312,3 +312,18 @@ def test_one_small_bird_is_motion_but_scattered_noise_is_not():
     noisy[ys, xs] = 255  # 50 lone hot pixels scattered across the frame
     changed = detector.update(noisy)
     assert not detector.is_motion(changed) and detector.largest_blob == 0.0
+
+
+def test_watermark_labels_the_corner_without_resizing():
+    from camera_mcp.monitor import watermark
+    frame = np.full((180, 320, 3), 120, np.uint8)
+    out = watermark(frame, "de")
+    assert out.shape == frame.shape
+    assert (out[:120, :] == 120).all()  # top untouched
+    assert (out[150:, :40] != 120).any()  # bottom-left corner has the label
+    assert (watermark(frame, "") == frame).all()  # empty label: no change
+
+
+def test_camera_watermark_field_overrides_the_name():
+    assert Camera("east_deck", "rtsp://h/stream1", watermark="de").short == "de"
+    assert Camera("east_deck", "rtsp://h/stream1", aliases=("deck east",)).short == "east_deck"  # alias != watermark
