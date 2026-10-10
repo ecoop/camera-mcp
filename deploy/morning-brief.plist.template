@@ -27,6 +27,8 @@
         <string>@@PATH@@</string>
         <key>CAMERA_MCP_DATA</key>
         <string>@@DATA@@</string>
+        <key>CAMERA_MCP_BRIEF_SINCE</key>
+        <string>@@SINCE@@</string>
     </dict>
     <key>StandardOutPath</key>
     <string>@@DATA@@/brief.log</string>

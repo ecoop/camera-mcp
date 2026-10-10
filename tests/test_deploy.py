@@ -61,3 +61,4 @@ def test_brief_plist_renders_with_time_and_recipient(tmp_path):
     assert plist["ProgramArguments"][1] == "+15551234567"
     assert plist["ProgramArguments"][0].endswith("deploy/morning-brief.sh")
     assert plist["EnvironmentVariables"]["CAMERA_MCP_DATA"] == "/srv/cam/data"
+    assert plist["EnvironmentVariables"]["CAMERA_MCP_BRIEF_SINCE"] == "14h"  # default window

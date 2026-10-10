@@ -16,12 +16,13 @@ TEMPLATE="$REPO/deploy/morning-brief.plist.template"
 BREW_BIN="$( { command -v brew >/dev/null && dirname "$(command -v brew)"; } || echo /opt/homebrew/bin )"
 SVC_PATH="${CAMERA_MCP_PATH:-$BREW_BIN:$HOME/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin}"
 TIME="${CAMERA_MCP_BRIEF_TIME:-07:00}"
+SINCE="${CAMERA_MCP_BRIEF_SINCE:-14h}"  # how far back the brief looks
 HOUR="${TIME%%:*}"; MINUTE="${TIME##*:}"
 
 render() {
     sed -e "s|@@LABEL@@|$LABEL|g" -e "s|@@REPO@@|$REPO|g" -e "s|@@DATA@@|$DATA|g" \
         -e "s|@@PATH@@|$SVC_PATH|g" -e "s|@@HOUR@@|$((10#$HOUR))|g" -e "s|@@MINUTE@@|$((10#$MINUTE))|g" \
-        -e "s|@@RECIPIENT@@|${RECIPIENT:-}|g" "$TEMPLATE"
+        -e "s|@@RECIPIENT@@|${RECIPIENT:-}|g" -e "s|@@SINCE@@|$SINCE|g" "$TEMPLATE"
 }
 
 case "${1:-}" in
@@ -40,6 +41,6 @@ render > "$PLIST"
 plutil -lint "$PLIST" >/dev/null
 launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
 launchctl bootstrap "gui/$(id -u)" "$PLIST"
-echo "installed $LABEL: brief to $RECIPIENT daily at $TIME (local)"
+echo "installed $LABEL: brief (last $SINCE) to ${RECIPIENT:-email} daily at $TIME (local)"
 echo "  test now:  deploy/morning-brief.sh '$RECIPIENT'"
 echo "  logs:      $DATA/brief.log ; briefs in $DATA/briefs/"
