@@ -159,6 +159,18 @@ old reference:
 .venv/bin/camera-monitor --reset-view east_fence
 ```
 
+## Benchmark
+
+```bash
+.venv/bin/python -m camera_mcp.bench --clip some.mp4 --clip other.mp4    # or --camera backyard
+```
+
+Times SpeciesNet the way the monitor runs it (every box classified), on the whole frame and
+tiled, and says how many busy cameras this machine can keep up with at one analysed frame per
+second each. On a 2020 Intel MacBook Pro (CPU only: PyTorch can't use Iris Plus graphics) it
+measured 7.2 s per frame whole, 20.4 s tiled, so about 0.14 busy cameras; Apple Silicon runs it
+on the GPU (MPS).
+
 ## Tests
 
 ```bash
