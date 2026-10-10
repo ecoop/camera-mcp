@@ -93,6 +93,32 @@ def test_motion_detector_ignores_a_still_scene_and_sees_a_change():
     assert 0.02 < changed < 0.04 and detector.is_motion(changed)
 
 
+def _still_then_patch(detector):
+    """Prime `detector` on a still frame, then feed a frame with a 40x40 bright patch; return changed."""
+    still = np.full((180, 320), 100, np.uint8)
+    detector.update(still)
+    detector.update(still)
+    moved = still.copy()
+    moved[60:100, 140:180] = 220  # the same ~2.8% patch as the test above
+    return detector.update(moved)
+
+
+def test_motion_mask_ignores_change_in_a_dead_region():
+    # An ignore rect covering the patch -> that change never counts.
+    masked = MotionDetector(MonitorSettings(), ignore=((0.4, 0.3, 0.2, 0.3),))
+    changed = _still_then_patch(masked)
+    assert changed == 0.0 and not masked.is_motion(changed)
+
+
+def test_motion_roi_counts_only_inside_it():
+    # The patch is on the right; an ROI on the left half excludes it.
+    outside = MotionDetector(MonitorSettings(), roi=(0.0, 0.0, 0.4, 1.0))
+    assert not outside.is_motion(_still_then_patch(outside))
+    # The same patch inside the ROI still counts.
+    inside = MotionDetector(MonitorSettings(), roi=(0.3, 0.2, 0.5, 0.6))
+    assert inside.is_motion(_still_then_patch(inside))
+
+
 def test_motion_windows_open_and_close_after_quiet():
     windows = MotionWindows(quiet_seconds=2)
     assert windows.feed(0.0, 0.0, False) is None and windows.open is None
@@ -154,6 +180,26 @@ cameras:
     assert not cams["east_deck"].is_active(_at("12:00"))
     with pytest.raises(ConfigError, match="active window"):
         load_cameras(write(tmp_path, 'cameras: [{name: a, source: a.mp4, active: "9-5"}]'))
+
+
+def test_motion_regions_loaded_and_validated(tmp_path):
+    cams = load_cameras(write(tmp_path, """
+cameras:
+  - {name: a, source: a.mp4, motion_mask: [[0.0, 0.0, 0.2, 0.3]], motion_roi: [0.1, 0.1, 0.8, 0.8]}
+  - {name: b, source: b.mp4}
+"""))
+    assert cams["a"].motion_mask == ((0.0, 0.0, 0.2, 0.3),) and cams["a"].motion_roi == (0.1, 0.1, 0.8, 0.8)
+    assert cams["b"].motion_mask == () and cams["b"].motion_roi is None
+
+
+@pytest.mark.parametrize("snippet, msg", [
+    ("motion_mask: [[0.5, 0.5, 0.6, 0.1]]", "out of bounds"),  # x+w > 1
+    ("motion_mask: [[0.0, 0.0, 0.1]]", "fractions"),           # not four numbers
+    ("motion_roi: [0.0, 0.0, 0.0, 0.5]", "out of bounds"),     # zero width
+])
+def test_bad_motion_regions_rejected(tmp_path, snippet, msg):
+    with pytest.raises(ConfigError, match=msg):
+        load_cameras(write(tmp_path, f"cameras: [{{name: a, source: a.mp4, {snippet}}}]"))
 
 
 def test_segments_are_listed_selected_and_pruned(tmp_path):

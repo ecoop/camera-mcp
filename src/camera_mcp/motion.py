@@ -17,32 +17,62 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
-from camera_mcp.config import MonitorSettings
+from camera_mcp.config import MonitorSettings, Rect
 
 
 class MotionDetector:
     """Pixels that differ from a running-average background, judged two ways: the share of
     the whole frame that changed (a person, a cat close up), or the largest compact patch of
     change (one small bird at a far feeder, which is a tiny share of a wide view). Isolated
-    changed pixels (sensor noise, night grain) are removed before patches are measured."""
+    changed pixels (sensor noise, night grain) are removed before patches are measured.
 
-    def __init__(self, settings: MonitorSettings, adapt: float = 0.05):
+    `ignore` rectangles (and an optional `roi` the motion must fall inside) are zeroed out of
+    the change mask, so motion in dead or noisy regions (a swaying tree, a street) never counts
+    and so never wakes the detector downstream."""
+
+    def __init__(self, settings: MonitorSettings, adapt: float = 0.05,
+                 ignore: tuple[Rect, ...] = (), roi: Rect | None = None):
         self.threshold = settings.pixel_threshold
         self.min_changed = settings.min_changed
         self.min_blob = settings.min_blob_fraction
         self.adapt = adapt  # how fast the background follows the scene, per frame
+        self.ignore = ignore
+        self.roi = roi
         self.background: np.ndarray | None = None
         self.largest_blob = 0.0  # the last frame's largest patch of change, as a fraction of the frame
+        self._keep: np.ndarray | None = None  # pixel mask (1 = counts), built when the frame size is known
+
+    def _build_keep(self, shape: tuple[int, int]) -> np.ndarray | None:
+        """A 0/1 mask at the frame's size: 1 where motion counts, 0 in roi-excluded/ignored regions."""
+        if not (self.ignore or self.roi):
+            return None
+        h, w = shape
+        keep = np.zeros((h, w), np.uint8) if self.roi else np.ones((h, w), np.uint8)
+
+        def px(rect: Rect) -> tuple[int, int, int, int]:
+            x, y, rw, rh = rect
+            return int(x * w), int(y * h), int((x + rw) * w), int((y + rh) * h)
+
+        if self.roi:
+            x0, y0, x1, y1 = px(self.roi)
+            keep[y0:y1, x0:x1] = 1
+        for rect in self.ignore:
+            x0, y0, x1, y1 = px(rect)
+            keep[y0:y1, x0:x1] = 0
+        return keep
 
     def update(self, gray: np.ndarray) -> float:
         """Feed one grayscale frame; return the fraction of pixels that changed."""
         frame = cv2.GaussianBlur(gray, (5, 5), 0).astype(np.float32)
         if self.background is None or self.background.shape != frame.shape:
             self.background = frame
+            self._keep = self._build_keep(frame.shape)
             self.largest_blob = 0.0
             return 0.0
         mask = (cv2.absdiff(frame, self.background) > self.threshold).astype(np.uint8)
         cv2.accumulateWeighted(frame, self.background, self.adapt)
+        if self._keep is not None:
+            mask *= self._keep  # drop change in ignored / outside-roi regions before it can count
         changed = float(mask.mean())
         self.largest_blob = 0.0
         if changed > 0:

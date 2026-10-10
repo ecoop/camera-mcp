@@ -109,6 +109,29 @@ def parse_active_window(spec: str) -> tuple[int, int] | None:
     return (start, end)
 
 
+Rect = tuple[float, float, float, float]  # (x, y, w, h), each a fraction of the frame (0..1)
+
+
+def parse_rect(value, where: str, key: str) -> Rect:
+    """Validate an [x, y, w, h] rectangle of frame fractions (within the frame)."""
+    try:
+        x, y, w, h = (float(v) for v in value)
+    except (TypeError, ValueError):
+        raise ConfigError(f"{where}: {key} must be [x, y, w, h] fractions, got {value!r}") from None
+    if not (0 <= x and 0 <= y and w > 0 and h > 0 and x + w <= 1 and y + h <= 1):
+        raise ConfigError(f"{where}: {key} {list(value)} is out of bounds (0..1, x+w<=1, y+h<=1)")
+    return (x, y, w, h)
+
+
+def parse_rects(value, where: str, key: str) -> tuple[Rect, ...]:
+    """A list of [x, y, w, h] rectangles (empty if omitted)."""
+    if value is None:
+        return ()
+    if not isinstance(value, list) or not all(isinstance(r, (list, tuple)) for r in value):
+        raise ConfigError(f"{where}: {key} must be a list of [x, y, w, h] rectangles")
+    return tuple(parse_rect(r, where, key) for r in value)
+
+
 @dataclass(frozen=True)
 class Camera:
     name: str
@@ -121,6 +144,8 @@ class Camera:
     monitor: MonitorSettings = field(default_factory=MonitorSettings)
     needs_login: bool = False  # a host camera loaded without a login: it can't be opened
     active: str = ""  # local-time "HH:MM-HH:MM" window this camera is watched; blank: always
+    motion_mask: tuple[Rect, ...] = ()  # tier-1 ignore rects: motion here never wakes analysis
+    motion_roi: Rect | None = None  # if set, only motion inside this rectangle counts
 
     @property
     def is_stream(self) -> bool:
@@ -359,6 +384,8 @@ def load_cameras(path: str | Path, *, require_login: bool = True) -> dict[str, C
             aliases=aliases,
             watermark=str(raw.get("watermark", "")),
             active=_active(raw, where),
+            motion_mask=parse_rects(raw.get("motion_mask"), where, "motion_mask"),
+            motion_roi=parse_rect(raw["motion_roi"], where, "motion_roi") if raw.get("motion_roi") else None,
             monitor=_settings(site, raw, where, strict=False),
         )
     if not cameras:

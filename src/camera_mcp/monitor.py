@@ -170,7 +170,7 @@ class CameraWorker:
         self.pid_file = self.seg_dir / "recorder.pid"
         self.store = store
         self.stop = stop
-        self.motion = MotionDetector(self.s)
+        self.motion = MotionDetector(self.s, ignore=camera.motion_mask, roi=camera.motion_roi)
         self.windows = MotionWindows(self.s.quiet_seconds)
         self.view = ViewCheck(data_dir / "views", camera.name, every=self.s.view_check_seconds,
                               threshold=self.s.view_threshold)

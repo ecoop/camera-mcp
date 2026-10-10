@@ -21,6 +21,10 @@ cameras:
   - name: east_deck
     label: Deck, east
     host: 192.0.2.13
+    # Tier-1 motion mask: ignore change in dead/noisy regions (a swaying tree, a street) so it
+    # never wakes the detector. [x, y, w, h] as fractions of the frame; repeatable. Optionally
+    # motion_roi: [x, y, w, h] to count motion only inside one rectangle.
+    motion_mask: [[0.0, 0.0, 1.0, 0.25]]   # ignore the top quarter (sky / neighbour's roof)
     # Watch only during these local hours (wraps midnight, so this is night-only). Blank /
     # omitted means always. Pausing low-value cameras by day frees the detector for the rest.
     active: "19:00-07:00"
