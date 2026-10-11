@@ -77,6 +77,15 @@ CREATE TABLE IF NOT EXISTS camera_status (
   error           TEXT,           -- last error, credentials redacted
   updated_at      TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS analysis_stats (  -- one sample per interval: how the shared analyzer is keeping up
+  at             TEXT PRIMARY KEY,  -- sample time
+  queue_depth    INTEGER NOT NULL,  -- segments waiting at the sample
+  max_lag        REAL NOT NULL,     -- oldest segment age (s) analysed in the interval: how far behind it fell
+  analyzed       INTEGER NOT NULL,  -- frames (inferences) run in the interval: throughput / "images processed"
+  dropped        INTEGER NOT NULL,  -- segments dropped (deferred past the limit) in the interval
+  infer_seconds  REAL NOT NULL      -- total analysis time in the interval (mean per frame = infer_seconds / analyzed)
+);
 """
 
 # Columns added after the first release, added to an existing database when it's opened.
@@ -164,6 +173,13 @@ class Store:
                                  (max(last[1], iso(end)), camera, last[0]))
             else:
                 self._db.execute("INSERT INTO analysis_skipped VALUES (?, ?, ?)", (camera, iso(start), iso(end)))
+
+    def add_analysis_stats(self, at: float, queue_depth: int, max_lag: float, analyzed: int,
+                           dropped: int, infer_seconds: float) -> None:
+        """One sample of how the shared analyzer is keeping up (throughput, backlog, loss)."""
+        with self._lock:
+            self._db.execute("INSERT OR REPLACE INTO analysis_stats VALUES (?, ?, ?, ?, ?, ?)",
+                             (iso(at), queue_depth, round(max_lag, 1), analyzed, dropped, round(infer_seconds, 3)))
 
     def add_visit(self, visit, *, model: str, thumbnail: str | None, clip: str | None) -> int:
         """Store a closed visits.Visit and its per-frame detections (completing its open row, if any)."""

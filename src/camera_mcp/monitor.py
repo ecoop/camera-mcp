@@ -533,15 +533,21 @@ class Analyzer:
 
     BACKLOG = 8  # queued segments beyond which analysis thins out
     SKIP_REPORT_EVERY = 60.0  # seconds between overload warnings
+    STATS_EVERY = 60.0  # seconds between analysis-stats samples (throughput / backlog / loss)
 
-    def __init__(self, detector: Detector, stop: threading.Event):
+    def __init__(self, detector: Detector, stop: threading.Event, store: Store | None = None):
         self.detector = detector
         self.stop = stop
+        self.store = store
         self.queue: queue.Queue[tuple[CameraWorker, ringbuffer.Segment]] = queue.Queue()
         self.thread = threading.Thread(target=self._run, name="analyzer", daemon=True)
         self._behind = False
         self._skipped: dict[str, float] = defaultdict(float)  # seconds skipped per camera since the last report
         self._last_report = 0.0
+        # analysis-stats counters for the current interval (written only from the analyzer thread)
+        self._analyzed = self._dropped = 0
+        self._infer_seconds = self._max_lag = 0.0
+        self._last_stats = 0.0
 
     @property
     def model(self) -> str:
@@ -555,10 +561,12 @@ class Analyzer:
 
     def _run(self) -> None:
         while True:
+            self._flush_stats()
             try:
                 worker, seg = self.queue.get(timeout=0.5)
             except queue.Empty:
                 if self.stop.is_set():
+                    self._flush_stats(force=True)
                     return
                 continue
             try:
@@ -567,16 +575,36 @@ class Analyzer:
                 elif time.time() - seg.end > worker.s.max_defer_seconds:
                     self._skip(worker, seg)
                 else:
-                    self._analyze(worker, seg)
+                    lag = time.time() - seg.end
+                    started = time.perf_counter()
+                    frames = self._analyze(worker, seg)
+                    self._infer_seconds += time.perf_counter() - started
+                    self._analyzed += frames or 0  # frames (inferences) run, not segments
+                    self._max_lag = max(self._max_lag, lag)
             except Exception as e:  # a bad segment or a model error must not stop the monitor
                 log.warning("%s: analysis failed for %s: %s", worker.camera.name, seg.path.name, e)
             finally:
                 with worker.lock:
                     worker.queued.pop(seg.path, None)
 
+    def _flush_stats(self, force: bool = False) -> None:
+        """Write one analysis-stats sample per STATS_EVERY (throughput, backlog, loss), then reset."""
+        now = time.time()
+        if self._last_stats == 0.0:  # first tick: set the baseline, don't write an empty interval
+            self._last_stats = now
+            return
+        if self.store is None or (not force and now - self._last_stats < self.STATS_EVERY):
+            return
+        self.store.add_analysis_stats(now, self.queue.qsize(), self._max_lag,
+                                      self._analyzed, self._dropped, self._infer_seconds)
+        self._analyzed = self._dropped = 0
+        self._infer_seconds = self._max_lag = 0.0
+        self._last_stats = now
+
     def _skip(self, worker: CameraWorker, seg: ringbuffer.Segment) -> None:
         """Deferred past the limit and still not reached: drop it, but record the blind spot."""
         worker.store.add_skipped(worker.camera.name, seg.start, seg.end)
+        self._dropped += 1
         self._skipped[worker.camera.name] += seg.end - seg.start
         now = time.time()
         if now - self._last_report >= self.SKIP_REPORT_EVERY:
@@ -617,7 +645,7 @@ class Analyzer:
         size = width * height * 3
         for i in range(len(proc.stdout) // size):
             if self.stop.is_set():
-                return
+                return i  # frames analysed before the stop
             frame = np.frombuffer(proc.stdout[i * size:(i + 1) * size], np.uint8).reshape(height, width, 3)
             t = seg.start + i * every
             detections = self.detector.analyze(frame, tiles=tiles,
@@ -641,6 +669,7 @@ class Analyzer:
                     worker.store.update_open_visit(visit)
             for visit in closed:
                 worker._visit_closed(visit)
+        return len(proc.stdout) // size  # frames (inferences) run on this segment
 
 
 class Monitor:
@@ -650,7 +679,7 @@ class Monitor:
         self.store = Store(data_dir / "monitor.db")
         self.stop = threading.Event()
         self.workers = [CameraWorker(c, data_dir, self.store, self.stop, tz) for c in cameras]
-        self.analyzer = Analyzer(detector, self.stop) if detector else None
+        self.analyzer = Analyzer(detector, self.stop, self.store) if detector else None
         for w in self.workers:
             w.analyzer = self.analyzer
 

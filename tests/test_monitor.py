@@ -277,6 +277,21 @@ def test_scaled_decode_frames_reshape(tmp_path):
     assert len(out) > 0 and len(out) % size == 0
 
 
+def test_analyzer_persists_stats(tmp_path):
+    import threading
+    from camera_mcp.monitor import Analyzer
+    from camera_mcp.store import Store
+    store = Store(tmp_path / "monitor.db")
+    a = Analyzer(detector=None, stop=threading.Event(), store=store)
+    a._last_stats = time.time() - 61        # pretend an interval has elapsed
+    a._analyzed, a._dropped, a._infer_seconds, a._max_lag = 10, 2, 1.5, 42.0
+    a._flush_stats(force=True)
+    db = sqlite3.connect(tmp_path / "monitor.db")
+    row = db.execute("SELECT queue_depth, max_lag, analyzed, dropped, infer_seconds FROM analysis_stats").fetchone()
+    assert row == (0, 42.0, 10, 2, 1.5)
+    assert (a._analyzed, a._dropped, a._max_lag, a._infer_seconds) == (0, 0, 0.0, 0.0)  # reset after flush
+
+
 def test_segments_are_listed_selected_and_pruned(tmp_path):
     base = 1_800_000_000  # 2027-01-15T08:00:00Z
     for i in range(5):  # five 2-second segments
