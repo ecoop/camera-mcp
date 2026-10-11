@@ -62,3 +62,18 @@ def test_brief_plist_renders_with_time_and_recipient(tmp_path):
     assert plist["ProgramArguments"][0].endswith("deploy/morning-brief.sh")
     assert plist["EnvironmentVariables"]["CAMERA_MCP_DATA"] == "/srv/cam/data"
     assert plist["EnvironmentVariables"]["CAMERA_MCP_BRIEF_SINCE"] == "14h"  # default window
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
+def test_brief_plist_renders_a_cadence(tmp_path):
+    # CAMERA_MCP_BRIEF_TIMES (comma-separated) -> an array of StartCalendarInterval entries.
+    env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "CAMERA_MCP_DATA": "/srv/cam/data",
+           "CAMERA_MCP_BRIEF_TIMES": "02:00,06:00,10:00,14:00,18:00,22:00", "CAMERA_MCP_BRIEF_SINCE": "4h"}
+    out = subprocess.run(["bash", str(BRIEF_SCRIPT), "--dry-run", ""],
+                         capture_output=True, text=True, env=env, check=True).stdout
+    assert "@@" not in out
+    plist = plistlib.loads(out.encode())
+    cal = plist["StartCalendarInterval"]
+    assert isinstance(cal, list) and len(cal) == 6
+    assert cal[0] == {"Hour": 2, "Minute": 0} and cal[-1] == {"Hour": 22, "Minute": 0}
+    assert plist["EnvironmentVariables"]["CAMERA_MCP_BRIEF_SINCE"] == "4h"

@@ -2,7 +2,7 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- A launchd LaunchAgent that runs the wildlife brief once each morning (local time).
      Runs in the login session so it can read the Keychain and drive Messages. install-service.sh
-     fills LABEL, REPO, DATA, PATH, HOUR, MINUTE and RECIPIENT in. -->
+     fills LABEL, REPO, DATA, PATH, the StartCalendarInterval times and RECIPIENT in. -->
 <plist version="1.0">
 <dict>
     <key>Label</key>
@@ -15,12 +15,7 @@
     <key>WorkingDirectory</key>
     <string>@@REPO@@</string>
     <key>StartCalendarInterval</key>
-    <dict>
-        <key>Hour</key>
-        <integer>@@HOUR@@</integer>
-        <key>Minute</key>
-        <integer>@@MINUTE@@</integer>
-    </dict>
+    @@CALENDAR@@
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
