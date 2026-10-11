@@ -236,7 +236,7 @@ class SlowDetector(WhiteThingDetector):
 
 @needs_ffmpeg
 def test_a_detector_that_cant_keep_up_skips_old_motion_and_says_so(tmp_path, box_crosses):
-    s = MonitorSettings(pre_seconds=1, post_seconds=1, quiet_seconds=2, visit_close_seconds=3, max_analysis_lag=1)
+    s = MonitorSettings(pre_seconds=1, post_seconds=1, quiet_seconds=2, visit_close_seconds=3, max_defer_seconds=1)
     data = tmp_path / "data"
     Monitor([Camera("feeder", str(box_crosses), monitor=s)], data, SlowDetector(Label("domestic cat", CAT, 0.9), "cat")).run(duration=90)
     db = sqlite3.connect(data / "monitor.db")

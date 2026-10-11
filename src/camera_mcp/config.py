@@ -62,7 +62,8 @@ class MonitorSettings:
     tile_rows: int = 0  # analysis tiling grid rows (0 = the wide_view default: 2 if tagged, else 1)
     tile_cols: int = 0  # analysis tiling grid cols; rows*cols <= 1 means the whole frame, no tiling
     analysis_width: int = 0  # scale the analysis frame to this width before inference (0 = native)
-    max_analysis_lag: float = 120.0  # a segment still waiting this long is skipped, and logged as unanalyzed
+    max_defer_seconds: float = 1800.0  # a motion segment is deferred (queued) up to this long; only past
+    # it is dropped and logged as unanalyzed. Bursts are absorbed and caught up in idle time.
     max_clip_seconds: float = 120.0  # clips are cut off this long after the visit starts (a dove can sit for an hour)
     visit_close_seconds: float = 30.0  # a visit ends after this long without its animal being detected
     min_box_conf: float = 0.2  # detector boxes below this confidence are ignored

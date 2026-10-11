@@ -1,6 +1,6 @@
 # Phase 2 design: monitor, visit log, history tools
 
-_Last updated: 2026-10-08_
+_Last updated: 2026-10-10_
 
 Status: **draft for review**. Nothing here is built yet.
 
@@ -174,6 +174,12 @@ Where the implementation differs from, or adds to, the plan above:
   live by a few seconds.
 - **One model for all cameras.** A single SpeciesNet instance serves every camera through a
   queue. When the queue backs up, it analyses one frame per segment until it catches up.
+- **Bursts are deferred, not dropped.** The bottleneck is a single GPU with no parallel headroom,
+  but demand is bursty: motion segments are queued (their footage kept in the ring buffer) and
+  worked off in the quiet that follows, so a daytime spike is caught up in a lull rather than
+  lost. Only a segment deferred past `max_defer_seconds` (sustained overload beyond what the
+  machine can analyse) is dropped and recorded as a blind spot — which bounds the retained
+  backlog to roughly that window.
 - **Vehicles are ignored by default.** With tiling on a wide-view camera, MegaDetector called
   garden furniture "vehicle" at 0.55–0.77; `detect_vehicles: true` turns them on for a camera
   that watches a driveway.

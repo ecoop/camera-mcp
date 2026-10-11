@@ -523,11 +523,16 @@ class Analyzer:
 
     Each segment is decoded at one frame per `detect_every_seconds`; when the queue backs up
     (a slow machine, many busy cameras), only one frame per segment is analysed until it
-    catches up. On stop, queued segments are dropped and open visits are closed as they are.
+    catches up. A burst is absorbed rather than dropped: motion segments are retained and
+    queued, worked off in order as the machine catches up in the quiet that follows (the
+    ring buffer keeps their footage while they wait). Only a segment deferred past
+    `max_defer_seconds` — sustained overload beyond what the machine can ever analyse — is
+    dropped, and recorded as a blind spot. On stop, queued segments are dropped and open
+    visits are closed as they are.
     """
 
     BACKLOG = 8  # queued segments beyond which analysis thins out
-    SKIP_REPORT_EVERY = 60.0  # seconds between "can't keep up" warnings
+    SKIP_REPORT_EVERY = 60.0  # seconds between overload warnings
 
     def __init__(self, detector: Detector, stop: threading.Event):
         self.detector = detector
@@ -559,7 +564,7 @@ class Analyzer:
             try:
                 if self.stop.is_set():
                     pass
-                elif time.time() - seg.end > worker.s.max_analysis_lag:
+                elif time.time() - seg.end > worker.s.max_defer_seconds:
                     self._skip(worker, seg)
                 else:
                     self._analyze(worker, seg)
@@ -570,14 +575,14 @@ class Analyzer:
                     worker.queued.pop(seg.path, None)
 
     def _skip(self, worker: CameraWorker, seg: ringbuffer.Segment) -> None:
-        """Too far behind to be useful: drop the segment, but record the blind spot."""
+        """Deferred past the limit and still not reached: drop it, but record the blind spot."""
         worker.store.add_skipped(worker.camera.name, seg.start, seg.end)
         self._skipped[worker.camera.name] += seg.end - seg.start
         now = time.time()
         if now - self._last_report >= self.SKIP_REPORT_EVERY:
-            log.warning("analysis can't keep up: skipped %s (motion more than %.0fs old); this machine is too "
-                        "slow for this many busy cameras", ", ".join(f"{s:.0f}s on {c}" for c, s in self._skipped.items()),
-                        worker.s.max_analysis_lag)
+            log.warning("analysis overloaded: dropped %s after deferring past %.0fs; sustained motion beyond what "
+                        "this machine can analyse", ", ".join(f"{s:.0f}s on {c}" for c, s in self._skipped.items()),
+                        worker.s.max_defer_seconds)
             self._skipped.clear()
             self._last_report = now
 
