@@ -49,7 +49,8 @@ Live: list_cameras, then snapshot for a current frame (downscaled to max_width).
 History: a visit is one kind of animal on one camera, from arrival until it's gone; a flock
 is one visit with max_at_once. find_visits lists them, activity_summary counts them (by
 species, group, camera, local hour or day), visit_media shows a visit's thumbnail, and
-monitor_status says which cameras are being watched now.
+monitor_status says which cameras are being watched now. analysis_health says how the detector
+kept up (throughput, backlog/lag, and anything dropped on overload).
 
 Filters: `since`/`until` take ISO times (local if no zone) or durations ago (15m, 4h, 3d, 2w),
 today, yesterday. `taxon` takes a group (songbirds, jays, crows, doves/pigeons, hawks, owls,
@@ -194,6 +195,14 @@ def build_server(cameras: dict[str, Camera], history: History | None = None, dat
         """Per camera: is the monitor watching it now, when it last saw a frame and motion, whether
         it looks moved (tilted, blocked), how many visits are happening now, and any error."""
         return await anyio.to_thread.run_sync(lambda: ask(history.monitor_status))
+
+    @server.tool(annotations=READ_ONLY)
+    async def analysis_health(since: str = "24h", until: str | None = None) -> dict[str, Any]:
+        """How the detector kept up over a window (one shared model on this machine): frames
+        analysed and mean seconds per frame (throughput), peak queue depth and how far behind it
+        fell (backlog/lag), and segments dropped on sustained overload (loss). `since`/`until` take
+        durations ago (2h, 24h) or ISO times. 0 dropped with low peak lag means it kept up."""
+        return await anyio.to_thread.run_sync(lambda: ask(history.analysis_health, since, until))
 
     return server
 

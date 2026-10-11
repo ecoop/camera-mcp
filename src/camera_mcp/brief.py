@@ -98,6 +98,14 @@ def build_brief(history: History, since: str = "14h") -> str:
             gaps.append(f"{c['camera']} looks moved")
     if gaps:
         lines.append("⚠ Note: " + "; ".join(sorted(set(gaps))))
+
+    # How the detector kept up over the window (throughput / backlog / loss).
+    health = history.analysis_health(since=since)
+    if health.get("samples"):
+        drops = health["segments_dropped"]
+        lines.append(f"\U0001f9e0 Analysis: {health['frames_analyzed']:,} frames, "
+                     f"{'none dropped' if not drops else f'{drops} dropped'}, "
+                     f"peak lag {health['peak_lag_seconds']:.0f}s")
     return "\n".join(lines)
 
 

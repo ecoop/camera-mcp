@@ -179,6 +179,26 @@ def test_monitor_status(log):
     assert status["east_fence"]["looks_moved_since"] is not None
 
 
+def test_analysis_health(log):
+    import sqlite3
+
+    from camera_mcp.store import iso
+
+    history, data = log
+    db = sqlite3.connect(data / "monitor.db")
+    now = time.time()
+    db.execute("INSERT INTO analysis_stats VALUES (?, ?, ?, ?, ?, ?)", (iso(now - 120), 3, 10.0, 50, 0, 20.0))
+    db.execute("INSERT INTO analysis_stats VALUES (?, ?, ?, ?, ?, ?)", (iso(now - 60), 12, 45.0, 30, 2, 18.0))
+    db.commit()
+    db.close()
+    h = history.analysis_health(since="1h")
+    assert h["samples"] == 2
+    assert h["frames_analyzed"] == 80 and h["segments_dropped"] == 2
+    assert h["peak_lag_seconds"] == 45.0 and h["peak_queue_depth"] == 12
+    assert h["mean_seconds_per_frame"] == round(38.0 / 80, 3)
+    assert history.analysis_health(since="1s")["samples"] == 0  # window excludes both samples
+
+
 def test_queries_close_their_db_connections(log):
     # Regression: each query opens a fresh connection and closes it. A leaked connection kept a
     # long-lived server pinned to a replaced monitor.db, so queries read a stale (deleted) file.

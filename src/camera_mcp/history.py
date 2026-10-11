@@ -244,6 +244,32 @@ class History:
                                "turned off for that camera, or the visit is still going on")
         return path.read_bytes(), caption
 
+    def analysis_health(self, since: str = "24h", until: str | None = None) -> dict:
+        """How the shared analyzer kept up over the window: throughput (frames analysed and mean
+        cost), backlog (peak queue depth and lag), and loss (segments dropped on overload)."""
+        now = time.time()
+        t0, t1 = parse_when(since, now, self.tz), parse_when(until, now, self.tz)
+        window = {"from": self._local(self._iso(t0)), "to": self._local(self._iso(t1))}
+        with closing(self._db()) as db:
+            if "analysis_stats" not in _tables(db):
+                return {**window, "samples": 0, "note": "no analysis stats yet (older monitor, or detection is off)"}
+            rows = db.execute("SELECT * FROM analysis_stats WHERE at >= ? AND at <= ? ORDER BY at",
+                              (self._iso(t0), self._iso(t1))).fetchall()
+        if not rows:
+            return {**window, "samples": 0, "note": "no samples in this window yet"}
+        frames = sum(r["analyzed"] for r in rows)
+        worst = max(rows, key=lambda r: r["max_lag"])
+        return {
+            **window,
+            "samples": len(rows),
+            "frames_analyzed": frames,
+            "segments_dropped": sum(r["dropped"] for r in rows),  # dropped on sustained overload
+            "mean_seconds_per_frame": round(sum(r["infer_seconds"] for r in rows) / frames, 3) if frames else None,
+            "peak_lag_seconds": round(worst["max_lag"], 1),  # furthest the analyzer fell behind
+            "peak_lag_at": self._local(worst["at"]),
+            "peak_queue_depth": max(r["queue_depth"] for r in rows),
+        }
+
     def monitor_status(self) -> list[dict]:
         now = time.time()
         with closing(self._db()) as db:
