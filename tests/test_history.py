@@ -179,6 +179,24 @@ def test_monitor_status(log):
     assert status["east_fence"]["looks_moved_since"] is not None
 
 
+def test_queries_close_their_db_connections(log):
+    # Regression: each query opens a fresh connection and closes it. A leaked connection kept a
+    # long-lived server pinned to a replaced monitor.db, so queries read a stale (deleted) file.
+    import sqlite3
+
+    history, _ = log
+    orig, conns = history._db, []
+    history._db = lambda: (conns.append(c := orig()), c)[1]
+    history.find_visits(since="1d")
+    history.activity_summary(since="1d")
+    history.monitor_status()
+    history.coverage(list(history.cameras), 0.0, time.time())  # standalone coverage opens its own too
+    assert len(conns) >= 4
+    for c in conns:  # a closed sqlite3 connection raises on use
+        with pytest.raises(sqlite3.ProgrammingError):
+            c.execute("SELECT 1")
+
+
 def test_no_log_yet(tmp_path):
     history = History(tmp_path / "monitor.db", {"a": Camera("a", "x")})
     with pytest.raises(HistoryError, match="monitor hasn't run"):

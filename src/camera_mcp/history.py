@@ -12,6 +12,7 @@ import re
 import sqlite3
 import time
 from collections import defaultdict
+from contextlib import closing
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -136,7 +137,9 @@ class History:
 
     def coverage(self, names: list[str], t0: float, t1: float, db: sqlite3.Connection | None = None) -> list[dict]:
         """For each camera: the share of [t0, t1] the monitor was receiving its frames."""
-        db = db or self._db()
+        if db is None:  # standalone call: open our own connection and close it when done
+            with closing(self._db()) as own:
+                return self.coverage(names, t0, t1, own)
         span = max(t1 - t0, 1e-9)
         watched: dict[str, float] = defaultdict(float)
         marks = ", ".join("?" * len(names))
@@ -171,28 +174,28 @@ class History:
         now = time.time()
         t0, t1 = parse_when(since, now, self.tz), parse_when(until, now, self.tz)
         names = self._camera_names(cameras, tag)
-        db = self._db()
-        where, params = self._where(t0, t1, names, taxon, min_score, col="v.")
-        if overlapping:
-            clause, p = self._taxon(overlapping, "o.")
-            where += (" AND EXISTS (SELECT 1 FROM visits o WHERE o.camera = v.camera AND o.id != v.id"
-                      f" AND o.started_at <= v.ended_at AND o.ended_at >= v.started_at AND {clause})")
-            params += p
-        total = db.execute(f"SELECT COUNT(*) FROM visits v WHERE {where}", params).fetchone()[0]
-        rows = db.execute(f"SELECT * FROM visits v WHERE {where} ORDER BY v.started_at DESC LIMIT ?",
-                          (*params, max(1, min(limit, 500)))).fetchall()
-        return {
-            "from": self._local(self._iso(t0)), "to": self._local(self._iso(t1)),
-            "total": total, "shown": len(rows),
-            "visits": [{
-                "id": r["id"], "camera": r["camera"],
-                "started": self._local(r["started_at"]), "last_seen": self._local(r["ended_at"]),
-                "still_there": bool(_get(r, "open", 0)), "label": r["label"], "group": r["grp"],
-                "score": r["score"], "max_at_once": r["max_count"], "frames": r["frames"],
-                "has_thumbnail": r["thumbnail"] is not None, "clip": r["clip"],
-            } for r in rows],
-            "coverage": self.coverage(names, t0, t1, db),
-        }
+        with closing(self._db()) as db:
+            where, params = self._where(t0, t1, names, taxon, min_score, col="v.")
+            if overlapping:
+                clause, p = self._taxon(overlapping, "o.")
+                where += (" AND EXISTS (SELECT 1 FROM visits o WHERE o.camera = v.camera AND o.id != v.id"
+                          f" AND o.started_at <= v.ended_at AND o.ended_at >= v.started_at AND {clause})")
+                params += p
+            total = db.execute(f"SELECT COUNT(*) FROM visits v WHERE {where}", params).fetchone()[0]
+            rows = db.execute(f"SELECT * FROM visits v WHERE {where} ORDER BY v.started_at DESC LIMIT ?",
+                              (*params, max(1, min(limit, 500)))).fetchall()
+            return {
+                "from": self._local(self._iso(t0)), "to": self._local(self._iso(t1)),
+                "total": total, "shown": len(rows),
+                "visits": [{
+                    "id": r["id"], "camera": r["camera"],
+                    "started": self._local(r["started_at"]), "last_seen": self._local(r["ended_at"]),
+                    "still_there": bool(_get(r, "open", 0)), "label": r["label"], "group": r["grp"],
+                    "score": r["score"], "max_at_once": r["max_count"], "frames": r["frames"],
+                    "has_thumbnail": r["thumbnail"] is not None, "clip": r["clip"],
+                } for r in rows],
+                "coverage": self.coverage(names, t0, t1, db),
+            }
 
     def activity_summary(self, since: str = "7d", until: str | None = None, group_by: str = "species",
                          cameras: list[str] | None = None, tag: str | None = None,
@@ -202,34 +205,35 @@ class History:
         now = time.time()
         t0, t1 = parse_when(since, now, self.tz), parse_when(until, now, self.tz)
         names = self._camera_names(cameras, tag)
-        db = self._db()
-        where, params = self._where(t0, t1, names, taxon, 0.0)
-        rows = db.execute(f"SELECT label, grp, camera, started_at, max_count FROM visits WHERE {where} LIMIT 100000",
-                          params).fetchall()
+        with closing(self._db()) as db:
+            where, params = self._where(t0, t1, names, taxon, 0.0)
+            rows = db.execute(f"SELECT label, grp, camera, started_at, max_count FROM visits WHERE {where} LIMIT 100000",
+                              params).fetchall()
 
-        def key(r) -> str:
-            if group_by in ("hour", "day"):
-                local = datetime.fromisoformat(r["started_at"]).astimezone(self.tz)
-                return f"{local:%H}:00" if group_by == "hour" else f"{local:%Y-%m-%d}"
-            return r[{"species": "label", "group": "grp", "camera": "camera"}[group_by]]
+            def key(r) -> str:
+                if group_by in ("hour", "day"):
+                    local = datetime.fromisoformat(r["started_at"]).astimezone(self.tz)
+                    return f"{local:%H}:00" if group_by == "hour" else f"{local:%Y-%m-%d}"
+                return r[{"species": "label", "group": "grp", "camera": "camera"}[group_by]]
 
-        agg: dict[str, dict] = {}
-        for r in rows:
-            a = agg.setdefault(key(r), {"key": key(r), "visits": 0, "max_at_once": 0, "first": None, "last": None})
-            a["visits"] += 1
-            a["max_at_once"] = max(a["max_at_once"], r["max_count"])
-            a["first"] = min(a["first"] or r["started_at"], r["started_at"])
-            a["last"] = max(a["last"] or r["started_at"], r["started_at"])
-        out = sorted(agg.values(), key=(lambda a: a["key"]) if group_by in ("hour", "day") else (lambda a: -a["visits"]))
-        for a in out:
-            a["first"], a["last"] = self._local(a["first"]), self._local(a["last"])
-        return {
-            "from": self._local(self._iso(t0)), "to": self._local(self._iso(t1)), "group_by": group_by,
-            "total_visits": len(rows), "rows": out, "coverage": self.coverage(names, t0, t1, db),
-        }
+            agg: dict[str, dict] = {}
+            for r in rows:
+                a = agg.setdefault(key(r), {"key": key(r), "visits": 0, "max_at_once": 0, "first": None, "last": None})
+                a["visits"] += 1
+                a["max_at_once"] = max(a["max_at_once"], r["max_count"])
+                a["first"] = min(a["first"] or r["started_at"], r["started_at"])
+                a["last"] = max(a["last"] or r["started_at"], r["started_at"])
+            out = sorted(agg.values(), key=(lambda a: a["key"]) if group_by in ("hour", "day") else (lambda a: -a["visits"]))
+            for a in out:
+                a["first"], a["last"] = self._local(a["first"]), self._local(a["last"])
+            return {
+                "from": self._local(self._iso(t0)), "to": self._local(self._iso(t1)), "group_by": group_by,
+                "total_visits": len(rows), "rows": out, "coverage": self.coverage(names, t0, t1, db),
+            }
 
     def visit_thumbnail(self, visit_id: int, data_dir: Path) -> tuple[bytes, str]:
-        row = self._db().execute("SELECT * FROM visits WHERE id = ?", (visit_id,)).fetchone()
+        with closing(self._db()) as db:
+            row = db.execute("SELECT * FROM visits WHERE id = ?", (visit_id,)).fetchone()
         if row is None:
             raise HistoryError(f"no visit {visit_id}")
         caption = (f"visit {visit_id}: {row['label']} ({row['grp']}) on {row['camera']}, "
@@ -241,12 +245,12 @@ class History:
         return path.read_bytes(), caption
 
     def monitor_status(self) -> list[dict]:
-        db = self._db()
         now = time.time()
-        status = {r["camera"]: r for r in db.execute("SELECT * FROM camera_status")}
-        has_open = "open" in {r[1] for r in db.execute("PRAGMA table_info(visits)")}
-        open_counts = dict(db.execute("SELECT camera, COUNT(*) FROM visits WHERE open = 1 GROUP BY camera").fetchall()
-                           if has_open else [])
+        with closing(self._db()) as db:
+            status = {r["camera"]: r for r in db.execute("SELECT * FROM camera_status")}
+            has_open = "open" in {r[1] for r in db.execute("PRAGMA table_info(visits)")}
+            open_counts = dict(db.execute("SELECT camera, COUNT(*) FROM visits WHERE open = 1 GROUP BY camera").fetchall()
+                               if has_open else [])
         out = []
         for name in self.cameras:
             st = status.get(name)
