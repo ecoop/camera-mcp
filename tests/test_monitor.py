@@ -292,6 +292,24 @@ def test_analyzer_persists_stats(tmp_path):
     assert (a._analyzed, a._dropped, a._max_lag, a._infer_seconds) == (0, 0, 0.0, 0.0)  # reset after flush
 
 
+def test_alerter_fires_once_per_cooldown_for_alert_species(monkeypatch):
+    from zoneinfo import ZoneInfo
+    import camera_mcp.mailer as mailer
+    from camera_mcp.monitor import Alerter
+    sent = []
+    monkeypatch.setattr(mailer, "send_email", lambda subj, body, settings: sent.append((body, settings["SMTP_TO"])))
+    a = Alerter({"coyote"}, {"SMTP_HOST": "h", "SMTP_FROM": "f", "SMTP_TO": "brief@x"},
+                "15551234567@txt.att.net", ZoneInfo("America/Los_Angeles"))
+    assert a.active
+    a.maybe_alert("backyard", "cat", 1_700_000_000.0)      # not an alert species -> nothing
+    a.maybe_alert("backyard", "coyote", 1_700_000_000.0)   # fires
+    a.maybe_alert("backyard", "coyote", 1_700_000_100.0)   # within cooldown -> suppressed
+    assert len(sent) == 1
+    assert sent[0][1] == "15551234567@txt.att.net" and sent[0][0].startswith("coyote at backyard")
+    assert not Alerter({"coyote"}, {"SMTP_TO": "x"}, None, ZoneInfo("UTC")).active  # no recipient -> inactive
+    assert not Alerter(set(), {"SMTP_TO": "x"}, "r", ZoneInfo("UTC")).active        # no species -> inactive
+
+
 def test_segments_are_listed_selected_and_pruned(tmp_path):
     base = 1_800_000_000  # 2027-01-15T08:00:00Z
     for i in range(5):  # five 2-second segments

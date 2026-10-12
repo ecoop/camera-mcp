@@ -6,6 +6,10 @@
 site:
   country: USA
   admin1_region: CA
+  # Real-time alerts: a sighting of any of these species/groups sends a text (email->SMS).
+  # Delivery address goes in the git-ignored credentials as SMS_ALERT_TO (e.g.
+  # 15551234567@txt.att.net for AT&T). Leave empty for no alerts.
+  alert_species: [coyote, owl, fox]
 cameras:
   - name: east_fence
     label: Back fence, east

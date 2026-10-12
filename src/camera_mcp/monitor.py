@@ -548,6 +548,7 @@ class Analyzer:
         self._analyzed = self._dropped = 0
         self._infer_seconds = self._max_lag = 0.0
         self._last_stats = 0.0
+        self.alerter: Alerter | None = None  # set by main() when alerts are configured
 
     @property
     def model(self) -> str:
@@ -667,9 +668,53 @@ class Analyzer:
                     visit.db_id = worker.store.open_visit(visit, model=self.model)
                 elif visit.last_seen == t:
                     worker.store.update_open_visit(visit)
+                if self.alerter is not None:  # real-time alert for a high-priority species
+                    self.alerter.maybe_alert(worker.camera.name, key, t)
             for visit in closed:
                 worker._visit_closed(visit)
         return len(proc.stdout) // size  # frames (inferences) run on this segment
+
+
+class Alerter:
+    """Sends a short SMS (via an email->SMS gateway) the first time a high-priority species is
+    seen, then stays quiet for COOLDOWN per species so a lingering or returning animal does not
+    spam. Inactive (a no-op) unless alert species, mail settings, and a recipient are all set.
+
+    The alert fires when the sighting is *analysed*, which under a backlog can trail wall-clock;
+    the message carries the actual sighting time. A priority fast-lane (so alert-eligible frames
+    jump the queue) is the follow-up that makes it truly time-sensitive."""
+
+    COOLDOWN = 300.0  # seconds between alerts for the same species
+
+    def __init__(self, species, settings, recipient, tz):
+        self.species = set(species)
+        self.settings = settings
+        self.recipient = recipient
+        self.tz = tz
+        self._last: dict[str, float] = {}
+
+    @property
+    def active(self) -> bool:
+        return bool(self.species and self.settings and self.recipient)
+
+    def maybe_alert(self, camera: str, species: str, t: float) -> None:
+        if not self.active or species not in self.species:
+            return
+        now = time.time()
+        if now - self._last.get(species, 0.0) < self.COOLDOWN:
+            return
+        self._last[species] = now
+        when = datetime.fromtimestamp(t, timezone.utc).astimezone(self.tz).strftime("%-I:%M%p").lower()
+        body = f"{species} at {camera}, {when}"
+        try:
+            from camera_mcp.mailer import MailError, send_email
+            try:
+                send_email("", body, {**self.settings, "SMTP_TO": self.recipient})
+                log.info("alert sent: %s", body)
+            except MailError as e:
+                log.warning("alert send failed (%s): %s", body, e)
+        except Exception:  # never let an alert crash analysis
+            log.exception("alert error for %s", body)
 
 
 class Monitor:
@@ -759,7 +804,15 @@ def main(argv: list[str] | None = None) -> None:
             raise SystemExit(2)
         else:
             log.info("SpeciesNet isn't installed: watching for motion only")
-    monitor = Monitor(chosen, args.data_dir, detector, tz=load_site(args.config).tz())
+    site = load_site(args.config)
+    monitor = Monitor(chosen, args.data_dir, detector, tz=site.tz())
+    if monitor.analyzer is not None and site.alert_species:  # real-time alerts (email->SMS)
+        from camera_mcp.mailer import alert_recipient, email_settings
+        monitor.analyzer.alerter = Alerter(site.alert_species, email_settings(), alert_recipient(), site.tz())
+        if monitor.analyzer.alerter.active:
+            log.info("alerts on for %s -> %s", ", ".join(site.alert_species), monitor.analyzer.alerter.recipient)
+        else:
+            log.warning("alert_species set but alerts inactive (missing mail settings or SMS_ALERT_TO)")
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: monitor.stop.set())
     log.info("watching %s; data in %s", ", ".join(c.name for c in chosen), args.data_dir)

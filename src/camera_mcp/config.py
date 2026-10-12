@@ -81,6 +81,7 @@ class Site:
     admin1_region: str = ""  # e.g. "CA"; narrows that to a state
     allowlist: tuple[str, ...] = ()  # common names or taxonomy prefixes; empty: everything allowed
     timezone: str = ""  # IANA name, e.g. "America/Los_Angeles", for hours of the day; "": this machine's
+    alert_species: tuple[str, ...] = ()  # species/groups that trigger a real-time alert (e.g. coyote, owl)
 
     def tz(self) -> tzinfo:
         return ZoneInfo(self.timezone) if self.timezone else datetime.now().astimezone().tzinfo
@@ -366,13 +367,14 @@ def load_site(path: str | Path) -> Site:
     """The `site:` section of the camera config (defaults if there is none)."""
     data = yaml.safe_load(Path(path).expanduser().read_text()) or {}
     raw = data.get("site") or {}
-    if unknown := sorted(set(raw) - {"country", "admin1_region", "allowlist", "timezone"}):
+    if unknown := sorted(set(raw) - {"country", "admin1_region", "allowlist", "timezone", "alert_species"}):
         raise ConfigError(f"site: unknown setting {', '.join(unknown)}")
     site = Site(
         country=str(raw.get("country", Site.country)),
         admin1_region=str(raw.get("admin1_region", "")),
         allowlist=_strings(raw.get("allowlist"), "site", "allowlist"),
         timezone=str(raw.get("timezone", "")),
+        alert_species=_strings(raw.get("alert_species"), "site", "alert_species"),
     )
     try:
         site.tz()

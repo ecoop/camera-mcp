@@ -10,6 +10,8 @@ Settings come from the environment or the credentials file (read_credentials_fil
     SMTP_USER   login user (default: SMTP_FROM)
     SMTP_PASS   login password (omit for an unauthenticated relay)
 
+For real-time alerts, SMS_ALERT_TO is the email->SMS gateway address (e.g. 15551234567@txt.att.net).
+
 No address or password is ever hard-coded or committed; the real values live only in the
 host's git-ignored credentials file.
 """
@@ -41,6 +43,13 @@ def email_settings() -> dict[str, str] | None:
     if not all(settings.get(k) for k in ("SMTP_HOST", "SMTP_FROM", "SMTP_TO")):
         return None
     return settings
+
+
+def alert_recipient() -> str | None:
+    """The address real-time alerts go to (SMS_ALERT_TO) — an email->SMS gateway like
+    15551234567@txt.att.net — from the credentials file or the environment. None if unset."""
+    merged = {**read_credentials_file(), **os.environ}
+    return merged.get("SMS_ALERT_TO") or None
 
 
 def _tls_context(settings: dict[str, str]) -> ssl.SSLContext:
