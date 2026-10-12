@@ -270,6 +270,19 @@ class History:
             "peak_queue_depth": max(r["queue_depth"] for r in rows),
         }
 
+    def visit_clip(self, visit_id: int, data_dir: Path) -> Path:
+        """The path to a visit's saved clip. Raises HistoryError if the visit or its clip is missing."""
+        with closing(self._db()) as db:
+            row = db.execute("SELECT clip FROM visits WHERE id = ?", (visit_id,)).fetchone()
+        if row is None:
+            raise HistoryError(f"no visit {visit_id}")
+        if not row["clip"]:
+            raise HistoryError(f"no clip was kept for visit {visit_id}")
+        path = Path(data_dir) / row["clip"]
+        if not path.exists():
+            raise HistoryError(f"clip file missing for visit {visit_id}")
+        return path
+
     def monitor_status(self) -> list[dict]:
         now = time.time()
         with closing(self._db()) as db:
