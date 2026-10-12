@@ -248,6 +248,40 @@ def test_roi_parses_and_rejects_bad(tmp_path):
         load_cameras(write(tmp_path, "cameras: [{name: a, source: a.mp4, roi: [0.5, 0.0, 0.8, 0.5]}]"))
 
 
+def test_zone_overlay_merges_and_overrides(tmp_path):
+    import json
+    from camera_mcp.config import load_zone_overlay
+    cfg = write(tmp_path, "cameras:\n"
+                "  - {name: a, source: a.mp4, roi: [0.1, 0.1, 0.5, 0.5]}\n"
+                "  - {name: b, source: b.mp4}\n")
+    zones = tmp_path / "zones.json"
+    zones.write_text(json.dumps({"cameras": {
+        "a": {"roi": None, "motion_mask": [[0.0, 0.0, 0.2, 0.2]]},   # clear the yaml roi, add a mask
+        "b": {"roi": [0.3, 0.3, 0.4, 0.4], "motion_roi": [0.1, 0.1, 0.8, 0.8]},
+        "ghost": {"roi": [0, 0, 1, 1]},                               # unknown camera: ignored
+    }}))
+    # Without the overlay, the yaml values stand.
+    assert load_cameras(cfg)["a"].roi == (0.1, 0.1, 0.5, 0.5)
+    # With it, overlay fields win; absent fields keep the yaml/default.
+    cams = load_cameras(cfg, zones=zones)
+    assert cams["a"].roi is None and cams["a"].motion_mask == ((0.0, 0.0, 0.2, 0.2),)
+    assert cams["b"].roi == (0.3, 0.3, 0.4, 0.4) and cams["b"].motion_roi == (0.1, 0.1, 0.8, 0.8)
+    assert "ghost" not in cams
+    # A missing overlay file is simply no overrides.
+    assert load_zone_overlay(tmp_path / "nope.json") == {}
+
+
+def test_bad_zone_overlay_is_rejected(tmp_path):
+    cfg = write(tmp_path, "cameras: [{name: a, source: a.mp4}]")
+    zones = tmp_path / "zones.json"
+    zones.write_text('{"cameras": {"a": {"roi": [0.5, 0.0, 0.8, 0.5]}}}')  # x+w > 1
+    with pytest.raises(ConfigError, match="out of bounds"):
+        load_cameras(cfg, zones=zones)
+    zones.write_text("{not json")
+    with pytest.raises(ConfigError, match="unreadable"):
+        load_cameras(cfg, zones=zones)
+
+
 def test_analysis_width_parses_and_schedules(tmp_path):
     cams = load_cameras(write(tmp_path, """
 cameras:

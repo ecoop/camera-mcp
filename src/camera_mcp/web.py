@@ -4,14 +4,19 @@ over the same History API the MCP tools use. Starlette + uvicorn, no new framewo
 
     python -m camera_mcp.web [--config cameras.yaml] [--data-dir data] [--host 0.0.0.0] [--port 8080]
 
-v1 is read-only (visit browser + analytics + live snapshots). Editing settings and external
-access (auth) are later phases — build it behind a gate before exposing it off the LAN.
+The visit browser, analytics and live snapshots are read-only. The /zones editor is read-write:
+it draws per-camera ROI / motion-ROI / motion-mask on a snapshot and saves them to an app-owned
+overlay (data/zones.json, merged by load_cameras), then restarts the monitor to apply. Editing is
+LAN-only and unauthenticated for now (CAMERA_MCP_WEB_READONLY=1 disables it); real auth arrives
+with external access (Cloudflare).
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
+import subprocess
 from pathlib import Path
 
 import cv2
@@ -23,12 +28,38 @@ from starlette.routing import Route
 
 from camera_mcp.capture import CaptureError, grab_any
 from camera_mcp.config import (ConfigError, default_config_path, default_data_dir, find_camera,
-                               load_cameras, load_site)
+                               load_cameras, load_site, load_zone_overlay, parse_rect, parse_rects,
+                               save_zone_overlay)
 from camera_mcp.history import History, HistoryError
+
+# The monitor's launchd label, kicked to reload cameras.yaml + the zone overlay after an edit.
+MONITOR_LABEL = os.environ.get("CAMERA_MCP_LABEL", "nu.cooper.camera-mcp")
+
+
+def _reload_monitor() -> tuple[bool, str]:
+    """Restart the monitor LaunchAgent so it re-reads the zone overlay. Best-effort: returns
+    (ok, detail). Off the Studio (no such service) this just reports it couldn't."""
+    label = f"gui/{os.getuid()}/{MONITOR_LABEL}"
+    try:
+        r = subprocess.run(["launchctl", "kickstart", "-k", label],
+                           capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.SubprocessError) as e:
+        return False, f"could not run launchctl ({e})"
+    if r.returncode == 0:
+        return True, f"restarted {MONITOR_LABEL}"
+    return False, (r.stderr or r.stdout or f"launchctl exit {r.returncode}").strip()
 
 
 def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
     history = History(data_dir / "monitor.db", cameras, site)
+    zones_path = data_dir / "zones.json"
+    editable = os.environ.get("CAMERA_MCP_WEB_READONLY", "").lower() not in ("1", "true", "yes")
+
+    def _zone_state(cam):
+        return {"name": cam.name, "label": cam.label, "stream": cam.is_stream,
+                "roi": list(cam.roi) if cam.roi else None,
+                "motion_roi": list(cam.motion_roi) if cam.motion_roi else None,
+                "motion_mask": [list(r) for r in cam.motion_mask]}
 
     def _ask(fn, *a, **k):
         try:
@@ -82,6 +113,57 @@ def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
             return Response(status_code=404)
         return FileResponse(path, media_type="video/mp4")
 
+    async def zones_page(request: Request) -> HTMLResponse:
+        return HTMLResponse(ZONES_PAGE)
+
+    async def api_zones(request: Request) -> JSONResponse:
+        return JSONResponse({"editable": editable,
+                             "cameras": [_zone_state(c) for c in cameras.values() if c.enabled]})
+
+    async def api_zones_save(request: Request) -> JSONResponse:
+        if not editable:
+            return JSONResponse({"error": "editing is disabled (CAMERA_MCP_WEB_READONLY)"}, status_code=403)
+        cam = find_camera(cameras, request.path_params["camera"])
+        if cam is None:
+            return JSONResponse({"error": "unknown camera"}, status_code=404)
+        try:
+            body = await request.json()
+        except (ValueError, json.JSONDecodeError):
+            return JSONResponse({"error": "invalid JSON"}, status_code=400)
+        where = f"zones for {cam.name!r}"
+        try:  # validate with the same parsers load_cameras uses, so a bad zone can never be written
+            roi = parse_rect(body["roi"], where, "roi") if body.get("roi") else None
+            motion_roi = parse_rect(body["motion_roi"], where, "motion_roi") if body.get("motion_roi") else None
+            motion_mask = parse_rects(body.get("motion_mask"), where, "motion_mask")
+        except ConfigError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        new_roi = tuple(roi) if roi else None
+        old_roi = tuple(cam.roi) if cam.roi else None
+        scenery_reset = new_roi != old_roi  # a changed analysis ROI makes the monitor relearn scenery
+
+        # Merge this camera's entry into the overlay file and persist atomically.
+        raw = {"cameras": {}}
+        if zones_path.exists():
+            try:
+                raw = json.loads(zones_path.read_text())
+                raw.setdefault("cameras", {})
+            except (ValueError, OSError):
+                raw = {"cameras": {}}
+        raw["cameras"][cam.name] = {"roi": list(roi) if roi else None,
+                                    "motion_roi": list(motion_roi) if motion_roi else None,
+                                    "motion_mask": [list(r) for r in motion_mask]}
+        try:
+            save_zone_overlay(zones_path, raw)
+            load_zone_overlay(zones_path)  # re-validate the file as written
+        except (OSError, ConfigError) as e:
+            return JSONResponse({"error": f"could not save: {e}"}, status_code=500)
+
+        from dataclasses import replace
+        cameras[cam.name] = replace(cam, roi=roi, motion_roi=motion_roi, motion_mask=motion_mask)
+        reloaded, detail = _reload_monitor()
+        return JSONResponse({"ok": True, "reloaded": reloaded, "reload_detail": detail,
+                             "scenery_reset": bool(scenery_reset), "zones": _zone_state(cameras[cam.name])})
+
     async def api_snapshot(request: Request):
         cam = find_camera(cameras, request.path_params["camera"])
         if cam is None or not cam.enabled:
@@ -101,12 +183,15 @@ def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
 
     return Starlette(routes=[
         Route("/", index),
+        Route("/zones", zones_page),
         Route("/api/cameras", api_cameras),
         Route("/api/status", api_status),
         Route("/api/health", api_health),
         Route("/api/visits", api_visits),
         Route("/api/summary", api_summary),
         Route("/api/stats", api_stats),
+        Route("/api/zones", api_zones),
+        Route("/api/zones/{camera}", api_zones_save, methods=["POST"]),
         Route("/api/snapshot/{camera}", api_snapshot),
         Route("/media/visit/{vid:int}/thumb", media_thumb),
         Route("/media/visit/{vid:int}/clip", media_clip),
@@ -164,7 +249,8 @@ dialog video{display:block;max-width:86vw;max-height:76vh;border-radius:12px 12p
 dialog .vmeta{font-family:var(--mono);font-size:.74rem;padding:.6rem .8rem;display:flex;justify-content:space-between}
 dialog .vmeta a{color:var(--accent)}
 </style></head><body><div class="wrap">
-<div class="bar"><div class="brand">&#129437; Yard Sentry</div><div class="who" id="clock"></div></div>
+<div class="bar"><div class="brand">&#129437; Yard Sentry</div>
+  <div class="who"><a href="/zones" style="color:var(--accent);text-decoration:none">zones &rarr;</a> &middot; <span id="clock"></span></div></div>
 <div class="health" id="health">loading&hellip;</div>
 <div class="sect" style="margin-top:0">Throughput &amp; backlog</div>
 <div class="chart" id="chart"></div>
@@ -239,6 +325,151 @@ setInterval(()=>{loadHealth();loadStats();},60000);
 </script></div></body></html>"""
 
 
+ZONES_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Zones &middot; Yard Sentry</title>
+<style>
+:root{--paper:#f5f4ef;--frame:#fff;--ink:#2c2b27;--muted:#6d6a60;--line:#d3d0c6;--chrome:#eceae2;
+  --accent:#5b6b8c;--accent-soft:#dde3ee;--good:#4f7a52;--warn:#a5514a;
+  --mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]){--paper:#12141a;--frame:#191c22;
+  --ink:#d6d9e0;--muted:#868b95;--line:#353a45;--chrome:#20242c;--accent:#8fa6cf;--accent-soft:#28324a;
+  --good:#7fae82;--warn:#d98b83;}}
+*{box-sizing:border-box}body{background:var(--paper);color:var(--ink);font-family:var(--sans);
+  margin:0;line-height:1.5;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1180px;margin:0 auto;padding:1.4rem 20px 3rem}
+.bar{display:flex;align-items:center;justify-content:space-between;gap:.6rem;flex-wrap:wrap;margin-bottom:1rem}
+.brand{font-family:var(--mono);font-weight:600;font-size:1.2rem}
+.brand a{color:inherit;text-decoration:none}
+.who{font-family:var(--mono);font-size:.72rem;color:var(--muted)}
+.row{display:flex;gap:.6rem;flex-wrap:wrap;align-items:center;margin-bottom:.8rem}
+select,button{font-family:var(--mono);font-size:.78rem;background:var(--frame);color:var(--ink);
+  border:1px solid var(--line);border-radius:7px;padding:.35rem .6rem;cursor:pointer}
+button.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+button:disabled{opacity:.5;cursor:default}
+.tools{display:flex;gap:.3rem}
+.tools label{font-family:var(--mono);font-size:.72rem;border:1px solid var(--line);border-radius:999px;
+  padding:.2rem .6rem;cursor:pointer;color:var(--muted);display:inline-flex;gap:.3rem;align-items:center}
+.tools input{accent-color:var(--accent)}
+.tools label.roi.on{color:var(--accent);border-color:var(--accent)}
+.tools label.motion_roi.on{color:var(--good);border-color:var(--good)}
+.tools label.motion_mask.on{color:var(--warn);border-color:var(--warn)}
+.stage{position:relative;border:1px solid var(--line);border-radius:11px;overflow:hidden;background:var(--chrome);
+  max-width:960px;aspect-ratio:16/9;min-height:240px;touch-action:none;user-select:none}
+.stage img{width:100%;height:100%;object-fit:contain;display:block}
+.stage .msg{position:absolute;inset:0;display:none;align-items:center;justify-content:center;
+  font-family:var(--mono);font-size:.74rem;color:var(--muted);text-align:center;padding:1rem}
+.stage.noshot .msg{display:flex}
+.ov{position:absolute;inset:0;cursor:crosshair}
+.zr{position:absolute;border:2px solid var(--accent);background:rgba(91,107,140,.14);pointer-events:none}
+.zr.roi{border-color:var(--accent);background:rgba(91,107,140,.14)}
+.zr.motion_roi{border-color:var(--good);background:rgba(79,122,82,.16)}
+.zr.motion_mask{border-color:var(--warn);background:rgba(165,81,74,.16)}
+.zr .tag{position:absolute;top:-1px;left:-1px;font-family:var(--mono);font-size:.6rem;padding:0 .25rem;
+  color:#fff;background:var(--accent)}
+.zr.motion_roi .tag{background:var(--good)} .zr.motion_mask .tag{background:var(--warn)}
+.side{font-family:var(--mono);font-size:.72rem}
+.list{margin:.3rem 0 0;padding:0;list-style:none}
+.list li{display:flex;justify-content:space-between;gap:.5rem;padding:.2rem 0;border-bottom:1px solid var(--line)}
+.list .k{color:var(--muted)} .list button{padding:.05rem .4rem;font-size:.66rem}
+.hint{color:var(--muted);font-family:var(--mono);font-size:.7rem;margin:.5rem 0}
+.status{font-family:var(--mono);font-size:.74rem;margin-top:.8rem;min-height:1.2rem}
+.status.ok{color:var(--good)} .status.err{color:var(--warn)}
+.cols{display:grid;grid-template-columns:minmax(0,960px) 240px;gap:1.2rem;align-items:start}
+@media(max-width:760px){.cols{grid-template-columns:1fr}}
+</style></head><body><div class="wrap">
+<div class="bar"><div class="brand"><a href="/">&#129437; Yard Sentry</a> &middot; zones</div>
+  <div class="who"><a href="/" style="color:var(--accent);text-decoration:none">&larr; dashboard</a></div></div>
+<div class="row">
+  <select id="camera"></select>
+  <div class="tools">
+    <label class="roi on"><input type="radio" name="tool" value="roi" checked>analysis ROI</label>
+    <label class="motion_roi"><input type="radio" name="tool" value="motion_roi">motion ROI</label>
+    <label class="motion_mask"><input type="radio" name="tool" value="motion_mask">motion mask</label>
+  </div>
+  <button id="snap">reload snapshot</button>
+</div>
+<div class="hint">Drag on the frame to draw. <b>Analysis ROI</b> and <b>motion ROI</b> are single rectangles (a new draw replaces). <b>Motion mask</b> is a list (each draw adds an ignore box). Changing the analysis ROI makes the monitor relearn that camera's scenery.</div>
+<div class="cols">
+  <div class="stage" id="stage"><img id="shot" alt="snapshot">
+  <div class="msg">snapshot unavailable (camera busy or offline) &mdash; you can still draw and save; zones are fractions of the frame</div>
+  <div class="ov" id="ov"></div></div>
+  <div class="side">
+    <div><b>Analysis ROI</b> <span class="k">tier-2 crop</span><ul class="list" id="l-roi"></ul></div>
+    <div style="margin-top:.6rem"><b>Motion ROI</b> <span class="k">tier-1 gate</span><ul class="list" id="l-motion_roi"></ul></div>
+    <div style="margin-top:.6rem"><b>Motion mask</b> <span class="k">tier-1 ignore</span><ul class="list" id="l-motion_mask"></ul></div>
+    <div class="row" style="margin-top:1rem">
+      <button id="apply" class="primary">apply &amp; reload</button>
+      <button id="revert">revert</button>
+    </div>
+    <div class="status" id="status"></div>
+  </div>
+</div>
+<script>
+const $=s=>document.querySelector(s);
+let all={}, editable=true, name=null, zones={roi:null,motion_roi:null,motion_mask:[]}, tool='roi';
+const f3=v=>(+v).toFixed(3);
+function tool_of(){return document.querySelector('input[name=tool]:checked').value;}
+function setToolUI(){document.querySelectorAll('.tools label').forEach(l=>l.classList.remove('on'));
+  document.querySelector('.tools label.'+tool).classList.add('on');}
+function render(){
+  const ov=$('#ov'); ov.querySelectorAll('.zr').forEach(e=>e.remove());
+  const put=(r,cls,tag)=>{if(!r)return;const d=document.createElement('div');d.className='zr '+cls;
+    d.style.left=(r[0]*100)+'%';d.style.top=(r[1]*100)+'%';d.style.width=(r[2]*100)+'%';d.style.height=(r[3]*100)+'%';
+    d.innerHTML='<span class="tag">'+tag+'</span>';ov.appendChild(d);};
+  put(zones.roi,'roi','ROI'); put(zones.motion_roi,'motion_roi','mROI');
+  zones.motion_mask.forEach((r,i)=>put(r,'motion_mask','m'+(i+1)));
+  const li=(r,cls,label,idx)=>`<li><span class="k">${label}</span><span>[${r.map(f3).join(', ')}] `+
+    `<button data-cls="${cls}" data-i="${idx}">&times;</button></span></li>`;
+  $('#l-roi').innerHTML=zones.roi?li(zones.roi,'roi','ROI',-1):'<li class="k">none</li>';
+  $('#l-motion_roi').innerHTML=zones.motion_roi?li(zones.motion_roi,'motion_roi','mROI',-1):'<li class="k">none</li>';
+  $('#l-motion_mask').innerHTML=zones.motion_mask.length?zones.motion_mask.map((r,i)=>li(r,'motion_mask','m'+(i+1),i)).join(''):'<li class="k">none</li>';
+  document.querySelectorAll('.list button').forEach(b=>b.onclick=()=>{const c=b.dataset.cls,i=+b.dataset.i;
+    if(c==='motion_mask')zones.motion_mask.splice(i,1);else zones[c]=null;render();});
+}
+function loadCam(n){name=n;const c=all[n];
+  zones={roi:c.roi?c.roi.slice():null,motion_roi:c.motion_roi?c.motion_roi.slice():null,
+    motion_mask:(c.motion_mask||[]).map(r=>r.slice())};
+  $('#shot').src='/api/snapshot/'+n+'?w=960&t='+Date.now();render();status('');}
+function status(msg,cls){const s=$('#status');s.textContent=msg;s.className='status'+(cls?' '+cls:'');}
+// draw
+let drag=null;
+const ov=$('#ov');
+function pt(ev){const r=ov.getBoundingClientRect();
+  return [Math.min(1,Math.max(0,(ev.clientX-r.left)/r.width)),Math.min(1,Math.max(0,(ev.clientY-r.top)/r.height))];}
+ov.addEventListener('pointerdown',ev=>{if(!editable)return;ev.preventDefault();ov.setPointerCapture(ev.pointerId);
+  drag={start:pt(ev),el:document.createElement('div')};drag.el.className='zr '+tool;ov.appendChild(drag.el);});
+ov.addEventListener('pointermove',ev=>{if(!drag)return;const p=pt(ev),s=drag.start;
+  const x=Math.min(s[0],p[0]),y=Math.min(s[1],p[1]),w=Math.abs(p[0]-s[0]),h=Math.abs(p[1]-s[1]);
+  Object.assign(drag.el.style,{left:x*100+'%',top:y*100+'%',width:w*100+'%',height:h*100+'%'});});
+ov.addEventListener('pointerup',ev=>{if(!drag)return;const p=pt(ev),s=drag.start;drag.el.remove();drag=null;
+  const x=Math.min(s[0],p[0]),y=Math.min(s[1],p[1]),w=Math.abs(p[0]-s[0]),h=Math.abs(p[1]-s[1]);
+  if(w<0.01||h<0.01)return;const r=[+x.toFixed(4),+y.toFixed(4),+w.toFixed(4),+h.toFixed(4)];
+  if(tool==='motion_mask')zones.motion_mask.push(r);else zones[tool]=r;render();});
+document.querySelectorAll('input[name=tool]').forEach(i=>i.onchange=()=>{tool=tool_of();setToolUI();});
+$('#shot').onerror=()=>$('#stage').classList.add('noshot');
+$('#shot').onload=()=>$('#stage').classList.remove('noshot');
+$('#camera').onchange=()=>loadCam($('#camera').value);
+$('#snap').onclick=()=>{$('#shot').src='/api/snapshot/'+name+'?w=960&t='+Date.now();};
+$('#revert').onclick=()=>loadCam(name);
+$('#apply').onclick=async()=>{if(!editable){status('editing is disabled','err');return;}
+  $('#apply').disabled=true;status('saving & reloading the monitor…');
+  try{const res=await fetch('/api/zones/'+encodeURIComponent(name),{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify(zones)});
+  const d=await res.json();
+  if(!res.ok){status(d.error||'save failed','err');}
+  else{all[name]=d.zones;let m='saved. '+(d.reloaded?'monitor restarting':'monitor NOT reloaded: '+d.reload_detail);
+    if(d.scenery_reset)m+=' · scenery will relearn';status(m,d.reloaded?'ok':'err');}
+  }catch(e){status('network error: '+e,'err');}finally{$('#apply').disabled=false;}};
+async function init(){const d=await (await fetch('/api/zones')).json();editable=d.editable;
+  d.cameras.filter(c=>c.stream).forEach(c=>all[c.name]=c);
+  $('#camera').innerHTML=Object.keys(all).map(n=>`<option>${n}</option>`).join('');
+  if(!editable){$('#apply').disabled=true;status('read-only (CAMERA_MCP_WEB_READONLY set)','err');}
+  const first=Object.keys(all)[0]; if(first)loadCam(first);}
+init();
+</script></div></body></html>"""
+
+
 def main(argv: list[str] | None = None) -> None:
     import uvicorn
 
@@ -251,7 +482,7 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     data_dir = args.data_dir or default_data_dir()
     try:
-        cameras = load_cameras(args.config, require_login=False)
+        cameras = load_cameras(args.config, require_login=False, zones=data_dir / "zones.json")
         site = load_site(args.config)
     except ConfigError as e:
         raise SystemExit(f"web: {e}")

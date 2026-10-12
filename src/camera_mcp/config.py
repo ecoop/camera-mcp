@@ -12,6 +12,7 @@ returned to an MCP client; cameras are addressed by name.
 from __future__ import annotations
 
 import functools
+import json
 import os
 import re
 import shutil
@@ -393,10 +394,66 @@ def default_config_path() -> str:
     return os.environ.get("CAMERA_MCP_CONFIG", str(Path(__file__).resolve().parents[2] / "cameras.yaml"))
 
 
-def load_cameras(path: str | Path, *, require_login: bool = True) -> dict[str, Camera]:
+ZONE_FIELDS = ("roi", "motion_roi", "motion_mask")  # per-camera zones the web editor owns
+
+
+def load_zone_overlay(path: str | Path) -> dict[str, dict]:
+    """The app-owned zone overrides (data/zones.json), parsed and validated. Maps a camera name to
+    the zone fields it overrides: `roi`/`motion_roi` as a Rect (or None to clear) and `motion_mask`
+    as a tuple of Rects. A missing file is no overrides ({}); a malformed one fails loudly, the way
+    a bad cameras.yaml does. The web editor is the sole writer."""
+    path = Path(path).expanduser()
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text())
+    except (ValueError, OSError) as e:
+        raise ConfigError(f"{path}: unreadable zone overlay ({e})") from None
+    cams = data.get("cameras") if isinstance(data, dict) else None
+    if not isinstance(cams, dict):
+        raise ConfigError(f"{path}: zone overlay needs a 'cameras' object")
+    overlay: dict[str, dict] = {}
+    for name, raw in cams.items():
+        if not isinstance(raw, dict):
+            raise ConfigError(f"zones[{name!r}]: must be an object of zone fields")
+        where = f"zones for {name!r}"
+        over: dict = {}
+        if "roi" in raw:
+            over["roi"] = parse_rect(raw["roi"], where, "roi") if raw["roi"] else None
+        if "motion_roi" in raw:
+            over["motion_roi"] = parse_rect(raw["motion_roi"], where, "motion_roi") if raw["motion_roi"] else None
+        if "motion_mask" in raw:
+            over["motion_mask"] = parse_rects(raw["motion_mask"], where, "motion_mask")
+        if over:
+            overlay[name] = over
+    return overlay
+
+
+def apply_zone_overlay(cameras: dict[str, Camera], overlay: dict[str, dict]) -> dict[str, Camera]:
+    """Merge a zone overlay into `cameras` in place, overriding roi/motion_roi/motion_mask where the
+    overlay sets them. Overlay names matching no camera are ignored. Returns the same dict."""
+    for name, over in overlay.items():
+        if name in cameras:
+            cameras[name] = replace(cameras[name], **over)
+    return cameras
+
+
+def save_zone_overlay(path: str | Path, overlay_json: dict) -> None:
+    """Atomically write the app-owned zone overlay (plain, already-validated JSON)."""
+    path = Path(path).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(overlay_json, indent=2))
+    tmp.replace(path)
+
+
+def load_cameras(
+    path: str | Path, *, require_login: bool = True, zones: str | Path | None = None
+) -> dict[str, Camera]:
     """The cameras in a config file. Host cameras need the login (see camera_login); with
     `require_login=False` (the MCP server, whose history tools never open a camera) they load
-    without it and are marked `needs_login`."""
+    without it and are marked `needs_login`. With `zones`, the app-owned overlay at that path is
+    merged on top of each camera's roi/motion_roi/motion_mask (see load_zone_overlay)."""
     path = Path(path).expanduser()
     if not path.exists():
         raise ConfigError(f"camera config not found: {path}")
@@ -440,4 +497,6 @@ def load_cameras(path: str | Path, *, require_login: bool = True) -> dict[str, C
         )
     if not cameras:
         raise ConfigError(f"{path}: no cameras defined")
+    if zones is not None:
+        apply_zone_overlay(cameras, load_zone_overlay(zones))
     return cameras

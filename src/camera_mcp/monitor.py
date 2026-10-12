@@ -773,7 +773,7 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     try:
-        cameras = load_cameras(args.config)
+        cameras = load_cameras(args.config, zones=args.data_dir / "zones.json")
     except ConfigError as e:
         print(f"camera-monitor: {e}", file=sys.stderr)
         raise SystemExit(2) from None
