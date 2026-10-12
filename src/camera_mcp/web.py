@@ -63,6 +63,10 @@ def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
         r = _ask(history.activity_summary, since=q.get("since", "24h"), group_by=q.get("group_by", "group"))
         return r if isinstance(r, Response) else JSONResponse(r)
 
+    async def api_stats(request: Request):
+        r = _ask(history.analysis_series, since=request.query_params.get("since", "24h"))
+        return r if isinstance(r, Response) else JSONResponse(r)
+
     async def media_thumb(request: Request):
         try:
             data, _ = history.visit_thumbnail(int(request.path_params["vid"]), data_dir)
@@ -102,6 +106,7 @@ def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
         Route("/api/health", api_health),
         Route("/api/visits", api_visits),
         Route("/api/summary", api_summary),
+        Route("/api/stats", api_stats),
         Route("/api/snapshot/{camera}", api_snapshot),
         Route("/media/visit/{vid:int}/thumb", media_thumb),
         Route("/media/visit/{vid:int}/clip", media_clip),
@@ -138,6 +143,9 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 .chip{font-family:var(--mono);font-size:.68rem;border:1px solid var(--line);border-radius:999px;
   padding:.1rem .5rem;color:var(--muted)} .chip.live{color:var(--good);border-color:var(--good)}
 .chip.off{opacity:.55}
+.chart{border:1px solid var(--line);border-radius:11px;background:var(--frame);padding:.6rem;margin-bottom:1rem}
+.chart svg{width:100%;height:132px;display:block}
+.clabel{display:flex;justify-content:space-between;gap:1rem;font-family:var(--mono);font-size:.66rem;color:var(--muted);margin-top:.35rem;flex-wrap:wrap}
 .filters{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-bottom:1rem}
 .filters select,.filters input{font-family:var(--mono);font-size:.78rem;background:var(--frame);
   color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:.3rem .5rem}
@@ -158,6 +166,8 @@ dialog .vmeta a{color:var(--accent)}
 </style></head><body><div class="wrap">
 <div class="bar"><div class="brand">&#129437; Yard Sentry</div><div class="who" id="clock"></div></div>
 <div class="health" id="health">loading&hellip;</div>
+<div class="sect" style="margin-top:0">Throughput &amp; backlog</div>
+<div class="chart" id="chart"></div>
 <div class="filters">
   <select id="since"><option value="2h">last 2h</option><option value="12h">12h</option>
     <option value="24h" selected>24h</option><option value="3d">3 days</option><option value="7d">7 days</option></select>
@@ -206,8 +216,26 @@ async function loadVisits(){const r=await (await fetch('/api/visits?'+params()))
     $('#clipmeta').textContent=t.querySelector('.sp').textContent+' — '+t.querySelector('.sub').textContent;
     $('#cliplink').href='/media/visit/'+id+'/clip'; dlg.showModal();});}
 $('#clip').onclick=e=>{if(e.target.id==='clip')$('#clip').close();};
-['since','taxon','camera'].forEach(id=>$('#'+id).onchange=loadVisits);
-tick();setInterval(tick,1000);loadCameras();loadHealth();loadVisits();setInterval(loadHealth,60000);
+async function loadStats(){try{const d=await (await fetch('/api/stats?since='+$('#since').value)).json();
+  const pts=d.points||[]; const el=$('#chart');
+  if(!pts.length){el.innerHTML='<div class="empty" style="padding:1rem">no stats yet</div>';return;}
+  const W=1000,H=132,pad=4,n=pts.length,cap=1800;
+  const maxLag=Math.max(cap, ...pts.map(p=>p.lag));
+  const X=i=>pad+i*(W-2*pad)/(n-1||1), Y=v=>H-pad-(v/maxLag)*(H-2*pad);
+  let area='M'+X(0).toFixed(1)+','+(H-pad);
+  pts.forEach((p,i)=>area+=' L'+X(i).toFixed(1)+','+Y(p.lag).toFixed(1));
+  area+=' L'+X(n-1).toFixed(1)+','+(H-pad)+' Z';
+  const drops=pts.map((p,i)=>p.dropped>0?`<rect x="${X(i).toFixed(1)}" y="${H-7}" width="2.5" height="7" fill="var(--warn)"/>`:'').join('');
+  const capY=Y(cap).toFixed(1);
+  el.innerHTML=`<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">`+
+    `<line x1="0" y1="${capY}" x2="${W}" y2="${capY}" stroke="var(--warn)" stroke-dasharray="5 5" stroke-width="1" opacity=".55"/>`+
+    `<path d="${area}" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.5"/>${drops}</svg>`+
+    `<div class="clabel"><span>analysis lag (area) &middot; <span class="bad">drops</span> (ticks) &middot; dashed = 30-min cap</span>`+
+    `<span>${(d.from||'').slice(5,16)} &rarr; ${(d.to||'').slice(11,16)}</span></div>`;
+}catch(e){$('#chart').innerHTML='<div class="empty" style="padding:1rem">stats unavailable</div>';}}
+['since','taxon','camera'].forEach(id=>$('#'+id).onchange=()=>{loadVisits();loadStats();});
+tick();setInterval(tick,1000);loadCameras();loadHealth();loadStats();loadVisits();
+setInterval(()=>{loadHealth();loadStats();},60000);
 </script></div></body></html>"""
 
 

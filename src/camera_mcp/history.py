@@ -270,6 +270,22 @@ class History:
             "peak_queue_depth": max(r["queue_depth"] for r in rows),
         }
 
+    def analysis_series(self, since: str = "24h", until: str | None = None, max_points: int = 300) -> dict:
+        """The analysis-stats samples over a window, for charting the backlog/throughput timeline.
+        Downsampled to at most `max_points` points."""
+        now = time.time()
+        t0, t1 = parse_when(since, now, self.tz), parse_when(until, now, self.tz)
+        window = {"from": self._local(self._iso(t0)), "to": self._local(self._iso(t1))}
+        with closing(self._db()) as db:
+            if "analysis_stats" not in _tables(db):
+                return {**window, "points": []}
+            rows = db.execute("SELECT at, queue_depth, max_lag, analyzed, dropped FROM analysis_stats "
+                              "WHERE at >= ? AND at <= ? ORDER BY at", (self._iso(t0), self._iso(t1))).fetchall()
+        step = max(1, len(rows) // max_points)
+        points = [{"at": self._local(r["at"]), "depth": r["queue_depth"], "lag": round(r["max_lag"]),
+                   "frames": r["analyzed"], "dropped": r["dropped"]} for r in rows[::step]]
+        return {**window, "points": points}
+
     def visit_clip(self, visit_id: int, data_dir: Path) -> Path:
         """The path to a visit's saved clip. Raises HistoryError if the visit or its clip is missing."""
         with closing(self._db()) as db:

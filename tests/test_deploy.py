@@ -77,3 +77,17 @@ def test_brief_plist_renders_a_cadence(tmp_path):
     assert isinstance(cal, list) and len(cal) == 6
     assert cal[0] == {"Hour": 2, "Minute": 0} and cal[-1] == {"Hour": 22, "Minute": 0}
     assert plist["EnvironmentVariables"]["CAMERA_MCP_BRIEF_SINCE"] == "4h"
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
+def test_webapp_plist_renders(tmp_path):
+    env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "CAMERA_MCP_DATA": "/srv/cam/data",
+           "CAMERA_MCP_WEB_PORT": "9000"}
+    script = REPO / "deploy" / "install-webapp.sh"
+    out = subprocess.run(["bash", str(script), "--dry-run"], capture_output=True, text=True, env=env, check=True).stdout
+    assert "@@" not in out
+    plist = plistlib.loads(out.encode())
+    assert plist["ProgramArguments"][2] == "camera_mcp.web"
+    assert "9000" in plist["ProgramArguments"]
+    assert plist["KeepAlive"] is True
+    assert plist["StandardOutPath"] == "/srv/cam/data/web.log"

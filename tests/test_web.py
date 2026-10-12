@@ -33,4 +33,5 @@ def test_history_endpoints_degrade_without_a_db(client):
     # no monitor.db in the temp dir -> history endpoints answer 503 with an error, not a crash
     assert client.get("/api/health").status_code == 503
     assert client.get("/api/visits").status_code == 503
+    assert client.get("/api/stats").status_code == 503
     assert client.get("/media/visit/1/thumb").status_code == 404

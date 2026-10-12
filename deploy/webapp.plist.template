@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- A launchd LaunchAgent for the read-only web dashboard (camera_mcp.web). install-webapp.sh
+     fills LABEL, REPO, DATA, PATH, HOST and PORT in from the repo it is run from. The monitor's
+     own caffeinate keeps the Mac awake; this is just the HTTP server. -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>@@LABEL@@</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>@@REPO@@/.venv/bin/python</string>
+        <string>-m</string>
+        <string>camera_mcp.web</string>
+        <string>--config</string>
+        <string>@@REPO@@/cameras.yaml</string>
+        <string>--data-dir</string>
+        <string>@@DATA@@</string>
+        <string>--host</string>
+        <string>@@HOST@@</string>
+        <string>--port</string>
+        <string>@@PORT@@</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>@@REPO@@</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <!-- A server: keep it running (restart on any exit). -->
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+    <key>ProcessType</key>
+    <string>Background</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>@@PATH@@</string>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>@@DATA@@/web.log</string>
+    <key>StandardErrorPath</key>
+    <string>@@DATA@@/web.log</string>
+</dict>
+</plist>
