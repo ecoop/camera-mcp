@@ -4,7 +4,7 @@
 ![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-blue)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
-_Last updated: 2026-10-08_
+_Last updated: 2026-10-13_
 
 An MCP server over the home IP cameras. A model can list the cameras and look at a current frame
 from any of them; detections, activity and recording come in later phases. Combines the camera
@@ -73,7 +73,10 @@ security add-generic-password -U -s camera-mcp -a <camera user> -w
 `$CAMERA_USER` and `$CAMERA_PASS`, if set, take precedence (for other systems, and the tests). On a
 headless or remote host the login Keychain is locked in an SSH session, so put
 `CAMERA_USER=` and `CAMERA_PASS=` lines in `~/.config/camera-mcp/credentials` (`chmod 600`,
-or `$CAMERA_MCP_CREDENTIALS` to point elsewhere) and that is used instead.
+or `$CAMERA_MCP_CREDENTIALS` to point elsewhere) and that is used instead. The same file also
+holds the optional email and alert settings (`SMTP_*`, `SMS_ALERT_TO`); see
+[`credentials.example`](credentials.example) for every key the code reads, with placeholder
+values and the exact `KEY=value` format it expects.
 Anything else goes in `source` instead of `host`: a video file (which is how the tests run, and
 how to try the server away from home) or a full URL for a non-Tapo camera, where `${VAR}` is
 expanded from the environment.

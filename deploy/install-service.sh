@@ -9,7 +9,7 @@
 #   deploy/install-service.sh --uninstall stop and remove the service
 set -euo pipefail
 
-LABEL="${CAMERA_MCP_LABEL:-nu.cooper.camera-mcp}"
+LABEL="${CAMERA_MCP_LABEL:-camera-mcp}"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DATA="${CAMERA_MCP_DATA:-$REPO/data}"
 PLIST="${CAMERA_MCP_PLIST_DIR:-$HOME/Library/LaunchAgents}/$LABEL.plist"

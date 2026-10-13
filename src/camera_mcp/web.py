@@ -37,7 +37,7 @@ from camera_mcp.history import History, HistoryError
 from camera_mcp.store import VERDICTS, Store
 
 # The monitor's launchd label, kicked to reload cameras.yaml + the zone overlay after an edit.
-MONITOR_LABEL = os.environ.get("CAMERA_MCP_LABEL", "nu.cooper.camera-mcp")
+MONITOR_LABEL = os.environ.get("CAMERA_MCP_LABEL", "camera-mcp")
 
 
 def _reload_monitor() -> tuple[bool, str]:

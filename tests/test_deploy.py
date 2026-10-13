@@ -25,7 +25,7 @@ def test_template_renders_with_no_placeholders_left(tmp_path):
     rendered = render(tmp_path)
     assert "@@" not in rendered
     plist = plistlib.loads(rendered.encode())
-    assert plist["Label"] == "nu.cooper.camera-mcp"
+    assert plist["Label"] == "camera-mcp"
     args = plist["ProgramArguments"]
     assert args[0] == "/usr/bin/caffeinate" and args[2].endswith("/.venv/bin/camera-monitor")
     assert "/srv/cam/data" in args and plist["StandardOutPath"] == "/srv/cam/data/monitor.log"

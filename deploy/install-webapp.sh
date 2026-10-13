@@ -9,7 +9,7 @@
 #   deploy/install-webapp.sh --uninstall  stop and remove
 set -euo pipefail
 
-LABEL="${CAMERA_MCP_WEB_LABEL:-nu.cooper.camera-mcp.web}"
+LABEL="${CAMERA_MCP_WEB_LABEL:-camera-mcp.web}"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DATA="${CAMERA_MCP_DATA:-$REPO/data}"
 PLIST="${CAMERA_MCP_PLIST_DIR:-$HOME/Library/LaunchAgents}/$LABEL.plist"

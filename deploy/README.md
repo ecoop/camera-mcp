@@ -1,6 +1,6 @@
 # Running the monitor on the Mac Studio
 
-_Last updated: 2026-10-10_
+_Last updated: 2026-10-13_
 
 The monitor identifies animals with SpeciesNet, which needs a GPU to keep up. On Apple Silicon
 (the Mac Studio M2) PyTorch uses the GPU (MPS); on the Intel MacBook it is CPU-only and far too
@@ -41,7 +41,7 @@ deploy/install-service.sh --dry-run  # just print the generated plist
 deploy/install-service.sh --uninstall
 ```
 
-This installs a launchd **LaunchAgent** (`~/Library/LaunchAgents/nu.cooper.camera-mcp.plist`). It
+This installs a launchd **LaunchAgent** (`~/Library/LaunchAgents/camera-mcp.plist`). It
 runs in your login session, which is required: the camera password lives in the **login
 Keychain**, and only a logged-in session can read it. So:
 
@@ -49,7 +49,7 @@ Keychain**, and only a logged-in session can read it. So:
 - It must **not sleep**. The service wraps the monitor in `caffeinate -s`, and also set
   System Settings > Energy > "Prevent automatic sleeping when the display is off".
 
-Logs go to `data/monitor.log`. Status: `launchctl print gui/$(id -u)/nu.cooper.camera-mcp`.
+Logs go to `data/monitor.log`. Status: `launchctl print gui/$(id -u)/camera-mcp`.
 
 ## Use the tools from the MacBook
 

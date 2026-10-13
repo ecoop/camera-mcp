@@ -13,7 +13,7 @@
 #   (set it to the cadence, e.g. 4h, so the windows tile without gaps or overlap).
 set -euo pipefail
 
-LABEL="${CAMERA_MCP_BRIEF_LABEL:-nu.cooper.camera-mcp.brief}"
+LABEL="${CAMERA_MCP_BRIEF_LABEL:-camera-mcp.brief}"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DATA="${CAMERA_MCP_DATA:-$REPO/data}"
 PLIST="${CAMERA_MCP_PLIST_DIR:-$HOME/Library/LaunchAgents}/$LABEL.plist"

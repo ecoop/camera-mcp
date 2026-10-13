@@ -6,10 +6,26 @@
 site:
   country: USA
   admin1_region: CA
+  # IANA time zone for "hours of the day" in history and the brief. Leave empty / omit to use
+  # this machine's local zone.
+  timezone: America/Los_Angeles
+  # Only report these species. Each entry is a common name (e.g. "northern cardinal") or a
+  # taxonomy prefix that groups a family. Empty / omitted means everything SpeciesNet finds in
+  # your country is allowed.
+  allowlist: [songbirds, jays, crows, doves, hawks, owls, squirrel]
   # Real-time alerts: a sighting of any of these species/groups sends a text (email->SMS).
   # Delivery address goes in the git-ignored credentials as SMS_ALERT_TO (e.g.
   # 15551234567@txt.att.net for AT&T). Leave empty for no alerts.
   alert_species: [coyote, owl, fox]
+
+# Site-wide monitor defaults. Every MonitorSettings field can go here (and be overridden per
+# camera); see MonitorSettings in src/camera_mcp/config.py for the full list and defaults. Two
+# common ones:
+monitor:
+  detect_every_seconds: 1.0   # while there's motion or an open visit, analyse a frame this often
+  max_defer_seconds: 1800.0   # queue a motion segment up to this long when the detector is behind;
+                              # past it the segment is dropped and logged as unanalyzed
+
 cameras:
   - name: east_fence
     label: Back fence, east
@@ -38,12 +54,18 @@ cameras:
     label: Deck, east
     host: 192.0.2.13
     # Tier-1 motion mask: ignore change in dead/noisy regions (a swaying tree, a street) so it
-    # never wakes the detector. [x, y, w, h] as fractions of the frame; repeatable. Optionally
-    # motion_roi: [x, y, w, h] to count motion only inside one rectangle.
+    # never wakes the detector. [x, y, w, h] as fractions of the frame; repeatable.
     motion_mask: [[0.0, 0.0, 1.0, 0.25]]   # ignore the top quarter (sky / neighbour's roof)
+    # Count motion only inside this one rectangle (unlike motion_mask, which subtracts regions).
+    # [x, y, w, h] as fractions of the frame. Here: only the lower-middle, where the deck is.
+    motion_roi: [0.2, 0.4, 0.6, 0.5]
     # Watch only during these local hours (wraps midnight, so this is night-only). Blank /
     # omitted means always. Pausing low-value cameras by day frees the detector for the rest.
     active: "19:00-07:00"
+  - name: side_gate
+    label: Side gate
+    host: 192.0.2.14
+    enabled: false          # defined but not watched; flip to true (or omit) to enable it
   # Anything else goes in `source`: a video file (handy for testing away from home), or a
   # full URL for a non-Tapo camera, where ${VAR} is expanded from the environment.
   # - name: test_clip
