@@ -97,6 +97,68 @@ move to Frigate and the monitor becomes an **event consumer**:
 - **Web app** ([#47]): unaffected; it reads the same visit log. The detection-overlay toggle ([#43])
   and Frigate's own UI overlap — worth deciding which is the tuning surface before building both.
 
+## Is this actually a fix? The load-bearing assumption
+
+Everything above is sound *architecture* — offload the front of the pipeline (decode + motion +
+"something's there") to a $60 TPU so the GPU only does species ID on gated crops. But whether it
+**fixes our problem** (midday saturation) rests entirely on one sentence in "Why this fits":
+
+> _"Leaves and fruit don't look like COCO objects, so Frigate doesn't fire on them."_
+
+That is an **assertion, not a measurement**, and our own data makes it non-obvious:
+
+- **Counter-evidence (yellow flag):** MegaDetector — a strong, animal-specialized detector — fires
+  on our leaves at **80–88% confidence** (visits 1501 "animal" on leaf litter, 1970 on bare fence
+  boards; from the box-overlay review of the fence false positives). If a detector *built to find
+  animals* calls our foliage "animal," it is not safe to assume a lighter detector won't.
+- **Argument the other way (why it might still work):** MegaDetector is *primed* to call any
+  ambiguous blob "animal" (that's its job — find camouflaged/partial wildlife). A COCO detector
+  (MobileDet/SSD-MobileNet/EfficientDet-lite) is trained on **specific object classes** with hard
+  negatives; a wind-blown leaf matches no learned class and may simply score below threshold. So the
+  COCO gate could reject leaves *better* than MegaDetector — precisely because it is dumber and more
+  literal about "object vs. not."
+
+Both arguments are plausible. **We don't know which is true for our scenes** (IR night footage,
+our specific foliage), and the entire value of the project — the GPU-load reduction — equals the
+gate's **leaf-rejection rate**. Reject 70% of midday segments → ~70% less GPU work. Reject 10% →
+the hardware and the re-architecture buy nothing.
+
+### Prove it for $0, before buying anything
+
+We can answer the question offline, on the Mac, with **no Coral and no UP board**: Frigate's
+detector models (SSD-MobileNet / EfficientDet-lite, the Coral's COCO models) run on CPU via TFLite —
+slowly, but a batch test doesn't care about latency. We already have a labelled corpus:
+
+1. **Build two frame sets from the visit log** (the box overlay + the new label buttons make these
+   easy to assemble): (a) ~200 confirmed **leaf/false-positive** frames — the unnamed-"animal"
+   fence detections; (b) ~200 confirmed **real-animal** frames — raccoon/opossum/rat/squirrel/bird,
+   including small/distant feeder birds.
+2. **Run the COCO detector over both sets** at the threshold Frigate would use.
+3. **Measure the only two numbers that matter:**
+   - **Leaf-rejection** = share of set (a) the COCO detector does *not* fire on. This is the GPU
+     savings. (Need it high — say >60% — to justify the build.)
+   - **Animal-recall** = share of set (b) it *does* fire on. This is what we'd lose. (Need it high —
+     >90% — especially for the small feeder birds, which the doc already flags as the top miss risk.)
+
+That one experiment (hours, no hardware) converts "is this a real fix?" from faith to data. It also
+directly pre-measures the doc's stated main risk (small-bird recall) before a dollar is spent.
+
+### The other half: is the problem even worth fixing?
+
+Separately, the midday drops may be **low-harm**: we established the dropped midday fence traffic is
+mostly leaf-noise. Before spending on throughput at all, use the new per-visit **label buttons** to
+tag a midday batch and measure whether any *real* animals are actually being lost to drops. If
+almost nothing real is dropped, the cheap answer ("pause the fences 11:00–14:00", or just accept the
+drops) wins and the Coral gate is a solution in search of a problem.
+
+### Decision rule
+
+Build the Coral gate **only if both** cheap measurements pass: (1) the offline COCO test shows high
+leaf-rejection *and* high animal-recall, **and** (2) the label audit shows midday drops are actually
+costing real sightings. If (1) fails, the gate doesn't fix *our* problem regardless of how elegant
+the architecture is. If (2) fails, there's nothing to fix. Either cheap check can kill the project
+before the hardware order — which is the point.
+
 ## Risks / open questions
 
 - **Coral labels are not our taxonomy.** Trust only its *gate* and *bbox*, never its class name —
