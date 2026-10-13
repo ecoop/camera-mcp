@@ -83,6 +83,8 @@ class Site:
     allowlist: tuple[str, ...] = ()  # common names or taxonomy prefixes; empty: everything allowed
     timezone: str = ""  # IANA name, e.g. "America/Los_Angeles", for hours of the day; "": this machine's
     alert_species: tuple[str, ...] = ()  # species/groups that trigger a real-time alert (e.g. coyote, owl)
+    menu_species: tuple[str, ...] = ()  # if set, the web species filter shows only these, in this order;
+    # empty (the default) derives the menu from what's actually been seen
 
     def tz(self) -> tzinfo:
         return ZoneInfo(self.timezone) if self.timezone else datetime.now().astimezone().tzinfo
@@ -368,7 +370,8 @@ def load_site(path: str | Path) -> Site:
     """The `site:` section of the camera config (defaults if there is none)."""
     data = yaml.safe_load(Path(path).expanduser().read_text()) or {}
     raw = data.get("site") or {}
-    if unknown := sorted(set(raw) - {"country", "admin1_region", "allowlist", "timezone", "alert_species"}):
+    known = {"country", "admin1_region", "allowlist", "timezone", "alert_species", "menu_species"}
+    if unknown := sorted(set(raw) - known):
         raise ConfigError(f"site: unknown setting {', '.join(unknown)}")
     site = Site(
         country=str(raw.get("country", Site.country)),
@@ -376,6 +379,7 @@ def load_site(path: str | Path) -> Site:
         allowlist=_strings(raw.get("allowlist"), "site", "allowlist"),
         timezone=str(raw.get("timezone", "")),
         alert_species=_strings(raw.get("alert_species"), "site", "alert_species"),
+        menu_species=_strings(raw.get("menu_species"), "site", "menu_species"),
     )
     try:
         site.tz()

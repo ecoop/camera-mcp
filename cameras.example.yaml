@@ -17,6 +17,9 @@ site:
   # Delivery address goes in the git-ignored credentials as SMS_ALERT_TO (e.g.
   # 15551234567@txt.att.net for AT&T). Leave empty for no alerts.
   alert_species: [coyote, owl, fox]
+  # The web dashboard's species filter is built from what's actually been seen. To pin it to a
+  # fixed menu instead (e.g. hide noise, or set the order), list the taxa here and only these show:
+  # menu_species: [night-critters, cat, raccoon, skunk, owls, songbirds]
 
 # Site-wide monitor defaults. Every MonitorSettings field can go here (and be overridden per
 # camera); see MonitorSettings in src/camera_mcp/config.py for the full list and defaults. Two
@@ -25,7 +28,6 @@ monitor:
   detect_every_seconds: 1.0   # while there's motion or an open visit, analyse a frame this often
   max_defer_seconds: 1800.0   # queue a motion segment up to this long when the detector is behind;
                               # past it the segment is dropped and logged as unanalyzed
-
 cameras:
   - name: east_fence
     label: Back fence, east

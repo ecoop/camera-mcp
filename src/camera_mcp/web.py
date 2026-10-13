@@ -94,6 +94,12 @@ def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
                  taxon=q.get("taxon") or None, limit=int(q.get("limit", 60)))
         return r if isinstance(r, Response) else JSONResponse(r)
 
+    async def api_species(request: Request) -> JSONResponse:
+        # The filter menu, derived from what's been seen (or the site's pinned menu_species).
+        # Degrades to an empty list when there's no visit log yet, so the page still loads.
+        menu = site.menu_species if site else ()
+        return JSONResponse({"species": history.observed_taxa(menu)})
+
     async def api_summary(request: Request):
         q = request.query_params
         r = _ask(history.activity_summary, since=q.get("since", "24h"), group_by=q.get("group_by", "group"))
@@ -266,6 +272,7 @@ def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
         Route("/api/status", api_status),
         Route("/api/health", api_health),
         Route("/api/visits", api_visits),
+        Route("/api/species", api_species),
         Route("/api/summary", api_summary),
         Route("/api/stats", api_stats),
         Route("/api/zones", api_zones),
@@ -356,10 +363,7 @@ dialog .vmeta a{color:var(--accent);cursor:pointer}
 <div class="filters">
   <select id="since"><option value="2h">last 2h</option><option value="12h">12h</option>
     <option value="24h" selected>24h</option><option value="3d">3 days</option><option value="7d">7 days</option></select>
-  <select id="taxon"><option value="">all species</option><option>night-critters</option><option>cat</option>
-    <option>dog</option><option>rat</option><option>squirrel</option><option>raccoon</option><option>opossum</option>
-    <option>skunk</option><option>fox</option><option>coyote</option><option>owls</option>
-    <option>songbirds</option><option>person</option></select>
+  <select id="taxon"><option value="">all species</option></select>
   <select id="camera"><option value="">all cameras</option></select>
 </div>
 <div class="sect">Visits</div>
@@ -396,6 +400,9 @@ async function loadCameras(){const cs=await (await fetch('/api/cameras')).json()
   $('#chartcam').insertAdjacentHTML('beforeend',opts);
   $('#live').innerHTML=cs.filter(c=>c.enabled&&c.stream).map(c=>`<a class="tile"><img loading="lazy" `+
     `src="/api/snapshot/${c.name}?w=480" alt="${c.name}"><div class="meta"><span class="sp">${c.name}</span></div></a>`).join('');}
+async function loadSpecies(){try{const r=await (await fetch('/api/species')).json();
+  $('#taxon').insertAdjacentHTML('beforeend',(r.species||[]).map(s=>`<option value="${s}">${s}</option>`).join(''));
+  }catch(e){}}
 async function loadVisits(){const r=await (await fetch('/api/visits?'+params())).json();
   const v=(r.visits||[]).filter(x=>x.has_thumbnail);
   $('#empty').style.display=v.length?'none':'block';
@@ -469,7 +476,7 @@ async function loadStats(){try{const cc=$('#chartcam').value;
 }catch(e){$('#chart').innerHTML='<div class="empty" style="padding:1rem">stats unavailable</div>';}}
 ['since','taxon','camera'].forEach(id=>$('#'+id).onchange=()=>{loadVisits();loadStats();});
 $('#chartcam').onchange=loadStats;
-tick();setInterval(tick,1000);loadCameras();loadHealth();loadStats();loadVisits();
+tick();setInterval(tick,1000);loadCameras();loadSpecies();loadHealth();loadStats();loadVisits();
 setInterval(()=>{loadHealth();loadStats();},60000);
 </script></div></body></html>"""
 

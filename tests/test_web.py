@@ -59,6 +59,71 @@ def test_visit_boxes_maps_roi_to_full_frame(tmp_path):
     assert c.get("/api/visit/999/boxes").status_code == 404
 
 
+def _seed_visits(tmp_path):
+    """A few closed visits with distinct groups, so /api/species has something to derive."""
+    import time
+    from camera_mcp.store import Store
+    from camera_mcp.visits import Visit
+    store = Store(tmp_path / "monitor.db")
+    now = time.time()
+
+    def v(camera, grp, label, taxonomy):
+        vis = Visit(camera, grp, start=now - 600, last_seen=now - 300, frames=5)
+        vis.votes[(label, taxonomy)] = 1.0
+        return vis
+
+    # two squirrels, one raccoon, one finch -> squirrel is most frequent; raccoon pulls in the union
+    store.add_visit(v("backyard", "squirrel", "fox squirrel", "mammalia;rodentia;sciuridae;sciurus;niger"),
+                    model="m", thumbnail=None, clip=None)
+    store.add_visit(v("backyard", "squirrel", "fox squirrel", "mammalia;rodentia;sciuridae;sciurus;niger"),
+                    model="m", thumbnail=None, clip=None)
+    store.add_visit(v("alley", "raccoon", "northern raccoon", "mammalia;carnivora;procyonidae;procyon;lotor"),
+                    model="m", thumbnail=None, clip=None)
+    store.add_visit(v("backyard", "songbirds", "house finch", "aves;passeriformes;fringillidae"),
+                    model="m", thumbnail=None, clip=None)
+    store.close()
+
+
+def test_species_endpoint_derives_from_the_log(tmp_path):
+    from camera_mcp.web import build_app
+    _seed_visits(tmp_path)
+    cams = load_cameras(_cfg(tmp_path), require_login=False)
+    c = starlette_testclient.TestClient(build_app(cams, tmp_path, load_site(_cfg(tmp_path))))
+    species = c.get("/api/species").json()["species"]
+    # the distinct observed groups, most frequent first, with the applicable union pulled in front
+    assert species[0] == "night-critters"  # raccoon was seen
+    assert set(species) == {"night-critters", "squirrel", "raccoon", "songbirds"}
+    assert species.index("squirrel") < species.index("raccoon")  # squirrel seen twice, raccoon once
+    # every value is a taxon the visit filter accepts
+    for s in species:
+        assert c.get("/api/visits?taxon=" + s).status_code == 200
+
+
+def test_species_endpoint_empty_without_a_log(client):
+    assert client.get("/api/species").json() == {"species": []}
+
+
+def test_species_endpoint_honors_menu_species(tmp_path):
+    from camera_mcp.web import build_app
+    _seed_visits(tmp_path)  # observed: squirrel, raccoon, songbirds — but the pinned menu overrides
+    p = tmp_path / "pinned.yaml"
+    p.write_text("site:\n  menu_species: [cat, owls, person]\n"
+                 "cameras:\n  - {name: backyard, source: b.mp4}\n  - {name: alley, source: a.mp4}\n")
+    cams = load_cameras(str(p), require_login=False)
+    c = starlette_testclient.TestClient(build_app(cams, tmp_path, load_site(str(p))))
+    assert c.get("/api/species").json()["species"] == ["cat", "owls", "person"]  # exactly these, in order
+
+
+def test_derived_species_resolve_as_valid_taxa(tmp_path):
+    from camera_mcp.history import History
+    from camera_mcp.taxa import expand_taxon
+    _seed_visits(tmp_path)
+    cams = load_cameras(_cfg(tmp_path), require_login=False)
+    history = History(tmp_path / "monitor.db", cams)
+    for taxon in history.observed_taxa():
+        assert expand_taxon(taxon)  # a group, union or class expands to at least one taxonomy prefix
+
+
 def test_stats_endpoint_takes_a_camera(tmp_path):
     import time
     from camera_mcp.store import Store

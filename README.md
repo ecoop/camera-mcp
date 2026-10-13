@@ -149,6 +149,11 @@ site:
   allowlist: [domestic cat, domestic dog, northern raccoon, striped skunk, virginia opossum, aves]
 ```
 
+The web dashboard's species filter is built from what's actually been seen (most frequent first,
+with `night-critters` once one has shown up). To pin it to a fixed menu instead, set
+`menu_species: [night-critters, cat, raccoon, …]` under `site:` — then only those show, in that
+order.
+
 Settings, site-wide under `monitor:` or per camera: `pre_seconds`, `post_seconds`,
 `quiet_seconds`, `motion_fps`, `pixel_threshold`, `min_changed`, `detect_every_seconds`,
 `visit_close_seconds`, `min_box_conf`, `max_boxes`, `save_people_images` (default true),

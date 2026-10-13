@@ -231,6 +231,26 @@ class History:
                 "total_visits": len(rows), "rows": out, "coverage": self.coverage(names, t0, t1, db),
             }
 
+    def observed_taxa(self, restrict: tuple[str, ...] = ()) -> list[str]:
+        """The taxon filter values worth offering in the UI, as taxa `find_visits` accepts.
+
+        With `restrict` set (the site's `menu_species`), exactly those, in that order — a curated
+        menu the operator pins. Otherwise derived from the log: the distinct `grp` values actually
+        logged, most frequent first, plus any applicable UNIONS (e.g. "night-critters" once a
+        raccoon, skunk or opossum has been seen). Empty when there's no visit log yet."""
+        if restrict:
+            return list(restrict)
+        try:
+            with closing(self._db()) as db:
+                rows = db.execute("SELECT grp, COUNT(*) n FROM visits WHERE grp IS NOT NULL AND grp != ''"
+                                  " GROUP BY grp ORDER BY n DESC, grp").fetchall()
+        except HistoryError:
+            return []  # no log yet: the monitor hasn't run
+        observed = [r["grp"] for r in rows]
+        seen = set(observed)
+        unions = [u for u, members in UNIONS.items() if seen.intersection(members)]
+        return unions + observed
+
     def visit_thumbnail(self, visit_id: int, data_dir: Path) -> tuple[bytes, str]:
         with closing(self._db()) as db:
             row = db.execute("SELECT * FROM visits WHERE id = ?", (visit_id,)).fetchone()
