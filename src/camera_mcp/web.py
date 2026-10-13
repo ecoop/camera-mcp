@@ -96,7 +96,8 @@ def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
         return r if isinstance(r, Response) else JSONResponse(r)
 
     async def api_stats(request: Request):
-        r = _ask(history.analysis_series, since=request.query_params.get("since", "24h"))
+        r = _ask(history.analysis_series, since=request.query_params.get("since", "24h"),
+                 camera=request.query_params.get("camera") or None)
         return r if isinstance(r, Response) else JSONResponse(r)
 
     async def api_visit_boxes(request: Request):
@@ -302,7 +303,11 @@ dialog .vmeta a{color:var(--accent);cursor:pointer}
 <div class="bar"><div class="brand">&#129437; Yard Sentry</div>
   <div class="who"><a href="/zones" style="color:var(--accent);text-decoration:none">zones &rarr;</a> &middot; <span id="clock"></span></div></div>
 <div class="health" id="health">loading&hellip;</div>
-<div class="sect" style="margin-top:0">Throughput &amp; backlog</div>
+<div class="sect" style="margin-top:0;display:flex;justify-content:space-between;align-items:center;gap:1rem">
+  <span>Throughput &amp; backlog</span>
+  <select id="chartcam" style="font-family:var(--mono);font-size:.72rem;background:var(--frame);color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:.2rem .4rem;text-transform:none;letter-spacing:0">
+    <option value="">all cameras</option></select>
+</div>
 <div class="chart" id="chart"></div>
 <div class="filters">
   <select id="since"><option value="2h">last 2h</option><option value="12h">12h</option>
@@ -338,7 +343,9 @@ async function loadHealth(){try{const h=await (await fetch('/api/health?since=24
     `${c.camera}${c.state==='paused'?' (paused)':''}</span>`).join('')+`</div>`;
   $('#health').innerHTML=s;}catch(e){$('#health').textContent='health unavailable';}}
 async function loadCameras(){const cs=await (await fetch('/api/cameras')).json();
-  $('#camera').insertAdjacentHTML('beforeend',cs.filter(c=>c.enabled).map(c=>`<option value="${c.name}">${c.name}</option>`).join(''));
+  const opts=cs.filter(c=>c.enabled).map(c=>`<option value="${c.name}">${c.name}</option>`).join('');
+  $('#camera').insertAdjacentHTML('beforeend',opts);
+  $('#chartcam').insertAdjacentHTML('beforeend',opts);
   $('#live').innerHTML=cs.filter(c=>c.enabled&&c.stream).map(c=>`<a class="tile"><img loading="lazy" `+
     `src="/api/snapshot/${c.name}?w=480" alt="${c.name}"><div class="meta"><span class="sp">${c.name}</span></div></a>`).join('');}
 async function loadVisits(){const r=await (await fetch('/api/visits?'+params())).json();
@@ -375,9 +382,10 @@ async function toggleBoxes(){const b=$('#boxbtn'); if(boxesOn){resetBoxes();retu
   drawBoxes();}
 $('#boxbtn').onclick=toggleBoxes;
 $('#clip').onclick=e=>{if(e.target.id==='clip')$('#clip').close();};
-async function loadStats(){try{const d=await (await fetch('/api/stats?since='+$('#since').value)).json();
+async function loadStats(){try{const cc=$('#chartcam').value;
+  const d=await (await fetch('/api/stats?since='+$('#since').value+(cc?'&camera='+encodeURIComponent(cc):''))).json();
   const pts=d.points||[]; const el=$('#chart');
-  if(!pts.length){el.innerHTML='<div class="empty" style="padding:1rem">no stats yet</div>';return;}
+  if(!pts.length){el.innerHTML='<div class="empty" style="padding:1rem">'+(d.camera?'no per-camera stats for '+d.camera+' yet (recorded from this build on)':'no stats yet')+'</div>';return;}
   const W=1000,H=132,pad=4,n=pts.length,cap=1800;
   const maxLag=Math.max(cap, ...pts.map(p=>p.lag));
   const X=i=>pad+i*(W-2*pad)/(n-1||1), Y=v=>H-pad-(v/maxLag)*(H-2*pad);
@@ -389,10 +397,11 @@ async function loadStats(){try{const d=await (await fetch('/api/stats?since='+$(
   el.innerHTML=`<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">`+
     `<line x1="0" y1="${capY}" x2="${W}" y2="${capY}" stroke="var(--warn)" stroke-dasharray="5 5" stroke-width="1" opacity=".55"/>`+
     `<path d="${area}" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.5"/>${drops}</svg>`+
-    `<div class="clabel"><span>analysis lag (area) &middot; <span class="bad">drops</span> (ticks) &middot; dashed = 30-min cap</span>`+
+    `<div class="clabel"><span>${d.camera?'<b>'+d.camera+'</b> &middot; ':''}analysis lag (area) &middot; <span class="bad">drops</span> (ticks) &middot; dashed = 30-min cap</span>`+
     `<span>${(d.from||'').slice(5,16)} &rarr; ${(d.to||'').slice(11,16)}</span></div>`;
 }catch(e){$('#chart').innerHTML='<div class="empty" style="padding:1rem">stats unavailable</div>';}}
 ['since','taxon','camera'].forEach(id=>$('#'+id).onchange=()=>{loadVisits();loadStats();});
+$('#chartcam').onchange=loadStats;
 tick();setInterval(tick,1000);loadCameras();loadHealth();loadStats();loadVisits();
 setInterval(()=>{loadHealth();loadStats();},60000);
 </script></div></body></html>"""

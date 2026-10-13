@@ -318,12 +318,18 @@ def test_analyzer_persists_stats(tmp_path):
     store = Store(tmp_path / "monitor.db")
     a = Analyzer(detector=None, stop=threading.Event(), store=store)
     a._last_stats = time.time() - 61        # pretend an interval has elapsed
-    a._analyzed, a._dropped, a._infer_seconds, a._max_lag = 10, 2, 1.5, 42.0
+    a._analyzed.update(east_fence=10, backyard=4)
+    a._dropped["east_fence"] = 2
+    a._infer_seconds.update(east_fence=1.5, backyard=0.5)
+    a._max_lag.update(east_fence=42.0, backyard=5.0)
     a._flush_stats(force=True)
     db = sqlite3.connect(tmp_path / "monitor.db")
-    row = db.execute("SELECT queue_depth, max_lag, analyzed, dropped, infer_seconds FROM analysis_stats").fetchone()
-    assert row == (0, 42.0, 10, 2, 1.5)
-    assert (a._analyzed, a._dropped, a._max_lag, a._infer_seconds) == (0, 0, 0.0, 0.0)  # reset after flush
+    agg = db.execute("SELECT queue_depth, max_lag, analyzed, dropped, infer_seconds FROM analysis_stats").fetchone()
+    assert agg == (0, 42.0, 14, 2, 2.0)  # the aggregate is the sum (max for lag) across cameras
+    percam = {r[0]: (r[1], r[2], r[3]) for r in
+              db.execute("SELECT camera, analyzed, dropped, max_lag FROM analysis_camera_stats")}
+    assert percam == {"east_fence": (10, 2, 42.0), "backyard": (4, 0, 5.0)}
+    assert not (a._analyzed or a._dropped or a._max_lag or a._infer_seconds)  # all reset after flush
 
 
 def test_alerter_fires_once_per_cooldown_for_alert_species(monkeypatch):

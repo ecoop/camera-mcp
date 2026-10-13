@@ -544,9 +544,12 @@ class Analyzer:
         self._behind = False
         self._skipped: dict[str, float] = defaultdict(float)  # seconds skipped per camera since the last report
         self._last_report = 0.0
-        # analysis-stats counters for the current interval (written only from the analyzer thread)
-        self._analyzed = self._dropped = 0
-        self._infer_seconds = self._max_lag = 0.0
+        # analysis-stats counters for the current interval, per camera (written only from the
+        # analyzer thread). The aggregate written to analysis_stats is the sum/max across cameras.
+        self._analyzed: dict[str, int] = defaultdict(int)
+        self._dropped: dict[str, int] = defaultdict(int)
+        self._infer_seconds: dict[str, float] = defaultdict(float)
+        self._max_lag: dict[str, float] = defaultdict(float)
         self._last_stats = 0.0
         self.alerter: Alerter | None = None  # set by main() when alerts are configured
 
@@ -576,12 +579,13 @@ class Analyzer:
                 elif time.time() - seg.end > worker.s.max_defer_seconds:
                     self._skip(worker, seg)
                 else:
+                    cam = worker.camera.name
                     lag = time.time() - seg.end
                     started = time.perf_counter()
                     frames = self._analyze(worker, seg)
-                    self._infer_seconds += time.perf_counter() - started
-                    self._analyzed += frames or 0  # frames (inferences) run, not segments
-                    self._max_lag = max(self._max_lag, lag)
+                    self._infer_seconds[cam] += time.perf_counter() - started
+                    self._analyzed[cam] += frames or 0  # frames (inferences) run, not segments
+                    self._max_lag[cam] = max(self._max_lag[cam], lag)
             except Exception as e:  # a bad segment or a model error must not stop the monitor
                 log.warning("%s: analysis failed for %s: %s", worker.camera.name, seg.path.name, e)
             finally:
@@ -596,16 +600,26 @@ class Analyzer:
             return
         if self.store is None or (not force and now - self._last_stats < self.STATS_EVERY):
             return
-        self.store.add_analysis_stats(now, self.queue.qsize(), self._max_lag,
-                                      self._analyzed, self._dropped, self._infer_seconds)
-        self._analyzed = self._dropped = 0
-        self._infer_seconds = self._max_lag = 0.0
+        with self.queue.mutex:  # per-camera backlog: tally the waiting segments by camera
+            depth: dict[str, int] = defaultdict(int)
+            for w, _ in self.queue.queue:
+                depth[w.camera.name] += 1
+        cams = set(self._analyzed) | set(self._dropped) | set(self._infer_seconds) | set(self._max_lag) | set(depth)
+        self.store.add_analysis_stats(now, sum(depth.values()), max(self._max_lag.values(), default=0.0),
+                                      sum(self._analyzed.values()), sum(self._dropped.values()),
+                                      sum(self._infer_seconds.values()))
+        self.store.add_camera_stats(now, [(c, depth[c], self._max_lag[c], self._analyzed[c],
+                                           self._dropped[c], self._infer_seconds[c]) for c in sorted(cams)])
+        self._analyzed.clear()
+        self._dropped.clear()
+        self._infer_seconds.clear()
+        self._max_lag.clear()
         self._last_stats = now
 
     def _skip(self, worker: CameraWorker, seg: ringbuffer.Segment) -> None:
         """Deferred past the limit and still not reached: drop it, but record the blind spot."""
         worker.store.add_skipped(worker.camera.name, seg.start, seg.end)
-        self._dropped += 1
+        self._dropped[worker.camera.name] += 1
         self._skipped[worker.camera.name] += seg.end - seg.start
         now = time.time()
         if now - self._last_report >= self.SKIP_REPORT_EVERY:

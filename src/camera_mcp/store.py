@@ -86,6 +86,17 @@ CREATE TABLE IF NOT EXISTS analysis_stats (  -- one sample per interval: how the
   dropped        INTEGER NOT NULL,  -- segments dropped (deferred past the limit) in the interval
   infer_seconds  REAL NOT NULL      -- total analysis time in the interval (mean per frame = infer_seconds / analyzed)
 );
+
+CREATE TABLE IF NOT EXISTS analysis_camera_stats (  -- the same sample, split per camera (which cameras drive the load)
+  at             TEXT NOT NULL,     -- sample time (shared with the analysis_stats row for this interval)
+  camera         TEXT NOT NULL,
+  queue_depth    INTEGER NOT NULL,  -- this camera's segments waiting at the sample
+  max_lag        REAL NOT NULL,     -- this camera's oldest segment age (s) analysed in the interval
+  analyzed       INTEGER NOT NULL,  -- this camera's frames analysed in the interval
+  dropped        INTEGER NOT NULL,  -- this camera's segments dropped in the interval
+  infer_seconds  REAL NOT NULL,     -- this camera's analysis time in the interval
+  PRIMARY KEY (at, camera)
+);
 """
 
 # Columns added after the first release, added to an existing database when it's opened.
@@ -180,6 +191,18 @@ class Store:
         with self._lock:
             self._db.execute("INSERT OR REPLACE INTO analysis_stats VALUES (?, ?, ?, ?, ?, ?)",
                              (iso(at), queue_depth, round(max_lag, 1), analyzed, dropped, round(infer_seconds, 3)))
+
+    def add_camera_stats(self, at: float, rows: list[tuple]) -> None:
+        """Per-camera analyzer samples for one interval: rows of
+        (camera, queue_depth, max_lag, analyzed, dropped, infer_seconds). Shares `at` with the
+        aggregate analysis_stats row, so the two line up on a chart."""
+        if not rows:
+            return
+        at_iso = iso(at)
+        values = [(at_iso, cam, depth, round(lag, 1), an, dr, round(inf, 3))
+                  for cam, depth, lag, an, dr, inf in rows]
+        with self._lock:
+            self._db.executemany("INSERT OR REPLACE INTO analysis_camera_stats VALUES (?, ?, ?, ?, ?, ?, ?)", values)
 
     def add_visit(self, visit, *, model: str, thumbnail: str | None, clip: str | None) -> int:
         """Store a closed visits.Visit and its per-frame detections (completing its open row, if any)."""

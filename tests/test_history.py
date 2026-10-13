@@ -199,6 +199,26 @@ def test_analysis_health(log):
     assert history.analysis_health(since="1s")["samples"] == 0  # window excludes both samples
 
 
+def test_analysis_series_aggregate_and_per_camera(tmp_path):
+    store = Store(tmp_path / "monitor.db")
+    now = time.time()
+    store.add_analysis_stats(now - 120, 5, 30.0, 80, 1, 40.0)  # interval 1 aggregate
+    store.add_camera_stats(now - 120, [("east_fence", 4, 30.0, 20, 1, 30.0),
+                                       ("backyard", 1, 10.0, 60, 0, 10.0)])
+    store.add_analysis_stats(now - 60, 2, 12.0, 50, 0, 20.0)   # interval 2 aggregate
+    store.add_camera_stats(now - 60, [("east_fence", 2, 12.0, 10, 0, 12.0),
+                                      ("backyard", 0, 5.0, 40, 0, 8.0)])
+    store.close()
+    cams = {"east_fence": Camera("east_fence", "x"), "backyard": Camera("backyard", "x")}
+    history = History(tmp_path / "monitor.db", cams, Site(timezone="America/Los_Angeles"))
+    allpts = history.analysis_series(since="1h")["points"]
+    assert len(allpts) == 2 and allpts[0]["frames"] == 80 and allpts[0]["depth"] == 5  # the aggregate row
+    ef = history.analysis_series(since="1h", camera="east fence")  # loose camera match
+    assert ef["camera"] == "east fence"
+    assert [p["frames"] for p in ef["points"]] == [20, 10] and [p["depth"] for p in ef["points"]] == [4, 2]
+    assert history.analysis_series(since="1h", camera="nope")["points"] == []  # unknown camera: empty
+
+
 def test_queries_close_their_db_connections(log):
     # Regression: each query opens a fresh connection and closes it. A leaked connection kept a
     # long-lived server pinned to a replaced monitor.db, so queries read a stale (deleted) file.

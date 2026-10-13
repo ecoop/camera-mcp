@@ -270,17 +270,34 @@ class History:
             "peak_queue_depth": max(r["queue_depth"] for r in rows),
         }
 
-    def analysis_series(self, since: str = "24h", until: str | None = None, max_points: int = 300) -> dict:
+    def analysis_series(self, since: str = "24h", until: str | None = None, max_points: int = 300,
+                        camera: str | None = None) -> dict:
         """The analysis-stats samples over a window, for charting the backlog/throughput timeline.
-        Downsampled to at most `max_points` points."""
+        With `camera`, just that camera's load (from analysis_camera_stats, which only has data from
+        when per-camera recording started); otherwise the aggregate across all cameras. Downsampled
+        to at most `max_points` points."""
         now = time.time()
         t0, t1 = parse_when(since, now, self.tz), parse_when(until, now, self.tz)
-        window = {"from": self._local(self._iso(t0)), "to": self._local(self._iso(t1))}
+        window = {"from": self._local(self._iso(t0)), "to": self._local(self._iso(t1)), "camera": camera}
         with closing(self._db()) as db:
-            if "analysis_stats" not in _tables(db):
-                return {**window, "points": []}
-            rows = db.execute("SELECT at, queue_depth, max_lag, analyzed, dropped FROM analysis_stats "
-                              "WHERE at >= ? AND at <= ? ORDER BY at", (self._iso(t0), self._iso(t1))).fetchall()
+            tables = _tables(db)
+            if camera is not None:
+                cam = find_camera(self.cameras, camera)
+                name = cam.name if cam else camera
+                if "analysis_camera_stats" not in tables:
+                    return {**window, "points": []}
+                rows = db.execute(
+                    "SELECT at, queue_depth, max_lag, analyzed, dropped FROM analysis_camera_stats "
+                    "WHERE camera = ? AND at >= ? AND at <= ? ORDER BY at",
+                    (name, self._iso(t0), self._iso(t1))).fetchall()
+            else:
+                if "analysis_stats" not in tables:
+                    return {**window, "points": []}
+                # sum across cameras per sample, so legacy single rows and new per-camera rows both read right
+                rows = db.execute(
+                    "SELECT at, SUM(queue_depth) queue_depth, MAX(max_lag) max_lag, "
+                    "SUM(analyzed) analyzed, SUM(dropped) dropped FROM analysis_stats "
+                    "WHERE at >= ? AND at <= ? GROUP BY at ORDER BY at", (self._iso(t0), self._iso(t1))).fetchall()
         step = max(1, len(rows) // max_points)
         points = [{"at": self._local(r["at"]), "depth": r["queue_depth"], "lag": round(r["max_lag"]),
                    "frames": r["analyzed"], "dropped": r["dropped"]} for r in rows[::step]]

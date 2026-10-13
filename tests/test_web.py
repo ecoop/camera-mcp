@@ -59,6 +59,24 @@ def test_visit_boxes_maps_roi_to_full_frame(tmp_path):
     assert c.get("/api/visit/999/boxes").status_code == 404
 
 
+def test_stats_endpoint_takes_a_camera(tmp_path):
+    import time
+    from camera_mcp.store import Store
+    from camera_mcp.config import Camera
+    from camera_mcp.web import build_app
+    store = Store(tmp_path / "monitor.db")
+    now = time.time()
+    store.add_analysis_stats(now - 60, 3, 20.0, 70, 0, 30.0)
+    store.add_camera_stats(now - 60, [("backyard", 1, 8.0, 50, 0, 10.0), ("alley", 2, 20.0, 20, 0, 20.0)])
+    store.close()
+    cams = {"backyard": Camera("backyard", "b.mp4"), "alley": Camera("alley", "a.mp4")}
+    c = starlette_testclient.TestClient(build_app(cams, tmp_path, None))
+    allr = c.get("/api/stats").json()
+    assert allr["camera"] is None and allr["points"][0]["frames"] == 70  # aggregate
+    one = c.get("/api/stats?camera=alley").json()
+    assert one["camera"] == "alley" and one["points"][0]["frames"] == 20 and one["points"][0]["depth"] == 2
+
+
 @pytest.fixture
 def no_reload(monkeypatch):
     # the editor restarts the monitor LaunchAgent on save; stub it in tests
