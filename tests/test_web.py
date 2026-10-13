@@ -77,6 +77,55 @@ def test_stats_endpoint_takes_a_camera(tmp_path):
     assert one["camera"] == "alley" and one["points"][0]["frames"] == 20 and one["points"][0]["depth"] == 2
 
 
+def _one_visit(tmp_path):
+    """A single stored visit, so label endpoints have something to point at."""
+    import time
+    from camera_mcp.store import Store
+    from camera_mcp.visits import Visit, Detection, Box
+    from camera_mcp.taxa import Label
+    store = Store(tmp_path / "monitor.db")
+    v = Visit("fence", "animal", start=time.time(), last_seen=time.time() + 5, frames=1)
+    v.votes[("animal", "")] = 1.0
+    v.log = [(v.start + 1, [Detection(Box(0.5, 0.5, 0.2, 0.2, 0.9), Label("animal", "", 0.5), "animal")])]
+    store.add_visit(v, model="m", thumbnail=None, clip=None)
+    store.close()
+
+
+def test_visit_label_stores_and_reads_back(tmp_path):
+    from camera_mcp.config import Camera
+    from camera_mcp.web import build_app
+    _one_visit(tmp_path)
+    c = starlette_testclient.TestClient(build_app({"fence": Camera("fence", "f.mp4")}, tmp_path, None))
+    assert c.get("/api/visit/1/label").json() == {"label": None, "editable": True}
+    r = c.post("/api/visit/1/label", json={"verdict": "false", "note": "swaying branch"})
+    assert r.status_code == 200 and r.json()["ok"] is True
+    got = c.get("/api/visit/1/label").json()
+    assert got["label"]["verdict"] == "false" and got["label"]["note"] == "swaying branch"
+    # re-labelling replaces (upsert on visit_id), and an empty note clears it
+    assert c.post("/api/visit/1/label", json={"verdict": "real"}).status_code == 200
+    again = c.get("/api/visit/1/label").json()["label"]
+    assert again["verdict"] == "real" and again["note"] is None
+
+
+def test_visit_label_rejects_bad_verdict_and_unknown_visit(tmp_path):
+    from camera_mcp.config import Camera
+    from camera_mcp.web import build_app
+    _one_visit(tmp_path)
+    c = starlette_testclient.TestClient(build_app({"fence": Camera("fence", "f.mp4")}, tmp_path, None))
+    assert c.post("/api/visit/1/label", json={"verdict": "maybe"}).status_code == 400
+    assert c.post("/api/visit/999/label", json={"verdict": "real"}).status_code == 404
+
+
+def test_visit_label_blocked_when_readonly(tmp_path, monkeypatch):
+    monkeypatch.setenv("CAMERA_MCP_WEB_READONLY", "1")
+    from camera_mcp.config import Camera
+    from camera_mcp.web import build_app
+    _one_visit(tmp_path)
+    c = starlette_testclient.TestClient(build_app({"fence": Camera("fence", "f.mp4")}, tmp_path, None))
+    assert c.get("/api/visit/1/label").json()["editable"] is False
+    assert c.post("/api/visit/1/label", json={"verdict": "real"}).status_code == 403
+
+
 @pytest.fixture
 def no_reload(monkeypatch):
     # the editor restarts the monitor LaunchAgent on save; stub it in tests

@@ -327,6 +327,28 @@ class History:
         return {"camera": v["camera"], "started_at": v["started_at"], "has_clip": bool(v["clip"]),
                 "label": v["label"], "taxonomy": v["taxonomy"], "frames": frames}
 
+    def visit_label(self, visit_id: int) -> dict | None:
+        """The human correctness label on a visit, or None if it hasn't been labelled (or the log
+        is from an older monitor with no visit_labels table)."""
+        with closing(self._db()) as db:
+            if "visit_labels" not in _tables(db):
+                return None
+            r = db.execute("SELECT verdict, note, at FROM visit_labels WHERE visit_id = ?",
+                           (visit_id,)).fetchone()
+        if r is None:
+            return None
+        return {"verdict": r["verdict"], "note": r["note"], "at": self._local(r["at"])}
+
+    def label_counts(self) -> dict:
+        """How many visits carry each verdict, and the total labelled. Zeros (and an empty
+        by_verdict) when nothing's been labelled or the log predates the visit_labels table."""
+        with closing(self._db()) as db:
+            if "visit_labels" not in _tables(db):
+                return {"total": 0, "by_verdict": {}}
+            rows = db.execute("SELECT verdict, COUNT(*) AS n FROM visit_labels GROUP BY verdict").fetchall()
+        by_verdict = {r["verdict"]: r["n"] for r in rows}
+        return {"total": sum(by_verdict.values()), "by_verdict": by_verdict}
+
     def visit_clip(self, visit_id: int, data_dir: Path) -> Path:
         """The path to a visit's saved clip. Raises HistoryError if the visit or its clip is missing."""
         with closing(self._db()) as db:

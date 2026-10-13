@@ -4,11 +4,13 @@ over the same History API the MCP tools use. Starlette + uvicorn, no new framewo
 
     python -m camera_mcp.web [--config cameras.yaml] [--data-dir data] [--host 0.0.0.0] [--port 8080]
 
-The visit browser, analytics and live snapshots are read-only. The /zones editor is read-write:
-it draws per-camera ROI / motion-ROI / motion-mask on a snapshot and saves them to an app-owned
-overlay (data/zones.json, merged by load_cameras), then restarts the monitor to apply. Editing is
-LAN-only and unauthenticated for now (CAMERA_MCP_WEB_READONLY=1 disables it); real auth arrives
-with external access (Cloudflare).
+The visit browser, analytics and live snapshots are read-only. Two surfaces are read-write: the
+/zones editor draws per-camera ROI / motion-ROI / motion-mask on a snapshot and saves them to an
+app-owned overlay (data/zones.json, merged by load_cameras), then restarts the monitor to apply;
+and the visit modal captures a one-click correctness verdict per visit (real / false /
+wrong_species) into the monitor.db visit_labels table, as training data for a later re-scorer.
+Both are gated by the same flag: editing is LAN-only and unauthenticated for now
+(CAMERA_MCP_WEB_READONLY=1 disables it); real auth arrives with external access (Cloudflare).
 """
 
 from __future__ import annotations
@@ -32,6 +34,7 @@ from camera_mcp.config import (ConfigError, default_config_path, default_data_di
                                load_cameras, load_site, load_zone_overlay, parse_rect, parse_rects,
                                save_zone_overlay)
 from camera_mcp.history import History, HistoryError
+from camera_mcp.store import VERDICTS, Store
 
 # The monitor's launchd label, kicked to reload cameras.yaml + the zone overlay after an edit.
 MONITOR_LABEL = os.environ.get("CAMERA_MCP_LABEL", "nu.cooper.camera-mcp")
@@ -52,7 +55,8 @@ def _reload_monitor() -> tuple[bool, str]:
 
 
 def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
-    history = History(data_dir / "monitor.db", cameras, site)
+    db_path = data_dir / "monitor.db"
+    history = History(db_path, cameras, site)
     zones_path = data_dir / "zones.json"
     editable = os.environ.get("CAMERA_MCP_WEB_READONLY", "").lower() not in ("1", "true", "yes")
 
@@ -140,6 +144,37 @@ def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
         return JSONResponse({"camera": d["camera"], "has_clip": d["has_clip"],
                              "roi": list(roi) if roi else None, "label": d["label"],
                              "taxonomy": d["taxonomy"], "best": best_i, "frames": frames})
+
+    async def api_visit_label_get(request: Request):
+        vid = int(request.path_params["vid"])
+        r = _ask(history.visit_label, vid)
+        if isinstance(r, Response):
+            return r
+        return JSONResponse({"label": r, "editable": editable})
+
+    async def api_visit_label_set(request: Request):
+        if not editable:
+            return JSONResponse({"error": "labeling is disabled (CAMERA_MCP_WEB_READONLY)"}, status_code=403)
+        vid = int(request.path_params["vid"])
+        try:
+            body = await request.json()
+        except (ValueError, json.JSONDecodeError):
+            return JSONResponse({"error": "invalid JSON"}, status_code=400)
+        verdict = (body.get("verdict") or "").strip()
+        if verdict not in VERDICTS:
+            return JSONResponse({"error": f"verdict must be one of {', '.join(VERDICTS)}"}, status_code=400)
+        note = body.get("note")
+        note = str(note).strip() or None if note is not None else None
+        if not db_path.exists():
+            return JSONResponse({"error": "there's no visit log yet: the monitor hasn't run"}, status_code=503)
+        store = Store(db_path)
+        try:
+            store.set_visit_label(vid, verdict, note)
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=404)
+        finally:
+            store.close()
+        return JSONResponse({"ok": True, "label": {"verdict": verdict, "note": note}})
 
     async def media_thumb(request: Request):
         try:
@@ -237,6 +272,8 @@ def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
         Route("/api/zones/{camera}", api_zones_save, methods=["POST"]),
         Route("/api/snapshot/{camera}", api_snapshot),
         Route("/api/visit/{vid:int}/boxes", api_visit_boxes),
+        Route("/api/visit/{vid:int}/label", api_visit_label_get, methods=["GET"]),
+        Route("/api/visit/{vid:int}/label", api_visit_label_set, methods=["POST"]),
         Route("/media/visit/{vid:int}/thumb", media_thumb),
         Route("/media/visit/{vid:int}/clip", media_clip),
     ])
@@ -290,8 +327,15 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 dialog{border:1px solid var(--line);border-radius:12px;background:var(--frame);color:var(--ink);
   max-width:92vw;padding:0}
 dialog video{display:block;max-width:86vw;max-height:76vh;border-radius:12px 12px 0 0;background:#000}
-dialog .vmeta{font-family:var(--mono);font-size:.74rem;padding:.6rem .8rem;display:flex;justify-content:space-between;gap:1rem;align-items:center}
+dialog .vmeta{font-family:var(--mono);font-size:.74rem;padding:.6rem .8rem;display:flex;justify-content:space-between;gap:.8rem;align-items:center;flex-wrap:wrap}
 dialog .vmeta a{color:var(--accent);cursor:pointer}
+.vact{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
+.lblset{display:inline-flex;gap:.3rem}
+.lblbtn{border:1px solid var(--line);border-radius:6px;padding:.15rem .5rem;color:var(--muted);background:none;font-family:var(--mono);font-size:.72rem;cursor:pointer}
+.lblbtn:hover:not(:disabled){border-color:var(--ink);color:var(--ink)}
+.lblbtn.on[data-v=real]{color:var(--good);border-color:var(--good)}
+.lblbtn.on[data-v=false],.lblbtn.on[data-v=wrong_species]{color:var(--warn);border-color:var(--warn)}
+.lblbtn:disabled{opacity:.5;cursor:default}
 .stagewrap{position:relative;display:block;line-height:0}
 .boxov{position:absolute;top:0;left:0;pointer-events:none;display:none}
 .boxov rect{fill:none;stroke:#ff3b30;stroke-width:2;vector-effect:non-scaling-stroke}
@@ -326,7 +370,11 @@ dialog .vmeta a{color:var(--accent);cursor:pointer}
 <dialog id="clip"><div class="stagewrap"><video controls></video>
   <svg class="boxov" id="boxov" viewBox="0 0 100 100" preserveAspectRatio="none"></svg></div>
   <div class="vmeta"><span id="clipmeta"></span>
-  <span><button class="boxbtn" id="boxbtn">show boxes</button> &middot; <a id="cliplink" target="_blank">open</a></span></div></dialog>
+  <span class="vact"><span class="lblset" id="lblset" title="was this detection correct?">
+    <button class="lblbtn" data-v="real">&check; real</button>
+    <button class="lblbtn" data-v="false">&times; false</button>
+    <button class="lblbtn" data-v="wrong_species">&times; wrong sp.</button></span>
+  <span><button class="boxbtn" id="boxbtn">show boxes</button> &middot; <a id="cliplink" target="_blank">open</a></span></span></div></dialog>
 <script>
 const $=s=>document.querySelector(s), params=()=>{const p=new URLSearchParams();
   p.set('since',$('#since').value); if($('#taxon').value)p.set('taxon',$('#taxon').value);
@@ -359,10 +407,23 @@ async function loadVisits(){const r=await (await fetch('/api/visits?'+params()))
     const id=t.dataset.id; const dlg=$('#clip'); const vid=dlg.querySelector('video');
     const hasClip=t.dataset.clip==='1';
     if(hasClip){vid.src='/media/visit/'+id+'/clip'; vid.style.display='';}else{vid.removeAttribute('src');vid.style.display='none';}
-    curVisit=id; resetBoxes(); $('#boxbtn').disabled=!hasClip;
+    curVisit=id; resetBoxes(); loadLabel(id); $('#boxbtn').disabled=!hasClip;
     $('#clipmeta').textContent=t.querySelector('.sp').textContent+' — '+t.querySelector('.sub').textContent;
     $('#cliplink').href='/media/visit/'+id+'/clip'; dlg.showModal();
     if(hasClip) toggleBoxes();});}  // show the boxed still by default
+let labelEditable=true;
+function markLabel(v){$('#lblset').querySelectorAll('.lblbtn').forEach(b=>b.classList.toggle('on',b.dataset.v===v));}
+async function loadLabel(id){markLabel(null);
+  $('#lblset').querySelectorAll('.lblbtn').forEach(b=>b.disabled=true);
+  try{const d=await (await fetch('/api/visit/'+id+'/label')).json();
+    labelEditable=d.editable; markLabel(d.label&&d.label.verdict);
+    $('#lblset').querySelectorAll('.lblbtn').forEach(b=>b.disabled=!d.editable);
+  }catch(e){}}
+async function setLabel(v){if(!labelEditable||!curVisit)return;
+  try{const res=await fetch('/api/visit/'+curVisit+'/label',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({verdict:v})});
+    if(res.ok)markLabel(v);}catch(e){}}
+$('#lblset').querySelectorAll('.lblbtn').forEach(b=>b.onclick=()=>setLabel(b.dataset.v));
 let curVisit=null, boxesOn=false, boxData=null;
 function resetBoxes(){boxesOn=false;boxData=null;const s=$('#boxov');s.style.display='none';s.innerHTML='';
   const b=$('#boxbtn');b.classList.remove('on');b.textContent='show boxes';}

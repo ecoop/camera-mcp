@@ -11,8 +11,11 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
+
+VERDICTS = ("real", "false", "wrong_species")  # a human's correctness label on a visit
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS motion_windows (
@@ -54,6 +57,13 @@ CREATE TABLE IF NOT EXISTS visit_frames (
   boxes     TEXT NOT NULL           -- JSON: [{"conf": 0.94, "bbox": [x, y, w, h]}], fractions of the frame
 );
 CREATE INDEX IF NOT EXISTS visit_frames_visit ON visit_frames(visit_id);
+
+CREATE TABLE IF NOT EXISTS visit_labels (  -- a human's correctness label on a visit (training data for the re-scorer)
+  visit_id  INTEGER PRIMARY KEY REFERENCES visits(id),  -- one label per visit; a re-label replaces it
+  verdict   TEXT NOT NULL,       -- 'real' | 'false' | 'wrong_species'
+  note      TEXT,                -- optional free text; NULL if none
+  at        TEXT NOT NULL        -- when the label was set (UTC ISO)
+);
 
 CREATE TABLE IF NOT EXISTS camera_uptime (
   camera      TEXT NOT NULL,
@@ -122,6 +132,7 @@ class Store:
         self._lock = threading.Lock()  # one connection, shared by the camera threads
         with self._lock:
             self._db.execute("PRAGMA journal_mode=WAL")
+            self._db.execute("PRAGMA busy_timeout=5000")  # wait out the other writer (web labels vs. monitor)
             self._db.executescript(SCHEMA)
             for table, columns in ADDED_COLUMNS.items():
                 have = {row[1] for row in self._db.execute(f"PRAGMA table_info({table})")}
@@ -230,6 +241,21 @@ class Store:
                              json.dumps(boxes)))
             self._db.executemany("INSERT INTO visit_frames VALUES (?, ?, ?, ?, ?, ?)", rows)
             return visit_id
+
+    def set_visit_label(self, visit_id: int, verdict: str, note: str | None = None) -> None:
+        """Record a human's correctness verdict on a visit, upserting on visit_id so a re-label
+        replaces the old one. Raises ValueError for an unknown verdict or a visit that isn't there."""
+        if verdict not in VERDICTS:
+            raise ValueError(f"verdict must be one of {', '.join(VERDICTS)}")
+        with self._lock:
+            if self._db.execute("SELECT 1 FROM visits WHERE id = ?", (visit_id,)).fetchone() is None:
+                raise ValueError(f"no visit {visit_id}")
+            self._db.execute(
+                "INSERT INTO visit_labels (visit_id, verdict, note, at) VALUES (?, ?, ?, ?)"
+                " ON CONFLICT(visit_id) DO UPDATE SET"
+                " verdict = excluded.verdict, note = excluded.note, at = excluded.at",
+                (visit_id, verdict, note, iso(time.time())),
+            )
 
     def visits(self, camera: str | None = None) -> list[sqlite3.Row]:
         with self._lock:

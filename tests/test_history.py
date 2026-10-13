@@ -171,6 +171,27 @@ def test_visit_thumbnail(log):
         history.visit_thumbnail(finch_id, data)
 
 
+def test_visit_labels_and_counts(log):
+    history, data = log
+    assert history.label_counts() == {"total": 0, "by_verdict": {}}  # nothing labelled yet
+    ids = [v["id"] for v in history.find_visits("48h")["visits"]]
+    store = Store(data / "monitor.db")
+    store.set_visit_label(ids[0], "false", note="clothesline")
+    store.set_visit_label(ids[1], "false")
+    store.set_visit_label(ids[2], "real")
+    store.set_visit_label(ids[0], "wrong_species")  # re-label replaces the whole row, doesn't add
+    store.close()
+    assert history.label_counts() == {"total": 3, "by_verdict": {"false": 1, "real": 1, "wrong_species": 1}}
+    first = history.visit_label(ids[0])
+    assert first["verdict"] == "wrong_species" and first["note"] is None  # the clothesline note was replaced
+    assert history.visit_label(ids[1])["note"] is None
+    assert history.visit_label(ids[3]) is None  # unlabelled visit
+    with pytest.raises(ValueError, match="verdict"):
+        Store(data / "monitor.db").set_visit_label(ids[0], "nope")
+    with pytest.raises(ValueError, match="no visit"):
+        Store(data / "monitor.db").set_visit_label(999999, "real")
+
+
 def test_monitor_status(log):
     history, _ = log
     status = {s["camera"]: s for s in history.monitor_status()}
