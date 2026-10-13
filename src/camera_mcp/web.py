@@ -197,6 +197,45 @@ def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
             return Response(status_code=404)
         return FileResponse(path, media_type="video/mp4")
 
+    async def media_frame(request: Request):
+        """A full-resolution still of the visit's best-box moment, extracted from the clip (cached).
+        The thumbnail is a low-res crop; this is the full frame, for zooming/panning in the viewer."""
+        from starlette.responses import FileResponse
+        from camera_mcp.capture import FFMPEG
+        vid = int(request.path_params["vid"])
+        cache = data_dir / "frames" / f"{vid}.jpg"
+        if cache.exists():
+            return FileResponse(cache, media_type="image/jpeg", headers={"Cache-Control": "max-age=86400"})
+        try:
+            d = history.visit_boxes(vid)
+            clip = history.visit_clip(vid, data_dir)
+        except HistoryError:
+            return Response(status_code=404)
+        cam = find_camera(cameras, d["camera"])  # clip time of the best-box frame (same math as /boxes)
+        pre = cam.monitor.pre_seconds if cam else 5.0
+        try:
+            start = datetime.fromisoformat(d["started_at"]).timestamp()
+        except (ValueError, TypeError):
+            start = None
+        best = None
+        for f in d["frames"]:
+            mc = max((b.get("conf", 0) or 0 for b in f["boxes"]), default=0.0)
+            if best is None or mc > best[0]:
+                best = (mc, f["ts"])
+        off = 0.0
+        if best and start:
+            try:
+                off = max(0.0, datetime.fromisoformat(best[1]).timestamp() - start + pre)
+            except (ValueError, TypeError):
+                off = 0.0
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        r = await _to_thread(lambda: subprocess.run(
+            [FFMPEG, "-y", "-ss", f"{off:.2f}", "-i", str(clip), "-frames:v", "1", "-q:v", "2", str(cache)],
+            capture_output=True, timeout=30))
+        if r.returncode != 0 or not cache.exists():
+            return Response(status_code=502)
+        return FileResponse(cache, media_type="image/jpeg", headers={"Cache-Control": "max-age=86400"})
+
     async def zones_page(request: Request) -> HTMLResponse:
         return HTMLResponse(ZONES_PAGE)
 
@@ -282,6 +321,7 @@ def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
         Route("/api/visit/{vid:int}/label", api_visit_label_get, methods=["GET"]),
         Route("/api/visit/{vid:int}/label", api_visit_label_set, methods=["POST"]),
         Route("/media/visit/{vid:int}/thumb", media_thumb),
+        Route("/media/visit/{vid:int}/frame", media_frame),
         Route("/media/visit/{vid:int}/clip", media_clip),
     ])
 
@@ -333,7 +373,10 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
   letter-spacing:.05em;margin:1.4rem 0 .6rem}
 dialog{border:1px solid var(--line);border-radius:12px;background:var(--frame);color:var(--ink);
   max-width:92vw;padding:0}
-dialog video{display:block;max-width:86vw;max-height:76vh;border-radius:12px 12px 0 0;background:#000}
+.stage{position:relative;overflow:hidden;max-width:86vw;max-height:76vh;background:#000;border-radius:12px 12px 0 0;touch-action:none}
+.stage.pan{cursor:grab} .stage.panning{cursor:grabbing}
+.pz{position:relative;transform-origin:0 0;line-height:0;will-change:transform}
+.pz img,.pz video{display:block;max-width:86vw;max-height:76vh}
 dialog .vmeta{font-family:var(--mono);font-size:.74rem;padding:.6rem .8rem;display:flex;justify-content:space-between;gap:.8rem;align-items:center;flex-wrap:wrap}
 dialog .vmeta a{color:var(--accent);cursor:pointer}
 .vact{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
@@ -343,7 +386,6 @@ dialog .vmeta a{color:var(--accent);cursor:pointer}
 .lblbtn.on[data-v=real]{color:var(--good);border-color:var(--good)}
 .lblbtn.on[data-v=false],.lblbtn.on[data-v=wrong_species]{color:var(--warn);border-color:var(--warn)}
 .lblbtn:disabled{opacity:.5;cursor:default}
-.stagewrap{position:relative;display:block;line-height:0}
 .boxov{position:absolute;top:0;left:0;pointer-events:none;display:none}
 .boxov rect{fill:none;stroke:#ff3b30;stroke-width:2;vector-effect:non-scaling-stroke}
 .boxov text{fill:#ff3b30;font-family:var(--mono);font-size:3.2px;paint-order:stroke;
@@ -371,14 +413,19 @@ dialog .vmeta a{color:var(--accent);cursor:pointer}
 <div class="empty" id="empty" style="display:none">No visits in this window.</div>
 <div class="sect">Live</div>
 <div class="grid" id="live"></div>
-<dialog id="clip"><div class="stagewrap"><video controls></video>
-  <svg class="boxov" id="boxov" viewBox="0 0 100 100" preserveAspectRatio="none"></svg></div>
+<dialog id="clip"><div class="stage pan" id="stage"><div class="pz" id="pz">
+    <img id="still" alt="frame">
+    <video controls style="display:none"></video>
+    <svg class="boxov" id="boxov" viewBox="0 0 100 100" preserveAspectRatio="none"></svg></div></div>
   <div class="vmeta"><span id="clipmeta"></span>
-  <span class="vact"><span class="lblset" id="lblset" title="was this detection correct?">
-    <button class="lblbtn" data-v="real">&check; real</button>
-    <button class="lblbtn" data-v="false">&times; false</button>
-    <button class="lblbtn" data-v="wrong_species">&times; wrong sp.</button></span>
-  <span><button class="boxbtn" id="boxbtn">show boxes</button> &middot; <a id="cliplink" target="_blank">open</a></span></span></div></dialog>
+  <span class="vact">
+    <button class="boxbtn" id="playbtn">watch clip &#9654;</button>
+    <span class="lblset" id="lblset" title="was this detection correct?">
+      <button class="lblbtn" data-v="real">&check; real</button>
+      <button class="lblbtn" data-v="false">&times; false</button>
+      <button class="lblbtn" data-v="wrong_species">&times; wrong sp.</button></span>
+    <button class="boxbtn on" id="boxbtn">hide boxes</button> &middot; <a id="cliplink" target="_blank">open</a>
+  </span></div></dialog>
 <script>
 const $=s=>document.querySelector(s), params=()=>{const p=new URLSearchParams();
   p.set('since',$('#since').value); if($('#taxon').value)p.set('taxon',$('#taxon').value);
@@ -410,14 +457,7 @@ async function loadVisits(){const r=await (await fetch('/api/visits?'+params()))
     `<img loading="lazy" src="/media/visit/${x.id}/thumb" alt="${x.label}">`+
     `<div class="meta"><div class="sp">${x.label}${x.max_at_once>1?' ×'+x.max_at_once:''}</div>`+
     `<div class="sub">${x.camera} &middot; ${(x.started||'').slice(11,16)}</div></div></a>`).join('');
-  document.querySelectorAll('#grid .tile').forEach(t=>t.onclick=ev=>{ev.preventDefault();
-    const id=t.dataset.id; const dlg=$('#clip'); const vid=dlg.querySelector('video');
-    const hasClip=t.dataset.clip==='1';
-    if(hasClip){vid.src='/media/visit/'+id+'/clip'; vid.style.display='';}else{vid.removeAttribute('src');vid.style.display='none';}
-    curVisit=id; resetBoxes(); loadLabel(id); $('#boxbtn').disabled=!hasClip;
-    $('#clipmeta').textContent=t.querySelector('.sp').textContent+' — '+t.querySelector('.sub').textContent;
-    $('#cliplink').href='/media/visit/'+id+'/clip'; dlg.showModal();
-    if(hasClip) toggleBoxes();});}  // show the boxed still by default
+  document.querySelectorAll('#grid .tile').forEach(t=>t.onclick=ev=>{ev.preventDefault();openVisit(t);});}
 let labelEditable=true;
 function markLabel(v){$('#lblset').querySelectorAll('.lblbtn').forEach(b=>b.classList.toggle('on',b.dataset.v===v));}
 async function loadLabel(id){markLabel(null);
@@ -431,30 +471,60 @@ async function setLabel(v){if(!labelEditable||!curVisit)return;
     headers:{'Content-Type':'application/json'},body:JSON.stringify({verdict:v})});
     if(res.ok)markLabel(v);}catch(e){}}
 $('#lblset').querySelectorAll('.lblbtn').forEach(b=>b.onclick=()=>setLabel(b.dataset.v));
-let curVisit=null, boxesOn=false, boxData=null;
-function resetBoxes(){boxesOn=false;boxData=null;const s=$('#boxov');s.style.display='none';s.innerHTML='';
-  const b=$('#boxbtn');b.classList.remove('on');b.textContent='show boxes';}
-function drawBoxes(){const svg=$('#boxov'), vid=$('#clip').querySelector('video');
-  svg.style.width=(vid.clientWidth||vid.offsetWidth)+'px';   // SVG is replaced: size it to the video
-  svg.style.height=(vid.clientHeight||vid.offsetHeight)+'px';
-  if(!boxData||!boxData.frames||!boxData.frames.length){svg.innerHTML='<text x="2" y="7">no boxes stored for this visit</text>';svg.style.display='block';return;}
+// A visit opens on a full-res still (zoom/pan); "watch clip" swaps to the video. Boxes on by default.
+let curVisit=null, curClip=false, mode='image', boxesOn=true, boxData=null, stillFB=false;
+let zs=1, ztx=0, zty=0;
+function applyZoom(){$('#pz').style.transform='translate('+ztx+'px,'+zty+'px) scale('+zs+')';}
+function resetZoom(){zs=1;ztx=0;zty=0;applyZoom();}
+function activeMedia(){return mode==='video'?$('#clip video'):$('#still');}
+function openVisit(t){const id=t.dataset.id; curVisit=id; curClip=t.dataset.clip==='1';
+  boxData=null; mode='image'; boxesOn=curClip; stillFB=false; resetZoom();
+  const img=$('#still'), vid=$('#clip video');
+  img.style.display=''; vid.pause(); vid.removeAttribute('src'); vid.style.display='none';
+  img.src=(curClip?'/media/visit/'+id+'/frame':'/media/visit/'+id+'/thumb');
+  $('#stage').classList.add('pan');
+  $('#playbtn').style.display=curClip?'':'none'; $('#playbtn').textContent='watch clip ▶';
+  $('#boxbtn').style.display=curClip?'':'none';
+  $('#boxbtn').classList.toggle('on',boxesOn); $('#boxbtn').textContent=boxesOn?'hide boxes':'show boxes';
+  $('#clipmeta').textContent=t.querySelector('.sp').textContent+' — '+t.querySelector('.sub').textContent;
+  $('#cliplink').href=(curClip?'/media/visit/'+id+'/clip':'/media/visit/'+id+'/thumb');
+  loadLabel(id); $('#clip').showModal();
+  if(curClip) loadBoxData().then(drawBoxes);}
+async function loadBoxData(){if(boxData)return; try{boxData=await (await fetch('/api/visit/'+curVisit+'/boxes')).json();}catch(e){boxData={frames:[]};}}
+function drawBoxes(){const svg=$('#boxov'), m=activeMedia();
+  svg.style.width=(m.clientWidth||m.offsetWidth)+'px'; svg.style.height=(m.clientHeight||m.offsetHeight)+'px';
+  if(!boxesOn||!boxData){svg.style.display='none';return;}
+  if(!boxData.frames||!boxData.frames.length){svg.innerHTML='<text x="2" y="7">no boxes stored</text>';svg.style.display='block';return;}
   const f=boxData.frames[boxData.best]||boxData.frames[0]; let s='';
   (f.boxes||[]).forEach(b=>{const x=b.x*100,y=b.y*100,w=b.w*100,h=b.h*100;
-    s+=`<rect x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${w.toFixed(2)}" height="${h.toFixed(2)}"/>`;
-    if(b.conf!=null)s+=`<text x="${x.toFixed(2)}" y="${Math.max(3.2,y).toFixed(2)}">${Math.round(b.conf*100)}%</text>`;});
+    s+='<rect x="'+x.toFixed(2)+'" y="'+y.toFixed(2)+'" width="'+w.toFixed(2)+'" height="'+h.toFixed(2)+'"/>';
+    if(b.conf!=null)s+='<text x="'+x.toFixed(2)+'" y="'+Math.max(3.2,y).toFixed(2)+'">'+Math.round(b.conf*100)+'%</text>';});
   svg.innerHTML=s; svg.style.display='block';}
-async function toggleBoxes(){const b=$('#boxbtn'); if(boxesOn){resetBoxes();return;}
-  if(!boxData){try{boxData=await (await fetch('/api/visit/'+curVisit+'/boxes')).json();}catch(e){boxData={frames:[]};}}
-  boxesOn=true;b.classList.add('on');b.textContent='hide boxes';
-  const vid=$('#clip').querySelector('video'), f=boxData.frames&&boxData.frames[boxData.best];
-  if(f&&vid.getAttribute('src')){try{vid.pause();if(f.offset)vid.currentTime=f.offset;}catch(e){}}
-  drawBoxes();}
-$('#boxbtn').onclick=toggleBoxes;
-// once the clip's dimensions are known, size the overlay and seek to the best-box frame
-$('#clip').querySelector('video').addEventListener('loadeddata',()=>{if(!boxesOn)return;
-  const vid=$('#clip').querySelector('video'), f=boxData&&boxData.frames&&boxData.frames[boxData.best];
-  if(f){try{vid.pause();if(f.offset)vid.currentTime=f.offset;}catch(e){}}
-  drawBoxes();});
+function toggleBoxes(){boxesOn=!boxesOn; $('#boxbtn').classList.toggle('on',boxesOn);
+  $('#boxbtn').textContent=boxesOn?'hide boxes':'show boxes'; drawBoxes();}
+function playClip(){if(!curClip)return; const img=$('#still'), vid=$('#clip video');
+  if(mode==='image'){mode='video'; resetZoom(); $('#stage').classList.remove('pan');
+    img.style.display='none'; vid.style.display=''; vid.src='/media/visit/'+curVisit+'/clip';
+    $('#playbtn').textContent='◀ back to image';}
+  else{mode='image'; resetZoom(); $('#stage').classList.add('pan');
+    vid.pause(); vid.removeAttribute('src'); vid.style.display='none'; img.style.display='';
+    $('#playbtn').textContent='watch clip ▶'; drawBoxes();}}
+$('#playbtn').onclick=playClip; $('#boxbtn').onclick=toggleBoxes;
+$('#still').addEventListener('load',()=>{if(mode==='image')drawBoxes();});
+$('#still').addEventListener('error',()=>{if(curClip&&!stillFB){stillFB=true;$('#still').src='/media/visit/'+curVisit+'/thumb';}});
+$('#clip video').addEventListener('loadeddata',()=>{if(mode!=='video')return;
+  const vid=$('#clip video'), f=boxData&&boxData.frames&&boxData.frames[boxData.best];
+  if(f){try{vid.pause();if(f.offset)vid.currentTime=f.offset;}catch(e){}} drawBoxes();});
+(function(){const stage=$('#stage'); let drag=false,lx=0,ly=0;
+  stage.addEventListener('wheel',e=>{if(mode!=='image')return; e.preventDefault();
+    const r=stage.getBoundingClientRect(),cx=e.clientX-r.left,cy=e.clientY-r.top;
+    const f=e.deltaY<0?1.15:1/1.15,ns=Math.min(8,Math.max(1,zs*f));
+    ztx=cx-(cx-ztx)*(ns/zs); zty=cy-(cy-zty)*(ns/zs); zs=ns; if(zs===1){ztx=0;zty=0;} applyZoom();},{passive:false});
+  stage.addEventListener('pointerdown',e=>{if(mode!=='image'||zs===1)return; drag=true;lx=e.clientX;ly=e.clientY;
+    stage.classList.add('panning'); try{stage.setPointerCapture(e.pointerId);}catch(_){}});
+  stage.addEventListener('pointermove',e=>{if(!drag)return; ztx+=e.clientX-lx; zty+=e.clientY-ly; lx=e.clientX; ly=e.clientY; applyZoom();});
+  stage.addEventListener('pointerup',()=>{drag=false;stage.classList.remove('panning');});
+  stage.addEventListener('dblclick',()=>{if(mode==='image')resetZoom();});})();
 $('#clip').onclick=e=>{if(e.target.id==='clip')$('#clip').close();};
 async function loadStats(){try{const cc=$('#chartcam').value;
   const d=await (await fetch('/api/stats?since='+$('#since').value+(cc?'&camera='+encodeURIComponent(cc):''))).json();

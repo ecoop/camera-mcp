@@ -237,3 +237,19 @@ def test_zone_save_blocked_when_readonly(tmp_path, monkeypatch):
     c = starlette_testclient.TestClient(build_app(cams, tmp_path, load_site(_cfg(tmp_path))))
     assert c.get("/api/zones").json()["editable"] is False
     assert c.post("/api/zones/backyard", json={"roi": None}).status_code == 403
+
+
+def test_frame_endpoint_404_without_clip(tmp_path):
+    import time
+    from camera_mcp.store import Store
+    from camera_mcp.visits import Visit
+    from camera_mcp.config import Camera
+    from camera_mcp.web import build_app
+    store = Store(tmp_path / "monitor.db")
+    v = Visit("cam", "animal", start=time.time(), last_seen=time.time() + 1, frames=1)
+    v.votes[("animal", "")] = 1.0
+    store.add_visit(v, model="m", thumbnail=None, clip=None)  # no clip -> no full-res frame
+    store.close()
+    c = starlette_testclient.TestClient(build_app({"cam": Camera("cam", "c.mp4")}, tmp_path, None))
+    assert c.get("/media/visit/1/frame").status_code == 404
+    assert c.get("/media/visit/999/frame").status_code == 404  # unknown visit
