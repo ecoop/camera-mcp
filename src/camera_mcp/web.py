@@ -451,6 +451,7 @@ button:disabled{opacity:.5;cursor:default}
   color:#fff;background:var(--accent)}
 .zr.motion_roi .tag{background:var(--good)} .zr.motion_mask .tag{background:var(--warn)}
 .side{font-family:var(--mono);font-size:.72rem}
+.zdesc{font-family:var(--sans);font-size:.72rem;color:var(--muted);line-height:1.4;margin:.2rem 0 .1rem}
 .list{margin:.3rem 0 0;padding:0;list-style:none}
 .list li{display:flex;justify-content:space-between;gap:.5rem;padding:.2rem 0;border-bottom:1px solid var(--line)}
 .list .k{color:var(--muted)} .list button{padding:.05rem .4rem;font-size:.66rem}
@@ -471,15 +472,21 @@ button:disabled{opacity:.5;cursor:default}
   </div>
   <button id="snap">reload snapshot</button>
 </div>
-<div class="hint">Drag on the frame to draw. <b>Analysis ROI</b> and <b>motion ROI</b> are single rectangles (a new draw replaces). <b>Motion mask</b> is a list (each draw adds an ignore box). Changing the analysis ROI makes the monitor relearn that camera's scenery.</div>
+<div class="hint">Drag on the frame to draw. <b>Analysis ROI</b> and <b>motion ROI</b> are single rectangles (a new draw replaces); <b>motion mask</b> is a list (each draw adds a box). Zones are fractions of the frame; see what each does below.</div>
 <div class="cols">
   <div class="stage" id="stage"><img id="shot" alt="snapshot">
   <div class="msg">snapshot unavailable (camera busy or offline) &mdash; you can still draw and save; zones are fractions of the frame</div>
   <div class="ov" id="ov"></div></div>
   <div class="side">
-    <div><b>Analysis ROI</b> <span class="k">tier-2 crop</span><ul class="list" id="l-roi"></ul></div>
-    <div style="margin-top:.6rem"><b>Motion ROI</b> <span class="k">tier-1 gate</span><ul class="list" id="l-motion_roi"></ul></div>
-    <div style="margin-top:.6rem"><b>Motion mask</b> <span class="k">tier-1 ignore</span><ul class="list" id="l-motion_mask"></ul></div>
+    <div><b>Analysis ROI</b> <span class="k">tier-2 crop</span>
+      <div class="zdesc">Crops the frame before SpeciesNet looks, so it only analyses this region &mdash; cheaper, and sharper on what matters (e.g. a feeder). Doesn&rsquo;t change how <i>often</i> analysis runs. Changing it makes the camera relearn its scenery.</div>
+      <ul class="list" id="l-roi"></ul></div>
+    <div style="margin-top:.6rem"><b>Motion ROI</b> <span class="k">tier-1 gate</span>
+      <div class="zdesc">Only motion <i>inside</i> this box wakes the detector, so fewer frames get analysed at all. The biggest lever on load &mdash; use it to point a camera at just the active area.</div>
+      <ul class="list" id="l-motion_roi"></ul></div>
+    <div style="margin-top:.6rem"><b>Motion mask</b> <span class="k">tier-1 ignore</span>
+      <div class="zdesc">Motion <i>inside</i> these boxes is ignored. Mute known false motion &mdash; a swaying branch, a street, a neighbour&rsquo;s window &mdash; so it never wakes the detector. Add as many as you need.</div>
+      <ul class="list" id="l-motion_mask"></ul></div>
     <div class="row" style="margin-top:1rem">
       <button id="apply" class="primary">apply &amp; reload</button>
       <button id="revert">revert</button>
