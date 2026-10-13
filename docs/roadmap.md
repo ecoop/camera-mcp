@@ -1,6 +1,6 @@
 # Roadmap
 
-_Last updated: 2026-10-12_
+_Last updated: 2026-10-13_
 
 Where the project is, what we learned running it, and the sequenced plan. Tracked work links to
 GitHub issues; this doc is the map over them.
@@ -54,6 +54,10 @@ the existing in-house design language.
   thumbnail sharpness are decoupled.
 - **Leaf / wind-noise flag** [#49]: flag cameras that are motion-heavy but animal-empty (a sweep or
   a tighter zone is due).
+- **Edge detection gate (Frigate + Coral)** [#68] — *low priority, not scheduled*: a coarse COCO
+  detector on a spare x86 box gates the GPU model, so false motion never reaches it and the species
+  model runs only on the detected crop (a dynamic inclusion zone). Extends the "spend the GPU only
+  where the animals are" principle. Plan: [frigate-coral-edge-gate.md](frigate-coral-edge-gate.md).
 
 ### 3. Brief & montage
 - **Clock-aligned time windows** [#26]: overnight / 6h / 12h blocks that tile the day cleanly.
@@ -78,3 +82,4 @@ exposing. Analysis-quality items ([#38], [#49], [#50]) slot in alongside as they
 [#47]: https://github.com/ecoop/camera-mcp/issues/47
 [#49]: https://github.com/ecoop/camera-mcp/issues/49
 [#50]: https://github.com/ecoop/camera-mcp/issues/50
+[#68]: https://github.com/ecoop/camera-mcp/issues/68
