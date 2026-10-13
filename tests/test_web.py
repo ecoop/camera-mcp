@@ -253,3 +253,19 @@ def test_frame_endpoint_404_without_clip(tmp_path):
     c = starlette_testclient.TestClient(build_app({"cam": Camera("cam", "c.mp4")}, tmp_path, None))
     assert c.get("/media/visit/1/frame").status_code == 404
     assert c.get("/media/visit/999/frame").status_code == 404  # unknown visit
+
+
+def test_stats_all_returns_each_camera(tmp_path):
+    import time
+    from camera_mcp.store import Store
+    from camera_mcp.config import Camera
+    from camera_mcp.web import build_app
+    store = Store(tmp_path / "monitor.db")
+    now = time.time()
+    store.add_camera_stats(now - 60, [("backyard", 1, 8.0, 50, 0, 10.0), ("alley", 3, 90.0, 20, 2, 20.0)])
+    store.close()
+    cams = {"backyard": Camera("backyard", "b.mp4"), "alley": Camera("alley", "a.mp4")}
+    c = starlette_testclient.TestClient(build_app(cams, tmp_path, None))
+    d = c.get("/api/stats/all").json()
+    assert set(d["cameras"]) == {"backyard", "alley"}
+    assert d["cameras"]["alley"][0]["lag"] == 90 and d["cameras"]["alley"][0]["dropped"] == 2

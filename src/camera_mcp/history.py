@@ -323,6 +323,29 @@ class History:
                    "frames": r["analyzed"], "dropped": r["dropped"]} for r in rows[::step]]
         return {**window, "points": points}
 
+    def analysis_series_all(self, since: str = "24h", until: str | None = None, max_points: int = 200) -> dict:
+        """Each camera's analysis series over the window, keyed by camera, for a small-multiples view
+        (which cameras drive the congestion). Only cameras with per-camera data appear. Downsampled
+        per camera to at most `max_points` points."""
+        now = time.time()
+        t0, t1 = parse_when(since, now, self.tz), parse_when(until, now, self.tz)
+        window = {"from": self._local(self._iso(t0)), "to": self._local(self._iso(t1))}
+        with closing(self._db()) as db:
+            if "analysis_camera_stats" not in _tables(db):
+                return {**window, "cameras": {}}
+            rows = db.execute("SELECT camera, at, queue_depth, max_lag, analyzed, dropped "
+                              "FROM analysis_camera_stats WHERE at >= ? AND at <= ? ORDER BY camera, at",
+                              (self._iso(t0), self._iso(t1))).fetchall()
+        by: dict[str, list] = defaultdict(list)
+        for r in rows:
+            by[r["camera"]].append(r)
+        cameras = {}
+        for cam, rs in by.items():
+            step = max(1, len(rs) // max_points)
+            cameras[cam] = [{"at": self._local(r["at"]), "depth": r["queue_depth"], "lag": round(r["max_lag"]),
+                             "frames": r["analyzed"], "dropped": r["dropped"]} for r in rs[::step]]
+        return {**window, "cameras": cameras}
+
     def visit_boxes(self, visit_id: int) -> dict:
         """A visit's per-frame detector boxes (the visit_frames table), with its camera, start time
         and whether a clip was kept. Each frame's `boxes` are fractions of the analysis frame — i.e.

@@ -110,6 +110,10 @@ def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
                  camera=request.query_params.get("camera") or None)
         return r if isinstance(r, Response) else JSONResponse(r)
 
+    async def api_stats_all(request: Request):
+        r = _ask(history.analysis_series_all, since=request.query_params.get("since", "24h"))
+        return r if isinstance(r, Response) else JSONResponse(r)
+
     async def api_visit_boxes(request: Request):
         vid = int(request.path_params["vid"])
         try:
@@ -314,6 +318,7 @@ def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
         Route("/api/species", api_species),
         Route("/api/summary", api_summary),
         Route("/api/stats", api_stats),
+        Route("/api/stats/all", api_stats_all),
         Route("/api/zones", api_zones),
         Route("/api/zones/{camera}", api_zones_save, methods=["POST"]),
         Route("/api/snapshot/{camera}", api_snapshot),
@@ -358,6 +363,11 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 .chip.off{opacity:.55}
 .chart{border:1px solid var(--line);border-radius:11px;background:var(--frame);padding:.6rem;margin-bottom:1rem}
 .chart svg{width:100%;height:132px;display:block}
+.cgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:.55rem}
+.cmini{border:1px solid var(--line);border-radius:8px;background:var(--chrome);padding:.3rem .4rem}
+.cmini svg{width:100%;height:52px;display:block}
+.cmh{display:flex;justify-content:space-between;gap:.5rem;font-family:var(--mono);font-size:.63rem;color:var(--muted);margin-bottom:.15rem}
+.cmh b{color:var(--ink)}
 .clabel{display:flex;justify-content:space-between;gap:1rem;font-family:var(--mono);font-size:.66rem;color:var(--muted);margin-top:.35rem;flex-wrap:wrap}
 .xax{display:flex;justify-content:space-between;font-family:var(--mono);font-size:.62rem;color:var(--muted);margin-top:.15rem;padding:0 3px}
 .filters{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-bottom:1rem}
@@ -400,7 +410,7 @@ dialog .vmeta a{color:var(--accent);cursor:pointer}
 <div class="sect" style="margin-top:0;display:flex;justify-content:space-between;align-items:center;gap:1rem">
   <span>Throughput &amp; backlog</span>
   <select id="chartcam" style="font-family:var(--mono);font-size:.72rem;background:var(--frame);color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:.2rem .4rem;text-transform:none;letter-spacing:0">
-    <option value="">all cameras</option></select>
+    <option value="">all cameras</option><option value="__each__">per camera (grid)</option></select>
 </div>
 <div class="chart" id="chart"></div>
 <div class="filters">
@@ -527,30 +537,47 @@ $('#clip video').addEventListener('loadeddata',()=>{if(mode!=='video')return;
   stage.addEventListener('pointerup',()=>{drag=false;stage.classList.remove('panning');});
   stage.addEventListener('dblclick',()=>{if(mode==='image')resetZoom();});})();
 $('#clip').onclick=e=>{if(e.target.id==='clip')$('#clip').close();};
-async function loadStats(){try{const cc=$('#chartcam').value;
-  const d=await (await fetch('/api/stats?since='+$('#since').value+(cc?'&camera='+encodeURIComponent(cc):''))).json();
-  const pts=d.points||[]; const el=$('#chart');
-  if(!pts.length){el.innerHTML='<div class="empty" style="padding:1rem">'+(d.camera?'no per-camera stats for '+d.camera+' yet (recorded from this build on)':'no stats yet')+'</div>';return;}
-  const W=1000,H=132,pad=4,n=pts.length,cap=1800;
-  const maxLag=Math.max(cap, ...pts.map(p=>p.lag));
+// one lag-area chart as an SVG string; shared by the big chart and the per-camera minis
+function lagSVG(pts,W,H,maxLag,grid){const pad=4,n=pts.length,cap=1800;
   const X=i=>pad+i*(W-2*pad)/(n-1||1), Y=v=>H-pad-(v/maxLag)*(H-2*pad);
   let area='M'+X(0).toFixed(1)+','+(H-pad);
   pts.forEach((p,i)=>area+=' L'+X(i).toFixed(1)+','+Y(p.lag).toFixed(1));
   area+=' L'+X(n-1).toFixed(1)+','+(H-pad)+' Z';
-  const drops=pts.map((p,i)=>p.dropped>0?`<rect x="${X(i).toFixed(1)}" y="${H-7}" width="2.5" height="7" fill="var(--warn)"/>`:'').join('');
-  const capY=Y(cap).toFixed(1);
-  // minimal time axis: faint full-height gridlines (stop above the red drop-tick band) + HH:MM labels
-  const tix=[0,.25,.5,.75,1].map(f=>Math.round(f*(n-1)));
-  const grid=tix.map(i=>`<line x1="${X(i).toFixed(1)}" y1="0" x2="${X(i).toFixed(1)}" y2="${H-9}" stroke="var(--line)" stroke-width="1" opacity=".45"/>`).join('');
-  const xlabs=tix.map((i,k)=>`<span style="${k===0?'':(k===tix.length-1?'text-align:right':'text-align:center')}">${(pts[i].at||'').slice(11,16)}</span>`).join('');
-  el.innerHTML=`<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">`+
-    grid+
-    `<line x1="0" y1="${capY}" x2="${W}" y2="${capY}" stroke="var(--warn)" stroke-dasharray="5 5" stroke-width="1" opacity=".55"/>`+
-    `<path d="${area}" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.5"/>${drops}</svg>`+
-    `<div class="xax">${xlabs}</div>`+
+  const dh=Math.max(5,H*0.06);
+  const drops=pts.map((p,i)=>p.dropped>0?`<rect x="${X(i).toFixed(1)}" y="${(H-dh).toFixed(1)}" width="2" height="${dh.toFixed(1)}" fill="var(--warn)"/>`:'').join('');
+  let g='';
+  if(grid){const tix=[0,.25,.5,.75,1].map(f=>Math.round(f*(n-1)));
+    g=tix.map(i=>`<line x1="${X(i).toFixed(1)}" y1="0" x2="${X(i).toFixed(1)}" y2="${(H-9).toFixed(1)}" stroke="var(--line)" stroke-width="1" opacity=".45"/>`).join('');}
+  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">`+g+
+    `<line x1="0" y1="${Y(cap).toFixed(1)}" x2="${W}" y2="${Y(cap).toFixed(1)}" stroke="var(--warn)" stroke-dasharray="5 5" stroke-width="1" opacity=".55"/>`+
+    `<path d="${area}" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.5"/>${drops}</svg>`;}
+function xAxis(pts){const n=pts.length,tix=[0,.25,.5,.75,1].map(f=>Math.round(f*(n-1)));
+  return tix.map((i,k)=>`<span style="${k===0?'':(k===tix.length-1?'text-align:right':'text-align:center')}">${(pts[i].at||'').slice(11,16)}</span>`).join('');}
+const peakLag=pts=>pts.reduce((m,p)=>Math.max(m,p.lag),0);
+async function loadStats(){const el=$('#chart'); try{const cc=$('#chartcam').value;
+  if(cc==='__each__') return loadStatsGrid(el);
+  const d=await (await fetch('/api/stats?since='+$('#since').value+(cc?'&camera='+encodeURIComponent(cc):''))).json();
+  const pts=d.points||[];
+  if(!pts.length){el.innerHTML='<div class="empty" style="padding:1rem">'+(d.camera?'no per-camera stats for '+d.camera+' yet (recorded from this build on)':'no stats yet')+'</div>';return;}
+  const maxLag=Math.max(1800,peakLag(pts));
+  el.innerHTML=lagSVG(pts,1000,132,maxLag,true)+
+    `<div class="xax">${xAxis(pts)}</div>`+
     `<div class="clabel"><span>${d.camera?'<b>'+d.camera+'</b> &middot; ':''}analysis lag (area) &middot; <span class="bad">drops</span> (ticks) &middot; dashed = 30-min cap</span>`+
     `<span>${(d.from||'').slice(0,10)}</span></div>`;
-}catch(e){$('#chart').innerHTML='<div class="empty" style="padding:1rem">stats unavailable</div>';}}
+}catch(e){el.innerHTML='<div class="empty" style="padding:1rem">stats unavailable</div>';}}
+async function loadStatsGrid(el){const d=await (await fetch('/api/stats/all?since='+$('#since').value)).json();
+  const cams=d.cameras||{}, names=Object.keys(cams).filter(n=>cams[n].length);
+  if(!names.length){el.innerHTML='<div class="empty" style="padding:1rem">no per-camera stats yet (recorded from the latest build on)</div>';return;}
+  let maxLag=1800; names.forEach(n=>{const p=peakLag(cams[n]); if(p>maxLag)maxLag=p;});  // shared scale
+  const totDrop=n=>cams[n].reduce((s,p)=>s+p.dropped,0);  // rank by drops (lag saturates at the cap)
+  names.sort((a,b)=>(totDrop(b)-totDrop(a))||(peakLag(cams[b])-peakLag(cams[a])));         // worst first
+  let html='<div class="cgrid">';
+  names.forEach(n=>{const pts=cams[n], pk=Math.round(peakLag(pts)), dr=pts.reduce((s,p)=>s+p.dropped,0);
+    html+=`<div class="cmini"><div class="cmh"><b>${n}</b><span>peak ${pk}s${dr?' &middot; <span class="bad">'+dr+' drop</span>':''}</span></div>`+
+      lagSVG(pts,500,52,maxLag,false)+'</div>';});
+  html+='</div><div class="clabel"><span>per-camera analysis lag &middot; shared scale (worst first) &middot; <span class="bad">drops</span> &middot; dashed = 30-min cap</span>'+
+    `<span>${(d.from||'').slice(0,10)} &middot; ${(d.from||'').slice(11,16)}&ndash;${(d.to||'').slice(11,16)}</span></div>`;
+  el.innerHTML=html;}
 ['since','taxon','camera'].forEach(id=>$('#'+id).onchange=()=>{loadVisits();loadStats();});
 $('#chartcam').onchange=loadStats;
 tick();setInterval(tick,1000);loadCameras();loadSpecies();loadHealth();loadStats();loadVisits();
