@@ -286,6 +286,30 @@ class History:
                    "frames": r["analyzed"], "dropped": r["dropped"]} for r in rows[::step]]
         return {**window, "points": points}
 
+    def visit_boxes(self, visit_id: int) -> dict:
+        """A visit's per-frame detector boxes (the visit_frames table), with its camera, start time
+        and whether a clip was kept. Each frame's `boxes` are fractions of the analysis frame — i.e.
+        the camera's roi crop if it has one; the web layer maps them to the full frame. Raises
+        HistoryError if the visit is unknown."""
+        import json
+        with closing(self._db()) as db:
+            v = db.execute("SELECT camera, started_at, clip, label, taxonomy FROM visits WHERE id = ?",
+                           (visit_id,)).fetchone()
+            if v is None:
+                raise HistoryError(f"no visit {visit_id}")
+            rows = db.execute("SELECT ts, label, taxonomy, score, boxes FROM visit_frames"
+                              " WHERE visit_id = ? ORDER BY ts", (visit_id,)).fetchall()
+        frames = []
+        for r in rows:
+            try:
+                boxes = json.loads(r["boxes"])
+            except (ValueError, TypeError):
+                boxes = []
+            frames.append({"ts": r["ts"], "label": r["label"], "taxonomy": r["taxonomy"],
+                           "score": r["score"], "boxes": boxes})
+        return {"camera": v["camera"], "started_at": v["started_at"], "has_clip": bool(v["clip"]),
+                "label": v["label"], "taxonomy": v["taxonomy"], "frames": frames}
+
     def visit_clip(self, visit_id: int, data_dir: Path) -> Path:
         """The path to a visit's saved clip. Raises HistoryError if the visit or its clip is missing."""
         with closing(self._db()) as db:

@@ -37,6 +37,28 @@ def test_history_endpoints_degrade_without_a_db(client):
     assert client.get("/media/visit/1/thumb").status_code == 404
 
 
+def test_visit_boxes_maps_roi_to_full_frame(tmp_path):
+    import time
+    from camera_mcp.store import Store
+    from camera_mcp.visits import Visit, Detection, Box
+    from camera_mcp.taxa import Label
+    from camera_mcp.config import Camera
+    from camera_mcp.web import build_app
+    store = Store(tmp_path / "monitor.db")
+    cam = Camera(name="fence", source="f.mp4", roi=(0.0, 0.2, 1.0, 0.6))  # analysis crop
+    v = Visit("fence", "animal", start=time.time(), last_seen=time.time() + 5, frames=1)
+    v.votes[("animal", "")] = 1.0
+    v.log = [(v.start + 1, [Detection(Box(0.5, 0.5, 0.2, 0.2, 0.9), Label("animal", "", 0.5), "animal")])]
+    store.add_visit(v, model="m", thumbnail=None, clip="c.mp4")
+    c = starlette_testclient.TestClient(build_app({"fence": cam}, tmp_path, None))
+    d = c.get("/api/visit/1/boxes").json()
+    assert d["roi"] == [0.0, 0.2, 1.0, 0.6] and d["has_clip"] is True and d["best"] == 0
+    b = d["frames"][0]["boxes"][0]
+    # box fraction of the roi crop -> fraction of the full frame
+    assert (b["x"], b["y"], b["w"], b["h"]) == (0.5, 0.5, 0.2, 0.12) and b["conf"] == 0.9
+    assert c.get("/api/visit/999/boxes").status_code == 404
+
+
 @pytest.fixture
 def no_reload(monkeypatch):
     # the editor restarts the monitor LaunchAgent on save; stub it in tests

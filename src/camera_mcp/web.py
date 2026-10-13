@@ -17,6 +17,7 @@ import argparse
 import json
 import os
 import subprocess
+from datetime import datetime
 from pathlib import Path
 
 import cv2
@@ -97,6 +98,47 @@ def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
     async def api_stats(request: Request):
         r = _ask(history.analysis_series, since=request.query_params.get("since", "24h"))
         return r if isinstance(r, Response) else JSONResponse(r)
+
+    async def api_visit_boxes(request: Request):
+        vid = int(request.path_params["vid"])
+        try:
+            d = history.visit_boxes(vid)
+        except HistoryError as e:
+            return JSONResponse({"error": str(e)}, status_code=404)
+        cam = find_camera(cameras, d["camera"])
+        roi = cam.roi if cam else None  # boxes are fractions of the roi crop; map to the full frame
+        pre = cam.monitor.pre_seconds if cam else 5.0
+        try:
+            start = datetime.fromisoformat(d["started_at"]).timestamp()
+        except (ValueError, TypeError):
+            start = None
+
+        def mapbox(b):
+            try:
+                x, y, w, h = b["bbox"]
+            except (KeyError, ValueError, TypeError):
+                return None
+            if roi:
+                rx, ry, rw, rh = roi
+                x, y, w, h = rx + x * rw, ry + y * rh, w * rw, h * rh
+            return {"conf": b.get("conf"), "x": round(x, 4), "y": round(y, 4),
+                    "w": round(w, 4), "h": round(h, 4)}
+
+        frames, best_i, best_conf = [], 0, -1.0
+        for i, f in enumerate(d["frames"]):
+            boxes = [m for m in (mapbox(b) for b in f["boxes"]) if m]
+            try:
+                offset = datetime.fromisoformat(f["ts"]).timestamp() - start + pre if start else 0.0
+            except (ValueError, TypeError):
+                offset = 0.0
+            fc = max((b["conf"] or 0 for b in boxes), default=0.0)
+            if fc > best_conf:
+                best_conf, best_i = fc, i
+            frames.append({"offset": round(max(0.0, offset), 2), "label": f["label"],
+                           "taxonomy": f["taxonomy"], "score": f["score"], "boxes": boxes})
+        return JSONResponse({"camera": d["camera"], "has_clip": d["has_clip"],
+                             "roi": list(roi) if roi else None, "label": d["label"],
+                             "taxonomy": d["taxonomy"], "best": best_i, "frames": frames})
 
     async def media_thumb(request: Request):
         try:
@@ -193,6 +235,7 @@ def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
         Route("/api/zones", api_zones),
         Route("/api/zones/{camera}", api_zones_save, methods=["POST"]),
         Route("/api/snapshot/{camera}", api_snapshot),
+        Route("/api/visit/{vid:int}/boxes", api_visit_boxes),
         Route("/media/visit/{vid:int}/thumb", media_thumb),
         Route("/media/visit/{vid:int}/clip", media_clip),
     ])
@@ -246,8 +289,15 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 dialog{border:1px solid var(--line);border-radius:12px;background:var(--frame);color:var(--ink);
   max-width:92vw;padding:0}
 dialog video{display:block;max-width:86vw;max-height:76vh;border-radius:12px 12px 0 0;background:#000}
-dialog .vmeta{font-family:var(--mono);font-size:.74rem;padding:.6rem .8rem;display:flex;justify-content:space-between}
-dialog .vmeta a{color:var(--accent)}
+dialog .vmeta{font-family:var(--mono);font-size:.74rem;padding:.6rem .8rem;display:flex;justify-content:space-between;gap:1rem;align-items:center}
+dialog .vmeta a{color:var(--accent);cursor:pointer}
+.stagewrap{position:relative;display:block;line-height:0}
+.boxov{position:absolute;top:0;left:0;pointer-events:none;display:none}
+.boxov rect{fill:none;stroke:#ff3b30;stroke-width:2;vector-effect:non-scaling-stroke}
+.boxov text{fill:#ff3b30;font-family:var(--mono);font-size:3.2px;paint-order:stroke;
+  stroke:rgba(0,0,0,.55);stroke-width:.6px;dominant-baseline:text-after-edge}
+.boxbtn{border:1px solid var(--line);border-radius:6px;padding:.15rem .5rem;color:var(--muted);background:none;font-family:var(--mono);font-size:.72rem;cursor:pointer}
+.boxbtn.on{color:var(--warn);border-color:var(--warn)}
 </style></head><body><div class="wrap">
 <div class="bar"><div class="brand">&#129437; Yard Sentry</div>
   <div class="who"><a href="/zones" style="color:var(--accent);text-decoration:none">zones &rarr;</a> &middot; <span id="clock"></span></div></div>
@@ -268,8 +318,10 @@ dialog .vmeta a{color:var(--accent)}
 <div class="empty" id="empty" style="display:none">No visits in this window.</div>
 <div class="sect">Live</div>
 <div class="grid" id="live"></div>
-<dialog id="clip"><video controls></video><div class="vmeta"><span id="clipmeta"></span>
-  <a id="cliplink" target="_blank">open</a></div></dialog>
+<dialog id="clip"><div class="stagewrap"><video controls></video>
+  <svg class="boxov" id="boxov" viewBox="0 0 100 100" preserveAspectRatio="none"></svg></div>
+  <div class="vmeta"><span id="clipmeta"></span>
+  <span><button class="boxbtn" id="boxbtn">show boxes</button> &middot; <a id="cliplink" target="_blank">open</a></span></div></dialog>
 <script>
 const $=s=>document.querySelector(s), params=()=>{const p=new URLSearchParams();
   p.set('since',$('#since').value); if($('#taxon').value)p.set('taxon',$('#taxon').value);
@@ -298,9 +350,30 @@ async function loadVisits(){const r=await (await fetch('/api/visits?'+params()))
     `<div class="sub">${x.camera} &middot; ${(x.started||'').slice(11,16)}</div></div></a>`).join('');
   document.querySelectorAll('#grid .tile').forEach(t=>t.onclick=ev=>{ev.preventDefault();
     const id=t.dataset.id; const dlg=$('#clip'); const vid=dlg.querySelector('video');
-    if(t.dataset.clip==='1'){vid.src='/media/visit/'+id+'/clip'; vid.style.display='';}else{vid.removeAttribute('src');vid.style.display='none';}
+    const hasClip=t.dataset.clip==='1';
+    if(hasClip){vid.src='/media/visit/'+id+'/clip'; vid.style.display='';}else{vid.removeAttribute('src');vid.style.display='none';}
+    curVisit=id; resetBoxes(); $('#boxbtn').disabled=!hasClip;
     $('#clipmeta').textContent=t.querySelector('.sp').textContent+' — '+t.querySelector('.sub').textContent;
     $('#cliplink').href='/media/visit/'+id+'/clip'; dlg.showModal();});}
+let curVisit=null, boxesOn=false, boxData=null;
+function resetBoxes(){boxesOn=false;boxData=null;const s=$('#boxov');s.style.display='none';s.innerHTML='';
+  const b=$('#boxbtn');b.classList.remove('on');b.textContent='show boxes';}
+function drawBoxes(){const svg=$('#boxov'), vid=$('#clip').querySelector('video');
+  svg.style.width=(vid.clientWidth||vid.offsetWidth)+'px';   // SVG is replaced: size it to the video
+  svg.style.height=(vid.clientHeight||vid.offsetHeight)+'px';
+  if(!boxData||!boxData.frames||!boxData.frames.length){svg.innerHTML='<text x="2" y="7">no boxes stored for this visit</text>';svg.style.display='block';return;}
+  const f=boxData.frames[boxData.best]||boxData.frames[0]; let s='';
+  (f.boxes||[]).forEach(b=>{const x=b.x*100,y=b.y*100,w=b.w*100,h=b.h*100;
+    s+=`<rect x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${w.toFixed(2)}" height="${h.toFixed(2)}"/>`;
+    if(b.conf!=null)s+=`<text x="${x.toFixed(2)}" y="${Math.max(3.2,y).toFixed(2)}">${Math.round(b.conf*100)}%</text>`;});
+  svg.innerHTML=s; svg.style.display='block';}
+async function toggleBoxes(){const b=$('#boxbtn'); if(boxesOn){resetBoxes();return;}
+  if(!boxData){try{boxData=await (await fetch('/api/visit/'+curVisit+'/boxes')).json();}catch(e){boxData={frames:[]};}}
+  boxesOn=true;b.classList.add('on');b.textContent='hide boxes';
+  const vid=$('#clip').querySelector('video'), f=boxData.frames&&boxData.frames[boxData.best];
+  if(f&&vid.getAttribute('src')){try{vid.pause();if(f.offset)vid.currentTime=f.offset;}catch(e){}}
+  drawBoxes();}
+$('#boxbtn').onclick=toggleBoxes;
 $('#clip').onclick=e=>{if(e.target.id==='clip')$('#clip').close();};
 async function loadStats(){try{const d=await (await fetch('/api/stats?since='+$('#since').value)).json();
   const pts=d.points||[]; const el=$('#chart');
