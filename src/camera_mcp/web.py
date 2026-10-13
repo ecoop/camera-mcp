@@ -359,6 +359,7 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 .chart{border:1px solid var(--line);border-radius:11px;background:var(--frame);padding:.6rem;margin-bottom:1rem}
 .chart svg{width:100%;height:132px;display:block}
 .clabel{display:flex;justify-content:space-between;gap:1rem;font-family:var(--mono);font-size:.66rem;color:var(--muted);margin-top:.35rem;flex-wrap:wrap}
+.xax{display:flex;justify-content:space-between;font-family:var(--mono);font-size:.62rem;color:var(--muted);margin-top:.15rem;padding:0 3px}
 .filters{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-bottom:1rem}
 .filters select,.filters input{font-family:var(--mono);font-size:.78rem;background:var(--frame);
   color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:.3rem .5rem}
@@ -538,11 +539,17 @@ async function loadStats(){try{const cc=$('#chartcam').value;
   area+=' L'+X(n-1).toFixed(1)+','+(H-pad)+' Z';
   const drops=pts.map((p,i)=>p.dropped>0?`<rect x="${X(i).toFixed(1)}" y="${H-7}" width="2.5" height="7" fill="var(--warn)"/>`:'').join('');
   const capY=Y(cap).toFixed(1);
+  // minimal time axis: faint full-height gridlines (stop above the red drop-tick band) + HH:MM labels
+  const tix=[0,.25,.5,.75,1].map(f=>Math.round(f*(n-1)));
+  const grid=tix.map(i=>`<line x1="${X(i).toFixed(1)}" y1="0" x2="${X(i).toFixed(1)}" y2="${H-9}" stroke="var(--line)" stroke-width="1" opacity=".45"/>`).join('');
+  const xlabs=tix.map((i,k)=>`<span style="${k===0?'':(k===tix.length-1?'text-align:right':'text-align:center')}">${(pts[i].at||'').slice(11,16)}</span>`).join('');
   el.innerHTML=`<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">`+
+    grid+
     `<line x1="0" y1="${capY}" x2="${W}" y2="${capY}" stroke="var(--warn)" stroke-dasharray="5 5" stroke-width="1" opacity=".55"/>`+
     `<path d="${area}" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.5"/>${drops}</svg>`+
+    `<div class="xax">${xlabs}</div>`+
     `<div class="clabel"><span>${d.camera?'<b>'+d.camera+'</b> &middot; ':''}analysis lag (area) &middot; <span class="bad">drops</span> (ticks) &middot; dashed = 30-min cap</span>`+
-    `<span>${(d.from||'').slice(5,16)} &rarr; ${(d.to||'').slice(11,16)}</span></div>`;
+    `<span>${(d.from||'').slice(0,10)}</span></div>`;
 }catch(e){$('#chart').innerHTML='<div class="empty" style="padding:1rem">stats unavailable</div>';}}
 ['since','taxon','camera'].forEach(id=>$('#'+id).onchange=()=>{loadVisits();loadStats();});
 $('#chartcam').onchange=loadStats;
