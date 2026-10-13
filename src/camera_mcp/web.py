@@ -313,8 +313,8 @@ dialog .vmeta a{color:var(--accent);cursor:pointer}
   <select id="since"><option value="2h">last 2h</option><option value="12h">12h</option>
     <option value="24h" selected>24h</option><option value="3d">3 days</option><option value="7d">7 days</option></select>
   <select id="taxon"><option value="">all species</option><option>night-critters</option><option>cat</option>
-    <option>rat</option><option>squirrel</option><option>raccoon</option><option>opossum</option>
-    <option>skunk</option><option>fox</option><option>coyote</option><option>owl</option>
+    <option>dog</option><option>rat</option><option>squirrel</option><option>raccoon</option><option>opossum</option>
+    <option>skunk</option><option>fox</option><option>coyote</option><option>owls</option>
     <option>songbirds</option><option>person</option></select>
   <select id="camera"><option value="">all cameras</option></select>
 </div>
