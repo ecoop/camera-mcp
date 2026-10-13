@@ -33,7 +33,7 @@ GENERIC_GROUPS = {"animal", "mammal", "rodent", "bird", "person", "vehicle"}  # 
 
 
 def build_subject(history: History, since: str = "14h") -> str:
-    """An email subject that leads with the content: the identified species seen overnight."""
+    """An email subject that leads with the content: the identified species seen in the window."""
     from datetime import datetime
 
     summary = history.activity_summary(since=since, group_by="group")
@@ -43,14 +43,14 @@ def build_subject(history: History, since: str = "14h") -> str:
         day = summary["to"][:10]
     named = [r["key"] for r in summary["rows"] if r["key"] not in GENERIC_GROUPS]
     tail = f" ({', '.join(named[:4])})" if named else ""
-    return f"Overnight visitors — {day}{tail}"
+    return f"Recent visitors — {day}{tail}"
 
 
 def build_brief(history: History, since: str = "14h") -> str:
     lines: list[str] = []
     summary = history.activity_summary(since=since, group_by="group")
     window = f"{summary['from'][5:16].replace('T', ' ')} → {summary['to'][11:16]}"
-    lines.append(f"\U0001f426 Wildlife brief — last night ({window})")
+    lines.append(f"\U0001f426 Wildlife brief ({window})")
 
     def by_tag(tag: str, taxon: str) -> list[dict]:
         """find_visits for a tag, or [] if no camera has that tag (not every site has every role)."""
@@ -67,7 +67,7 @@ def build_brief(history: History, since: str = "14h") -> str:
             lines.append(f"⚠ Backyard: {_count(critters)} (raccoon/skunk/opossum) on "
                          f"{', '.join(where)} — {_times(critters)}")
         else:
-            lines.append("✓ Backyard: clear of raccoons/skunks/opossums overnight")
+            lines.append("✓ Backyard: clear of raccoons/skunks/opossums")
 
     cats = by_tag("feeder", "cat")
     if cats:
@@ -77,9 +77,9 @@ def build_brief(history: History, since: str = "14h") -> str:
     rows = [r for r in summary["rows"] if r["key"] not in ("person",)]
     if rows:
         tally = ", ".join(f"{r['key']} {r['visits']}" for r in rows[:8])
-        lines.append(f"Overnight: {summary['total_visits']} visits — {tally}")
+        lines.append(f"Total: {summary['total_visits']} visits — {tally}")
     else:
-        lines.append("Overnight: nothing detected")
+        lines.append("Nothing detected")
 
     # Gaps worth flagging: a camera down or barely watched, a big unanalyzed backlog, or a
     # camera that looks moved. (A uniformly < 100% watched just means the monitor started

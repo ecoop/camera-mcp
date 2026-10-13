@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Eric Cooper.
-"""The morning brief summarises the overnight log into a short, phone-sized message."""
+"""The morning brief summarises the recent visit log into a short, phone-sized message."""
 
 from __future__ import annotations
 
@@ -110,7 +110,7 @@ def test_main_email_path_sends_and_writes_file(tmp_path, monkeypatch):
         subject=subj, body=body, image=image))
 
     brief.main(["--email", "--config", str(cfg), "--data-dir", str(data), "--since", "14h"])
-    assert "Overnight visitors" in sent["subject"]
+    assert "Recent visitors" in sent["subject"]
     assert (data / "briefs").glob("*.txt")  # dated file written
 
 
@@ -125,6 +125,6 @@ def test_brief_handles_a_site_with_no_tagged_cameras(tmp_path):
 def test_build_subject_leads_with_species(tmp_path):
     from camera_mcp.brief import build_subject
     subject = build_subject(_history(tmp_path), "14h")
-    assert subject.startswith("Overnight visitors")
+    assert subject.startswith("Recent visitors")
     assert "raccoon" in subject or "northern raccoon" in subject  # an identified species, not "animal"
     assert "animal" not in subject and "mammal" not in subject
