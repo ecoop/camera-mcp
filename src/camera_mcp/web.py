@@ -361,7 +361,8 @@ async function loadVisits(){const r=await (await fetch('/api/visits?'+params()))
     if(hasClip){vid.src='/media/visit/'+id+'/clip'; vid.style.display='';}else{vid.removeAttribute('src');vid.style.display='none';}
     curVisit=id; resetBoxes(); $('#boxbtn').disabled=!hasClip;
     $('#clipmeta').textContent=t.querySelector('.sp').textContent+' — '+t.querySelector('.sub').textContent;
-    $('#cliplink').href='/media/visit/'+id+'/clip'; dlg.showModal();});}
+    $('#cliplink').href='/media/visit/'+id+'/clip'; dlg.showModal();
+    if(hasClip) toggleBoxes();});}  // show the boxed still by default
 let curVisit=null, boxesOn=false, boxData=null;
 function resetBoxes(){boxesOn=false;boxData=null;const s=$('#boxov');s.style.display='none';s.innerHTML='';
   const b=$('#boxbtn');b.classList.remove('on');b.textContent='show boxes';}
@@ -381,6 +382,11 @@ async function toggleBoxes(){const b=$('#boxbtn'); if(boxesOn){resetBoxes();retu
   if(f&&vid.getAttribute('src')){try{vid.pause();if(f.offset)vid.currentTime=f.offset;}catch(e){}}
   drawBoxes();}
 $('#boxbtn').onclick=toggleBoxes;
+// once the clip's dimensions are known, size the overlay and seek to the best-box frame
+$('#clip').querySelector('video').addEventListener('loadeddata',()=>{if(!boxesOn)return;
+  const vid=$('#clip').querySelector('video'), f=boxData&&boxData.frames&&boxData.frames[boxData.best];
+  if(f){try{vid.pause();if(f.offset)vid.currentTime=f.offset;}catch(e){}}
+  drawBoxes();});
 $('#clip').onclick=e=>{if(e.target.id==='clip')$('#clip').close();};
 async function loadStats(){try{const cc=$('#chartcam').value;
   const d=await (await fetch('/api/stats?since='+$('#since').value+(cc?'&camera='+encodeURIComponent(cc):''))).json();
