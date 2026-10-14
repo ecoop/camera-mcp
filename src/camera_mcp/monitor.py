@@ -81,6 +81,19 @@ PAUSE_RECHECK = 30.0  # seconds between clock checks while a camera is outside i
 SHUTDOWN_SECONDS = 120.0  # at most this long, after stopping, to save open visits and their media
 
 
+def capture_still(seg_path, off: float) -> bytes | None:
+    """Decode one full, uncropped frame (JPEG bytes) from a ring-buffer segment. Called during
+    analysis while the segment is guaranteed on disk — capturing at visit close is racy, because a
+    short visit's segments are pruned in the ~30s before it closes. None on any failure."""
+    try:
+        r = subprocess.run([FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin",
+                            "-ss", f"{off:.3f}", "-i", str(seg_path), "-frames:v", "1",
+                            "-q:v", "2", "-f", "mjpeg", "-"], capture_output=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return r.stdout if r.returncode == 0 and r.stdout else None
+
+
 def watcher_args(source: Camera, width: int, height: int, fps: float) -> list[str]:
     """ffmpeg arguments that decode `source` to raw YUV 4:2:0 frames on stdout: the Y plane
     (brightness) drives motion detection; the colour planes tell day from infrared night."""
@@ -476,21 +489,14 @@ class CameraWorker:
         return str(out.relative_to(self.data_dir))
 
     def _write_still(self, visit: Visit, rel: str) -> str | None:
-        """The full, uncropped frame the detection happened on, decoded from its ring-buffer segment
-        at the exact moment — no clip-timeline guessing (the clip and the analysis clocks drift, and
-        a long visit's best frame may fall outside the capped clip). None if that segment is already
-        gone; the web app then falls back to a clip-extracted frame."""
-        if not visit.best_seg or not Path(visit.best_seg).exists():
+        """Write the full frame captured at the best moment (see _capture_still) to disk. None if the
+        visit never got one; the web app then falls back to a clip-extracted frame."""
+        if not visit.still_jpeg:
             return None
         out = self.data_dir / "stills" / self.camera.name / rel
         out.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            r = subprocess.run([FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin",
-                                "-ss", f"{visit.best_seg_off:.3f}", "-i", visit.best_seg,
-                                "-frames:v", "1", "-q:v", "2", str(out)], capture_output=True, timeout=30)
-        except (OSError, subprocess.SubprocessError):
-            return None
-        return str(out.relative_to(self.data_dir)) if r.returncode == 0 and out.exists() else None
+        out.write_bytes(visit.still_jpeg)
+        return str(out.relative_to(self.data_dir))
 
     def _finish_pending(self, final: bool) -> None:
         segments = ringbuffer.list_segments(self.seg_dir)
@@ -695,9 +701,11 @@ class Analyzer:
                 before = set(worker.tracker.open)
                 closed = worker.tracker.feed(t, detections, frame)
                 still_open = dict(worker.tracker.open)
-            for visit in still_open.values():  # frame that just became the best: remember its segment
+            for visit in still_open.values():  # new best: grab the full frame now, while its segment exists
                 if visit.best_t == t:
-                    visit.best_seg, visit.best_seg_off = str(seg.path), max(0.0, t - seg.start)
+                    jpeg = capture_still(seg.path, max(0.0, t - seg.start))
+                    if jpeg:
+                        visit.still_jpeg = jpeg
             for key, visit in sorted(still_open.items()):
                 if visit.db_id is None:  # arrived (or took over an unidentified visit's row)
                     if key not in before:

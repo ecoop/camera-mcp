@@ -50,8 +50,7 @@ class Visit:
     best_conf: float = 0.0
     thumbnail: np.ndarray | None = None  # RGB crop of the best box so far
     best_t: float = 0.0  # time of the best-box frame (so the monitor can save the full frame)
-    best_seg: str | None = None  # the ring-buffer segment that frame came from, and its offset within it
-    best_seg_off: float = 0.0
+    still_jpeg: bytes | None = None  # full frame captured (encoded) at the best moment; written at close
     log: list[tuple[float, list[Detection]]] = field(default_factory=list)  # per frame
     db_id: int | None = None  # its row in the store, written when it opened
 
