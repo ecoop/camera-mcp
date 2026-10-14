@@ -326,6 +326,7 @@ def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
 
     return Starlette(routes=[
         Route("/", index),
+        Route("/analytics", index),  # same single-page doc; the client shows the analytics view
         Route("/zones", zones_page),
         Route("/api/cameras", api_cameras),
         Route("/api/status", api_status),
@@ -372,6 +373,13 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 .bar{display:flex;align-items:center;justify-content:space-between;gap:.6rem;flex-wrap:wrap;margin-bottom:1rem}
 .brand{font-family:var(--mono);font-weight:600;font-size:1.2rem}
 .who{font-family:var(--mono);font-size:.72rem;color:var(--muted)}
+.tabs{display:flex;gap:1rem;flex:1;margin-left:1.3rem}
+.tabs a{font-family:var(--mono);font-size:.82rem;color:var(--muted);text-decoration:none;text-transform:lowercase;letter-spacing:.02em;padding:.1rem 0;border-bottom:2px solid transparent}
+.tabs a.active{color:var(--accent);border-bottom-color:var(--accent)}
+.tabs a:hover{color:var(--ink)}
+.morelink{font-family:var(--mono);font-size:.72rem;color:var(--accent);text-decoration:none;white-space:nowrap}
+.morelink:hover{text-decoration:underline}
+#featsel{font-family:var(--mono);font-size:.72rem;background:var(--frame);color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:.2rem .4rem;text-transform:none;letter-spacing:0}
 .health{font-family:var(--mono);font-size:.74rem;color:var(--muted);border:1px solid var(--line);
   border-radius:8px;padding:.5rem .7rem;background:var(--frame);margin-bottom:1rem}
 .health b{color:var(--ink)} .ok{color:var(--good)} .bad{color:var(--warn)}
@@ -438,33 +446,51 @@ dialog .vmeta a{color:var(--accent);cursor:pointer}
 .boxbtn.on{color:var(--warn);border-color:var(--warn)}
 </style></head><body><div class="wrap">
 <div class="bar"><div class="brand">&#129437; Yard Sentry</div>
-  <div class="who"><a href="/zones" style="color:var(--accent);text-decoration:none">zones &rarr;</a> &middot; <span id="clock"></span></div></div>
+  <nav class="tabs"><a href="/" data-view="feeds">feeds</a><a href="/analytics" data-view="analytics">analytics</a>
+    <a href="/zones">zones &rarr;</a></nav>
+  <div class="who"><span id="clock"></span></div></div>
 <div class="health" id="health">loading&hellip;</div>
-<div class="sect" style="margin-top:0;display:flex;justify-content:space-between;align-items:center;gap:1rem">
-  <span>Throughput &amp; backlog</span>
-  <select id="chartcam" style="font-family:var(--mono);font-size:.72rem;background:var(--frame);color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:.2rem .4rem;text-transform:none;letter-spacing:0">
-    <option value="">all cameras</option><option value="__each__">per camera (grid)</option></select>
-</div>
-<div class="chart" id="chart"></div>
-<div class="sect" style="display:flex;justify-content:space-between;align-items:center;gap:1rem">
-  <span>Hourly load &middot; by camera</span>
-  <span class="hmode"><button class="boxbtn on" data-m="dropped">drops</button><button class="boxbtn" data-m="frames">activity</button></span>
-</div>
-<div class="chart" id="hmap"></div>
 <div class="filters">
   <select id="since"><option value="2h">last 2h</option><option value="12h">12h</option>
     <option value="24h" selected>24h</option><option value="3d">3 days</option><option value="7d">7 days</option></select>
   <select id="taxon"><option value="">all species</option></select>
   <select id="camera"><option value="">all cameras</option></select>
 </div>
-<div class="sect">Visits over time</div>
-<div class="chart vtl" id="vtl"></div>
-<div class="sect">Visits</div>
-<div class="grid" id="grid"></div>
+
+<section id="view-feeds">
+  <div class="sect" style="margin-top:0">Live</div>
+  <div class="grid" id="live"></div>
+  <div class="sect">Visits</div>
+  <div class="grid" id="grid"></div>
+  <div class="empty" id="empty" style="display:none">No visits in this window.</div>
+  <div class="sect" style="display:flex;justify-content:space-between;align-items:center;gap:1rem">
+    <span>At a glance</span>
+    <span style="display:flex;gap:.6rem;align-items:center">
+      <select id="featsel"><option value="timeline">visits over time</option>
+        <option value="throughput">throughput &amp; backlog</option>
+        <option value="heatmap">hourly load</option></select>
+      <a class="morelink" href="/analytics" data-view="analytics">full analytics &rarr;</a>
+    </span>
+  </div>
+  <div class="chart" id="feat"></div>
+</section>
+
+<section id="view-analytics" hidden>
+  <div class="sect" style="margin-top:0;display:flex;justify-content:space-between;align-items:center;gap:1rem">
+    <span>Throughput &amp; backlog</span>
+    <select id="chartcam" style="font-family:var(--mono);font-size:.72rem;background:var(--frame);color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:.2rem .4rem;text-transform:none;letter-spacing:0">
+      <option value="">all cameras</option><option value="__each__">per camera (grid)</option></select>
+  </div>
+  <div class="chart" id="chart"></div>
+  <div class="sect" style="display:flex;justify-content:space-between;align-items:center;gap:1rem">
+    <span>Hourly load &middot; by camera</span>
+    <span class="hmode"><button class="boxbtn on" data-m="dropped">drops</button><button class="boxbtn" data-m="frames">activity</button></span>
+  </div>
+  <div class="chart" id="hmap"></div>
+  <div class="sect">Visits over time</div>
+  <div class="chart vtl" id="vtl"></div>
+</section>
 <div class="vtip" id="vtip"></div>
-<div class="empty" id="empty" style="display:none">No visits in this window.</div>
-<div class="sect">Live</div>
-<div class="grid" id="live"></div>
 <dialog id="clip"><div class="stage pan" id="stage"><div class="pz" id="pz">
     <img id="still" alt="frame">
     <video controls style="display:none"></video>
@@ -605,7 +631,7 @@ const fmtK=n=>n>=1000?(n/1000).toFixed(n>=10000?0:1)+'k':''+n;
 function xAxis(pts){const n=pts.length,tix=[0,.25,.5,.75,1].map(f=>Math.round(f*(n-1)));
   return tix.map((i,k)=>`<span style="${k===0?'':(k===tix.length-1?'text-align:right':'text-align:center')}">${(pts[i].at||'').slice(11,16)}</span>`).join('');}
 const peakLag=pts=>pts.reduce((m,p)=>Math.max(m,p.lag),0);
-async function loadStats(){const el=$('#chart'); try{const cc=$('#chartcam').value;
+async function loadStats(sel='#chart',forceAll=false){const el=$(sel); try{const cc=forceAll?'':$('#chartcam').value;
   if(cc==='__each__') return loadStatsGrid(el);
   const d=await (await fetch('/api/stats?since='+$('#since').value+(cc?'&camera='+encodeURIComponent(cc):''))).json();
   const pts=d.points||[];
@@ -641,7 +667,7 @@ const classOf=g=>GROUP_CLASS[g]||'other';
 function showTip(e,html){const t=$('#vtip');t.innerHTML=html;t.style.opacity='1';
   t.style.left=Math.min(e.clientX+12,innerWidth-230)+'px';t.style.top=(e.clientY+14)+'px';}
 function hideTip(){$('#vtip').style.opacity='0';}
-async function loadTimeline(){const el=$('#vtl'); try{
+async function loadTimeline(sel='#vtl'){const el=$(sel); try{
   const p=new URLSearchParams();p.set('since',$('#since').value);if($('#camera').value)p.set('camera',$('#camera').value);
   const d=await (await fetch('/api/visits/timeline?'+p.toString())).json();
   const bins=d.bins||[];
@@ -666,7 +692,7 @@ async function loadTimeline(){const el=$('#vtl'); try{
   el.querySelectorAll('.vhit').forEach(r=>{r.addEventListener('mousemove',e=>showTip(e,r.dataset.tip));r.addEventListener('mouseleave',hideTip);});
 }catch(e){el.innerHTML='<div class="empty" style="padding:1rem">timeline unavailable</div>';}}
 // ---- hourly load heatmap (hour-of-day x camera) ----
-async function loadHeatmap(){const el=$('#hmap'),mode=$('.hmode .on').dataset.m; try{
+async function loadHeatmap(sel='#hmap',forceMode=null){const el=$(sel),mode=forceMode||($('.hmode .on')&&$('.hmode .on').dataset.m)||'dropped'; try{
   const d=await (await fetch('/api/stats/heatmap?since='+$('#since').value)).json();
   const cams=d.cameras||[];
   if(!cams.length){el.innerHTML='<div class="empty" style="padding:1rem">no per-camera stats yet (recorded from the latest build on)</div>';return;}
@@ -681,13 +707,32 @@ async function loadHeatmap(){const el=$('#hmap'),mode=$('.hmode .on').dataset.m;
   el.innerHTML=html;
   el.querySelectorAll('.hcell').forEach(c=>{c.addEventListener('mousemove',e=>showTip(e,c.dataset.tip));c.addEventListener('mouseleave',hideTip);});
 }catch(e){el.innerHTML='<div class="empty" style="padding:1rem">heatmap unavailable</div>';}}
+// ---- the one featured chart on the feeds view (user-selectable, persisted per browser) ----
+function loadFeatured(){const k=$('#featsel').value;
+  if(k==='throughput')loadStats('#feat',true);        // always all-cameras in the compact slot
+  else if(k==='heatmap')loadHeatmap('#feat','dropped');
+  else loadTimeline('#feat');}
+try{const f=localStorage.getItem('feat'); if(f)$('#featsel').value=f;}catch(e){}
+$('#featsel').onchange=()=>{try{localStorage.setItem('feat',$('#featsel').value);}catch(e){} loadFeatured();};
+
+// ---- two views (feeds / analytics), bookmarkable at / and /analytics ----
+let VIEW='feeds';
+function renderView(){if(VIEW==='analytics'){loadStats();loadTimeline();loadHeatmap();}else{loadVisits();loadFeatured();}}
+function setView(v,push){VIEW=v==='analytics'?'analytics':'feeds';
+  $('#view-feeds').hidden=VIEW!=='feeds'; $('#view-analytics').hidden=VIEW!=='analytics';
+  document.querySelectorAll('.tabs a[data-view]').forEach(a=>a.classList.toggle('active',a.dataset.view===VIEW));
+  if(push)history.pushState({v:VIEW},'',VIEW==='analytics'?'/analytics':'/');
+  renderView();}
+document.querySelectorAll('a[data-view]').forEach(a=>a.addEventListener('click',e=>{e.preventDefault();setView(a.dataset.view,true);}));
+addEventListener('popstate',()=>setView(location.pathname.indexOf('analytics')>=0?'analytics':'feeds',false));
+
 $('.hmode').querySelectorAll('button').forEach(b=>b.onclick=()=>{$('.hmode .on').classList.remove('on');b.classList.add('on');loadHeatmap();});
-['since','taxon','camera'].forEach(id=>$('#'+id).onchange=()=>{loadVisits();loadStats();});
-['since','camera'].forEach(id=>$('#'+id).addEventListener('change',loadTimeline));
-$('#since').addEventListener('change',()=>{loadHealth();loadHeatmap();});  // header + heatmap follow the window
-$('#chartcam').onchange=loadStats;
-tick();setInterval(tick,1000);loadCameras();loadSpecies();loadHealth();loadStats();loadTimeline();loadHeatmap();loadVisits();
-setInterval(()=>{loadHealth();loadStats();loadTimeline();loadHeatmap();},60000);
+// filters are global; a change refreshes the header and whichever view is showing
+['since','taxon','camera'].forEach(id=>$('#'+id).addEventListener('change',()=>{loadHealth();renderView();}));
+$('#chartcam').onchange=()=>{if(VIEW==='analytics')loadStats();};
+tick();setInterval(tick,1000);loadCameras();loadSpecies();loadHealth();
+setView(location.pathname.indexOf('analytics')>=0?'analytics':'feeds',false);
+setInterval(()=>{loadHealth();renderView();},60000);
 </script></div></body></html>"""
 
 
