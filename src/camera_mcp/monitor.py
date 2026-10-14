@@ -28,7 +28,6 @@ import argparse
 import collections
 import logging
 import os
-import queue
 import re
 import signal
 import subprocess
@@ -230,6 +229,10 @@ class CameraWorker:
     def _active_now(self) -> bool:
         """Is the camera inside its watch window right now? (Always, with no window.)"""
         return self.camera.is_active(datetime.now(self.tz))
+
+    def priority_now(self) -> int:
+        """The analyzer service priority in force right now (base, plus any `when:` override)."""
+        return self.camera.settings_at(datetime.now(self.tz)).priority
 
     def _await_active(self) -> bool:
         """Block while the camera is outside its active window. False means stop was set."""
@@ -544,17 +547,77 @@ class CameraWorker:
         ringbuffer.prune(self.seg_dir, keep)
 
 
+class _Scheduler:
+    """The analyzer's work queue: per-camera FIFO sub-queues, drained highest-priority first.
+
+    One shared GPU can't keep up with every camera at once, so under a backlog the order in which
+    cameras are serviced matters. Each camera keeps its own FIFO queue (the visit tracker is fed in
+    time order, so a camera's segments must never be reordered). Across cameras, the next segment
+    taken is the oldest of the highest-priority non-empty camera; among equal priority, the camera
+    served least recently (round-robin fairness, so a high-priority camera can't starve the rest).
+    Priority is read live from each camera, so a `when:` schedule change takes effect immediately.
+    """
+
+    def __init__(self) -> None:
+        self._cv = threading.Condition()
+        self._q: dict[str, collections.deque[tuple[CameraWorker, ringbuffer.Segment]]] = {}
+        self._served = 0  # monotonic tick, stamped on a camera each time it is served (for LRU ties)
+        self._last_served: dict[str, int] = {}
+
+    def put(self, worker: CameraWorker, seg: ringbuffer.Segment) -> None:
+        with self._cv:
+            self._q.setdefault(worker.camera.name, collections.deque()).append((worker, seg))
+            self._cv.notify()
+
+    def get(self, timeout: float) -> tuple[CameraWorker, ringbuffer.Segment] | None:
+        """The next (worker, segment) to analyse, or None if nothing arrives within `timeout`."""
+        with self._cv:
+            deadline = time.monotonic() + timeout
+            while True:
+                item = self._take()
+                if item is not None:
+                    return item
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or not self._cv.wait(remaining):
+                    return None
+
+    def _take(self) -> tuple[CameraWorker, ringbuffer.Segment] | None:
+        best_cam, best_key = None, None
+        for cam, dq in self._q.items():
+            if not dq:
+                continue
+            # higher priority sorts first (negate); then least-recently-served (smaller tick) first
+            key = (-dq[0][0].priority_now(), self._last_served.get(cam, 0))
+            if best_key is None or key < best_key:
+                best_cam, best_key = cam, key
+        if best_cam is None:
+            return None
+        self._served += 1
+        self._last_served[best_cam] = self._served
+        return self._q[best_cam].popleft()
+
+    def qsize(self) -> int:
+        with self._cv:
+            return sum(len(dq) for dq in self._q.values())
+
+    def depth(self) -> dict[str, int]:
+        """Per-camera backlog (non-empty cameras only), for the analysis-stats sample."""
+        with self._cv:
+            return {cam: len(dq) for cam, dq in self._q.items() if dq}
+
+
 class Analyzer:
     """One detection model shared by every camera, fed finished segments through a queue.
 
     Each segment is decoded at one frame per `detect_every_seconds`; when the queue backs up
     (a slow machine, many busy cameras), only one frame per segment is analysed until it
     catches up. A burst is absorbed rather than dropped: motion segments are retained and
-    queued, worked off in order as the machine catches up in the quiet that follows (the
-    ring buffer keeps their footage while they wait). Only a segment deferred past
-    `max_defer_seconds` — sustained overload beyond what the machine can ever analyse — is
-    dropped, and recorded as a blind spot. On stop, queued segments are dropped and open
-    visits are closed as they are.
+    queued, worked off as the machine catches up in the quiet that follows (the ring buffer
+    keeps their footage while they wait). The queue (`_Scheduler`) drains the highest-priority
+    camera's backlog first (`priority`, settable by time of day) while keeping each camera in
+    its own time order. Only a segment deferred past `max_defer_seconds` — sustained overload
+    beyond what the machine can ever analyse — is dropped, and recorded as a blind spot. On
+    stop, queued segments are dropped and open visits are closed as they are.
     """
 
     BACKLOG = 8  # queued segments beyond which analysis thins out
@@ -565,7 +628,7 @@ class Analyzer:
         self.detector = detector
         self.stop = stop
         self.store = store
-        self.queue: queue.Queue[tuple[CameraWorker, ringbuffer.Segment]] = queue.Queue()
+        self.sched = _Scheduler()  # per-camera FIFO sub-queues, drained highest-priority first
         self.thread = threading.Thread(target=self._run, name="analyzer", daemon=True)
         self._behind = False
         self._skipped: dict[str, float] = defaultdict(float)  # seconds skipped per camera since the last report
@@ -584,7 +647,7 @@ class Analyzer:
         return self.detector.model
 
     def submit(self, worker: CameraWorker, seg: ringbuffer.Segment) -> None:
-        self.queue.put((worker, seg))
+        self.sched.put(worker, seg)
 
     def start(self) -> None:
         self.thread.start()
@@ -592,13 +655,13 @@ class Analyzer:
     def _run(self) -> None:
         while True:
             self._flush_stats()
-            try:
-                worker, seg = self.queue.get(timeout=0.5)
-            except queue.Empty:
+            item = self.sched.get(timeout=0.5)
+            if item is None:
                 if self.stop.is_set():
                     self._flush_stats(force=True)
                     return
                 continue
+            worker, seg = item
             try:
                 if self.stop.is_set():
                     pass
@@ -626,15 +689,12 @@ class Analyzer:
             return
         if self.store is None or (not force and now - self._last_stats < self.STATS_EVERY):
             return
-        with self.queue.mutex:  # per-camera backlog: tally the waiting segments by camera
-            depth: dict[str, int] = defaultdict(int)
-            for w, _ in self.queue.queue:
-                depth[w.camera.name] += 1
+        depth = self.sched.depth()  # per-camera backlog: segments waiting, by camera
         cams = set(self._analyzed) | set(self._dropped) | set(self._infer_seconds) | set(self._max_lag) | set(depth)
         self.store.add_analysis_stats(now, sum(depth.values()), max(self._max_lag.values(), default=0.0),
                                       sum(self._analyzed.values()), sum(self._dropped.values()),
                                       sum(self._infer_seconds.values()))
-        self.store.add_camera_stats(now, [(c, depth[c], self._max_lag[c], self._analyzed[c],
+        self.store.add_camera_stats(now, [(c, depth.get(c, 0), self._max_lag[c], self._analyzed[c],
                                            self._dropped[c], self._infer_seconds[c]) for c in sorted(cams)])
         self._analyzed.clear()
         self._dropped.clear()
@@ -659,7 +719,7 @@ class Analyzer:
         s = worker.camera.settings_at(datetime.now(worker.tz))  # base settings + any time-of-day overrides
         wide = "wide_view" in worker.camera.tags
         tiles = (s.tile_rows or (2 if wide else 1), s.tile_cols or (2 if wide else 1))
-        behind = self.queue.qsize() > self.BACKLOG
+        behind = self.sched.qsize() > self.BACKLOG
         if behind != self._behind:
             self._behind = behind
             log.warning("analysis is %s", "falling behind: one frame per segment until it catches up"
@@ -726,8 +786,9 @@ class Alerter:
     spam. Inactive (a no-op) unless alert species, mail settings, and a recipient are all set.
 
     The alert fires when the sighting is *analysed*, which under a backlog can trail wall-clock;
-    the message carries the actual sighting time. A priority fast-lane (so alert-eligible frames
-    jump the queue) is the follow-up that makes it truly time-sensitive."""
+    the message carries the actual sighting time. Give the cameras that matter for alerts a higher
+    `priority` so their backlog is analysed before quieter cameras' — within one camera, segments
+    are still analysed in time order, so a fresh sighting waits behind that camera's own backlog."""
 
     COOLDOWN = 300.0  # seconds between alerts for the same species
 

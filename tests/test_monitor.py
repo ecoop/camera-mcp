@@ -9,8 +9,10 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime
+from types import SimpleNamespace
 
 import cv2
 import numpy as np
@@ -224,6 +226,23 @@ cameras:
     assert cams["fence"].schedule == () and cams["fence"].settings_at(_at("03:00")) == cams["fence"].monitor
 
 
+def test_priority_parses_and_schedules(tmp_path):
+    cams = load_cameras(write(tmp_path, """
+cameras:
+  - name: alley
+    source: a.mp4
+    priority: 5
+    when:
+      - { hours: "22:00-06:00", priority: 9 }
+  - name: yard
+    source: y.mp4
+"""))
+    alley = cams["alley"]
+    assert alley.settings_at(_at("12:00")).priority == 5      # base
+    assert alley.settings_at(_at("23:30")).priority == 9      # night boost via when:
+    assert cams["yard"].settings_at(_at("12:00")).priority == 0  # default
+
+
 @pytest.mark.parametrize("when, msg", [
     ("[{tile_rows: 1}]", "needs an 'hours'"),
     ('[{hours: "9-5", tile_rows: 1}]', "HH:MM"),
@@ -238,6 +257,56 @@ def test_bad_schedule_rejected(tmp_path, when, msg):
 def test_tile_windows_count():
     from camera_mcp.detect import tile_windows
     assert len(tile_windows(1, 1)) == 1 and len(tile_windows(2, 2)) == 4 and len(tile_windows(1, 2)) == 2
+
+
+# ---- analyzer work scheduler (Phase B: priority order under backlog) ------------------
+
+class _StubWorker:
+    """Minimal stand-in for CameraWorker in _Scheduler tests: a name and a live priority."""
+    def __init__(self, name, priority=0):
+        self.camera = SimpleNamespace(name=name)
+        self._priority = priority
+
+    def priority_now(self):
+        return self._priority
+
+
+def test_scheduler_preserves_per_camera_order():
+    from camera_mcp.monitor import _Scheduler
+    s = _Scheduler()
+    w = _StubWorker("a")
+    for i in range(3):
+        s.put(w, i)
+    assert [s.get(0.1)[1] for _ in range(3)] == [0, 1, 2]  # FIFO within a camera
+    assert s.get(0.01) is None  # drained
+
+
+def test_scheduler_drains_higher_priority_first():
+    from camera_mcp.monitor import _Scheduler
+    s = _Scheduler()
+    lo, hi = _StubWorker("lo", 0), _StubWorker("hi", 5)
+    for w, tag in [(lo, "lo0"), (hi, "hi0"), (lo, "lo1"), (hi, "hi1")]:
+        s.put(w, tag)
+    # the high-priority camera's whole backlog first, each camera still in its own order
+    assert [s.get(0.1)[1] for _ in range(4)] == ["hi0", "hi1", "lo0", "lo1"]
+
+
+def test_scheduler_round_robins_equal_priority():
+    from camera_mcp.monitor import _Scheduler
+    s = _Scheduler()
+    a, b = _StubWorker("a", 1), _StubWorker("b", 1)
+    for w, tag in [(a, "a0"), (a, "a1"), (b, "b0"), (b, "b1")]:
+        s.put(w, tag)
+    # equal priority: least-recently-served next, so the two cameras alternate
+    assert [s.get(0.1)[1] for _ in range(4)] == ["a0", "b0", "a1", "b1"]
+
+
+def test_scheduler_get_wakes_on_put():
+    from camera_mcp.monitor import _Scheduler
+    s = _Scheduler()
+    w = _StubWorker("a")
+    threading.Timer(0.05, lambda: s.put(w, "x")).start()
+    assert s.get(1.0)[1] == "x"  # blocked, then woke when the segment arrived
 
 
 def test_roi_parses_and_rejects_bad(tmp_path):

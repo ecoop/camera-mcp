@@ -28,6 +28,10 @@ monitor:
   detect_every_seconds: 1.0   # while there's motion or an open visit, analyse a frame this often
   max_defer_seconds: 1800.0   # queue a motion segment up to this long when the detector is behind;
                               # past it the segment is dropped and logged as unanalyzed
+  # priority: 0               # per-camera service order when the detector is behind: a higher-priority
+                              # camera's queued segments are analysed before a lower one's (ties:
+                              # least-recently-served). Each camera stays in its own time order.
+                              # Give the cameras you most want timely alerts/visits from a higher value.
 cameras:
   - name: east_fence
     label: Back fence, east
@@ -49,7 +53,7 @@ cameras:
     tile_cols: 2            # rows*cols <= 1 means whole frame only (no tiling)
     analysis_width: 1920    # scale the analysis frame to this width (0 = native); sharper far-animal crops
     # Vary settings by local time of day (wraps midnight). Each entry may override
-    # tile_rows, tile_cols, and detect_every_seconds. Quiet nights cost less:
+    # tile_rows, tile_cols, detect_every_seconds, analysis_width, and priority. Quiet nights cost less:
     when:
       - { hours: "22:00-06:00", tile_rows: 1, tile_cols: 1, detect_every_seconds: 2, analysis_width: 1280 }
   - name: east_deck

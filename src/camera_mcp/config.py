@@ -63,6 +63,8 @@ class MonitorSettings:
     tile_rows: int = 0  # analysis tiling grid rows (0 = the wide_view default: 2 if tagged, else 1)
     tile_cols: int = 0  # analysis tiling grid cols; rows*cols <= 1 means the whole frame, no tiling
     analysis_width: int = 0  # scale the analysis frame to this width before inference (0 = native)
+    priority: int = 0  # analyzer service order under backlog: a higher-priority camera's queued segments
+    # are analysed before a lower one's (ties: least-recently-served). Each camera stays in its own order.
     max_defer_seconds: float = 1800.0  # a motion segment is deferred (queued) up to this long; only past
     # it is dropped and logged as unanalyzed. Bursts are absorbed and caught up in idle time.
     max_clip_seconds: float = 120.0  # clips are cut off this long after the visit starts (a dove can sit for an hour)
@@ -337,7 +339,7 @@ def _active(raw: dict, where: str) -> str:
     return spec
 
 
-SCHEDULE_KEYS = {"tile_rows", "tile_cols", "detect_every_seconds", "analysis_width"}  # a `when:` may override these
+SCHEDULE_KEYS = {"tile_rows", "tile_cols", "detect_every_seconds", "analysis_width", "priority"}  # a `when:` may override these
 
 
 def _schedule(raw: dict, where: str) -> tuple[tuple[int, int, dict], ...]:
