@@ -265,16 +265,62 @@ as a *local analysis*, not a drop, so the queue's defer accounting stays honest.
 
 ---
 
+## AMD / ROCm variant (alternative path)
+
+Everything above assumes NVIDIA. The same offload works on a **used AMD Radeon** via **ROCm**, and
+it is worth doing if you want more VRAM per used dollar. Only the hardware, the toolchain, and the export engine change — the split
+architecture (§2), the wire format, the geometry invariant, and the parity gate (§1) are all
+identical, because they are device-agnostic.
+
+**Why it still ports for free.** PyTorch's ROCm build presents to the code as `"cuda"`
+(`torch.cuda.is_available()` returns True, device string `"cuda"`), so SpeciesNet's
+`cuda → mps → cpu` auto-selection picks the Radeon up with **no code change** — exactly the same
+"not Mac-specific" property that makes the NVIDIA path free.
+
+**What changes vs the NVIDIA plan:**
+
+| | NVIDIA (primary) | AMD / ROCm (this variant) |
+|---|---|---|
+| Inference-optimizer ("the TensorRT step") | TensorRT engine (FP16/INT8) | **MIGraphX**, or **ONNX Runtime** with the ROCm / MIGraphX execution provider |
+| Export path | `.pt` → ONNX → TensorRT engine (built on the box) | `.pt` → ONNX → **MIGraphX** compile on the box (or run the ONNX directly under ORT-ROCm) |
+| Toolkit | CUDA + cuDNN + TensorRT | **ROCm** (HIP, MIOpen, MIGraphX) |
+| Container step | `nvidia-container-toolkit` | ROCm container (`--device=/dev/kfd --device=/dev/dri`) |
+| OS | Ubuntu LTS | **Ubuntu LTS, native** — *not* Windows (see caveats) |
+
+**Hardware (buy used).** Prefer **RDNA3** — it is on ROCm's officially-supported list:
+
+| card (used) | VRAM | ~used price | notes |
+|---|---|---|---|
+| **RX 7900 XT / GRE** | 20 / 16 GB | < XTX | best value with official ROCm support; 16 GB is plenty for MDv5 |
+| RX 7900 XTX | 24 GB | ~$800–975 | the cheapest sane 24 GB card — only if you also want big local LLMs |
+| RX 6800 (RDNA2) | 16 GB | ~$335–365 | **not officially supported**; runs only via `HSA_OVERRIDE_GFX_VERSION` hacks — avoid unless you want that fight |
+
+**Expected performance.** RDNA3 is a strong inference GPU; MDv5a @1280 should run **well under the
+Studio's 0.24 s whole / 0.57 s tiled** (estimate — confirm on the bench), so, as with the RTX path,
+the box has headroom and won't become the bottleneck.
+
+**Caveats (why NVIDIA is still smoother).** ROCm's supported-GPU list is narrower and more
+version-sensitive than CUDA's; **native Linux is the sane path** (Windows PyTorch-ROCm is heavily
+restricted — Python 3.12 only, batch size 1, no training, crashes alongside other GPU apps, and
+WSL works but with a perf penalty and a manual `libhsa-runtime64.so` fix). MIGraphX has fewer
+worked examples than TensorRT, so expect more toolchain friction.
+
+**Benchmark + go/no-go (§4) are unchanged:** export → parity gate (IoU ≥ 0.7, |Δconf| ≤ 0.05, no
+dropped above-floor boxes) → throughput → GO only if the box meets the Studio's per-frame rate at a
+precision that passes parity. The only substitution is "TensorRT engine" → "MIGraphX / ORT-ROCm".
+
+---
+
 ## Rollout (shadow first, pausable at every step)
 
-1. **Assemble + bench** (§4). Export, parity, throughput — the CUDA/TensorRT learning happens here.
+1. **Assemble + bench** (§4). Export, parity, throughput — the CUDA/TensorRT (or ROCm/MIGraphX) learning happens here.
 2. **Shadow mode:** the box detects and returns boxes; the Studio logs them alongside the live local
    pipeline without changing behavior. Compare recall vs the local MegaDetector (especially small feeder
    birds) and the realized GPU-load drop on the Studio.
 3. **Flip the box-source** per camera class (whole-frame cameras first, then tiled feeders): the Studio
    classifies box-detected boxes instead of running its own MegaDetector; local path stays behind the flag
    as the timeout fallback.
-4. **(stretch) re-platform the service onto Triton**, containerized, as a production-style service.
+4. **(stretch) re-platform the service** onto Triton (NVIDIA) or ONNX Runtime / MIGraphX serving (AMD), containerized, as a production-style service.
 5. **Keep both paths** indefinitely; do not retire the Studio-side MegaDetector. The offload is a
    reversible fast path, not a replacement.
 
