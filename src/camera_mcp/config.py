@@ -71,6 +71,11 @@ class MonitorSettings:
     visit_close_seconds: float = 30.0  # a visit ends after this long without its animal being detected
     min_box_conf: float = 0.2  # detector boxes below this confidence are ignored
     max_boxes: int = 8  # boxes classified per frame (the most confident); the rest share neighbours' labels
+    # The unnamed-visit gate (gate.py): a closed visit of a bare "animal" (unnamed by the classifier) is
+    # stored but hidden when it fails a rule. 0 turns a rule off; try values with `camera-backtest` first.
+    unnamed_min_conf: float = 0.0  # hide it if its best box is below this detector confidence
+    unnamed_min_travel: float = 0.0  # hide it if its boxes moved less than this many box sizes (swaying leaves)...
+    unnamed_travel_conf: float = 0.5  # ...unless its best box reached this confidence
     save_people_images: bool = True  # keep a thumbnail and clip for person visits
     detect_vehicles: bool = False  # log vehicles (for a driveway camera); elsewhere they're false alarms
     training_capture: bool = False  # keep a clip of every motion window, animal or not (training data)

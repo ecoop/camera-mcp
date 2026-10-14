@@ -62,7 +62,8 @@ Be honest about absence: every history answer has `coverage`, the share of the t
 camera was actually watched, and `unanalyzed_motion_seconds`, motion the detector skipped
 because it was too far behind. "Nothing seen" only means nothing was there if coverage is near
 1, nothing went unanalyzed and the camera doesn't look moved; otherwise say which camera wasn't
-fully watched. A visit with
+fully watched. Unnamed "animal" visits a camera's gate judged to be leaves or similar are hidden
+and counted in `hidden`; find_visits(include_suppressed=true) lists them with the reason. A visit with
 still_there=true is happening now. Plain "bird" visits couldn't be sorted into a group: when
 asked about songbirds, mention them as possibly songbirds too.
 """
@@ -142,7 +143,8 @@ def build_server(cameras: dict[str, Camera], history: History | None = None, dat
     @server.tool(annotations=READ_ONLY)
     async def find_visits(since: str = "24h", until: str | None = None, cameras: list[str] | None = None,
                           tag: str | None = None, taxon: str | None = None, overlapping: str | None = None,
-                          min_score: float = 0.0, limit: int = 50) -> dict[str, Any]:
+                          min_score: float = 0.0, limit: int = 50,
+                          include_suppressed: bool = False) -> dict[str, Any]:
         """Animal visits in a stretch of time, newest first, with how much of it each camera was watched.
 
         Args:
@@ -155,9 +157,12 @@ def build_server(cameras: dict[str, Camera], history: History | None = None, dat
                 (e.g. taxon=cat, overlapping=bird: cats at the feeder while birds were there)
             min_score: only visits whose label won at least this share of the vote (0-1)
             limit: at most this many visits (1-500); `total` says how many matched
+            include_suppressed: also list unnamed visits the gate hid as likely leaves (each has a
+                `suppressed` reason); otherwise they're only counted in `hidden`
         """
         return await anyio.to_thread.run_sync(lambda: ask(
-            history.find_visits, since, until, cameras, tag, taxon, overlapping, min_score, limit))
+            history.find_visits, since, until, cameras, tag, taxon, overlapping, min_score, limit,
+            include_suppressed))
 
     @server.tool(annotations=READ_ONLY)
     async def activity_summary(since: str = "7d", until: str | None = None, group_by: str = "species",

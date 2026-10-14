@@ -91,7 +91,8 @@ def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
         q = request.query_params
         cams = [q["camera"]] if q.get("camera") else None
         r = _ask(history.find_visits, since=q.get("since", "24h"), cameras=cams,
-                 taxon=q.get("taxon") or None, limit=int(q.get("limit", 60)))
+                 taxon=q.get("taxon") or None, limit=int(q.get("limit", 60)),
+                 include_suppressed=q.get("suppressed") == "1")  # ?suppressed=1: the gate's hidden visits too
         return r if isinstance(r, Response) else JSONResponse(r)
 
     async def api_species(request: Request) -> JSONResponse:

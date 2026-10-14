@@ -63,6 +63,11 @@ def _tables(db: sqlite3.Connection) -> set[str]:
     return {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
 
 
+def _gated(db: sqlite3.Connection) -> bool:
+    """Whether the log records the unnamed-visit gate's verdicts (an older monitor's doesn't)."""
+    return "suppressed" in {r[1] for r in db.execute("PRAGMA table_info(visits)")}
+
+
 class History:
     def __init__(self, db_path: Path, cameras: dict[str, Camera], site: Site | None = None):
         self.db_path = Path(db_path)
@@ -124,6 +129,8 @@ class History:
 
     def _where(self, t0: float, t1: float, names: list[str], taxon: str | None, min_score: float,
                col: str = "") -> tuple[str, list]:
+        """Visits overlapping [t0, t1] on these cameras, optionally of a taxon / above a score.
+        Shown and hidden (suppressed) visits alike: callers add `_shown`."""
         sql = [f"{col}started_at <= ?", f"{col}ended_at >= ?", f"{col}camera IN ({', '.join('?' * len(names))})"]
         params: list = [self._iso(t1), self._iso(t0), *names]
         if taxon:
@@ -134,6 +141,20 @@ class History:
             sql.append(f"{col}score >= ?")
             params.append(min_score)
         return " AND ".join(sql), params
+
+    @staticmethod
+    def _shown(db: sqlite3.Connection, where: str, col: str = "") -> str:
+        """`where` narrowed to the visits the gate didn't hide."""
+        return f"{where} AND {col}suppressed IS NULL" if _gated(db) else where
+
+    @staticmethod
+    def _hidden(db: sqlite3.Connection, where: str, params: list, col: str = "") -> int:
+        """How many visits matching `where` the unnamed-visit gate hid (0 for an older log)."""
+        if not _gated(db):
+            return 0
+        alias = f" {col.rstrip('.')}" if col else ""
+        return db.execute(f"SELECT COUNT(*) FROM visits{alias} WHERE {where} AND {col}suppressed IS NOT NULL",
+                          params).fetchone()[0]
 
     def coverage(self, names: list[str], t0: float, t1: float, db: sqlite3.Connection | None = None) -> list[dict]:
         """For each camera: the share of [t0, t1] the monitor was receiving its frames."""
@@ -170,7 +191,9 @@ class History:
 
     def find_visits(self, since: str = "24h", until: str | None = None, cameras: list[str] | None = None,
                     tag: str | None = None, taxon: str | None = None, overlapping: str | None = None,
-                    min_score: float = 0.0, limit: int = 50) -> dict:
+                    min_score: float = 0.0, limit: int = 50, include_suppressed: bool = False) -> dict:
+        """Visits overlapping the window, newest first. Visits the unnamed-visit gate hid (likely
+        leaves, see gate.py) are left out and counted in `hidden`, unless `include_suppressed`."""
         now = time.time()
         t0, t1 = parse_when(since, now, self.tz), parse_when(until, now, self.tz)
         names = self._camera_names(cameras, tag)
@@ -181,18 +204,22 @@ class History:
                 where += (" AND EXISTS (SELECT 1 FROM visits o WHERE o.camera = v.camera AND o.id != v.id"
                           f" AND o.started_at <= v.ended_at AND o.ended_at >= v.started_at AND {clause})")
                 params += p
+            hidden = 0 if include_suppressed else self._hidden(db, where, params, "v.")
+            if not include_suppressed:
+                where = self._shown(db, where, "v.")
             total = db.execute(f"SELECT COUNT(*) FROM visits v WHERE {where}", params).fetchone()[0]
             rows = db.execute(f"SELECT * FROM visits v WHERE {where} ORDER BY v.started_at DESC LIMIT ?",
                               (*params, max(1, min(limit, 500)))).fetchall()
             return {
                 "from": self._local(self._iso(t0)), "to": self._local(self._iso(t1)),
-                "total": total, "shown": len(rows),
+                "total": total, "shown": len(rows), "hidden": hidden,
                 "visits": [{
                     "id": r["id"], "camera": r["camera"],
                     "started": self._local(r["started_at"]), "last_seen": self._local(r["ended_at"]),
                     "still_there": bool(_get(r, "open", 0)), "label": r["label"], "group": r["grp"],
                     "score": r["score"], "max_at_once": r["max_count"], "frames": r["frames"],
                     "has_thumbnail": r["thumbnail"] is not None, "clip": r["clip"],
+                    "suppressed": _get(r, "suppressed"),
                 } for r in rows],
                 "coverage": self.coverage(names, t0, t1, db),
             }
@@ -207,6 +234,8 @@ class History:
         names = self._camera_names(cameras, tag)
         with closing(self._db()) as db:
             where, params = self._where(t0, t1, names, taxon, 0.0)
+            hidden = self._hidden(db, where, params)
+            where = self._shown(db, where)
             rows = db.execute(f"SELECT label, grp, camera, started_at, max_count FROM visits WHERE {where} LIMIT 100000",
                               params).fetchall()
 
@@ -228,7 +257,7 @@ class History:
                 a["first"], a["last"] = self._local(a["first"]), self._local(a["last"])
             return {
                 "from": self._local(self._iso(t0)), "to": self._local(self._iso(t1)), "group_by": group_by,
-                "total_visits": len(rows), "rows": out, "coverage": self.coverage(names, t0, t1, db),
+                "total_visits": len(rows), "hidden": hidden, "rows": out, "coverage": self.coverage(names, t0, t1, db),
             }
 
     def observed_taxa(self, restrict: tuple[str, ...] = ()) -> list[str]:
@@ -388,7 +417,7 @@ class History:
             q += f" AND camera IN ({','.join('?' * len(names))})"
             params += names
         with closing(self._db()) as db:
-            rows = db.execute(q, params).fetchall()
+            rows = db.execute(self._shown(db, q), params).fetchall()
         span = max(1e-6, t1 - t0)
         width = span / max(1, bins)
         buckets: list[dict] = [defaultdict(int) for _ in range(bins)]

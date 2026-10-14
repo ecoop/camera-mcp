@@ -47,6 +47,7 @@ from camera_mcp.config import (
     Camera, ConfigError, default_config_path, default_data_dir, find_camera, load_cameras, load_site, redact,
 )
 from camera_mcp.detect import Detector, SpeciesNetDetector, available
+from camera_mcp.gate import GateRules, judge
 from camera_mcp.motion import MotionDetector, MotionWindows, Window
 from camera_mcp.probe import ProbeError, probe_stream
 from camera_mcp.scenery import Scenery
@@ -446,8 +447,11 @@ class CameraWorker:
 
     def _visit_closed(self, visit: Visit) -> None:
         label = visit.label
-        log.info("%s: %s visit ended: %s (%.0f%% of votes), %.0fs, up to %d at once", self.camera.name,
-                 visit.key, label.name, label.score * 100, visit.last_seen - visit.start, visit.max_count)
+        s = self.camera.settings_at(datetime.fromtimestamp(visit.start, self.tz))  # the rules when it arrived
+        visit.suppressed = judge(visit.key, [d.box for _, dets in visit.log for d in dets], GateRules.of(s))
+        log.info("%s: %s visit ended: %s (%.0f%% of votes), %.0fs, up to %d at once%s", self.camera.name,
+                 visit.key, label.name, label.score * 100, visit.last_seen - visit.start, visit.max_count,
+                 f"; hidden ({visit.suppressed})" if visit.suppressed else "")
         with self.lock:
             self.pending_visits.append(visit)
 
@@ -474,7 +478,7 @@ class CameraWorker:
                 except Exception:  # keep the visit even if its media can't be written
                     log.exception("%s: couldn't save media for the %s visit", self.camera.name, visit.key)
             self.store.add_visit(visit, model=self.analyzer.model if self.analyzer else "",
-                                 thumbnail=thumbnail, clip=clip, still=still)
+                                 thumbnail=thumbnail, clip=clip, still=still, suppressed=visit.suppressed)
             with self.lock:
                 self.pending_visits.remove(visit)
 

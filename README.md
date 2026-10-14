@@ -4,7 +4,7 @@
 ![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-blue)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
-_Last updated: 2026-10-13_
+_Last updated: 2026-10-14_
 
 An MCP server over the home IP cameras. A model can list the cameras and look at a current frame
 from any of them; detections, activity and recording come in later phases. Combines the camera
@@ -163,6 +163,19 @@ Settings, site-wide under `monitor:` or per camera: `pre_seconds`, `post_seconds
 (an empty feeder, a cloth on a rail, clothespins on a line) are learned after 5 sightings over 10
 minutes at the same place and size, and ignored from then on (`data/scenery/`). Named animals are
 never ignored, however still they sit.
+
+**Unnamed-visit gate.** Swaying leaves and fruit don't sit still enough to be learned as scenery,
+so they become visits of a bare "animal". Per camera, `unnamed_min_conf` hides such a visit when
+its best detector box is below that confidence, and `unnamed_min_travel` hides it when its boxes
+moved less than that many box sizes (a leaf sways in place; an animal crosses the frame) unless
+its best box reached `unnamed_travel_conf` (default 0.5). Both are off (0) by default. Hidden visits
+are kept, with the reason, and counted as `hidden` in history answers;
+`find_visits(include_suppressed=true)` lists them. Visits with a name are never hidden. Try values
+against the camera's own history first (read-only):
+
+```bash
+.venv/bin/camera-backtest --since 7d --camera east_fence --min-conf 0.3 --min-travel 0.5
+```
 
 **Moved-camera check.** Every 5 minutes, when nothing is moving, the monitor compares each
 camera's view with a stored reference (one for day, one for infrared night, in `data/views/`).

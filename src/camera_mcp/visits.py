@@ -53,6 +53,7 @@ class Visit:
     still_jpeg: bytes | None = None  # full frame captured (encoded) at the best moment; written at close
     log: list[tuple[float, list[Detection]]] = field(default_factory=list)  # per frame
     db_id: int | None = None  # its row in the store, written when it opened
+    suppressed: str | None = None  # why the unnamed-visit gate hid it at close (gate.judge); None: shown
 
     @property
     def label(self) -> Label:
