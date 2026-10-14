@@ -100,6 +100,12 @@ def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
         menu = site.menu_species if site else ()
         return JSONResponse({"species": history.observed_taxa(menu)})
 
+    async def api_visits_timeline(request: Request):
+        q = request.query_params
+        cams = [q["camera"]] if q.get("camera") else None
+        r = _ask(history.visits_timeline, since=q.get("since", "24h"), cameras=cams, taxon=q.get("taxon") or None)
+        return r if isinstance(r, Response) else JSONResponse(r)
+
     async def api_summary(request: Request):
         q = request.query_params
         r = _ask(history.activity_summary, since=q.get("since", "24h"), group_by=q.get("group_by", "group"))
@@ -321,6 +327,7 @@ def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
         Route("/api/status", api_status),
         Route("/api/health", api_health),
         Route("/api/visits", api_visits),
+        Route("/api/visits/timeline", api_visits_timeline),
         Route("/api/species", api_species),
         Route("/api/summary", api_summary),
         Route("/api/stats", api_stats),
@@ -374,6 +381,15 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 .cmini svg{width:100%;height:52px;display:block}
 .cmh{display:flex;justify-content:space-between;gap:.5rem;font-family:var(--mono);font-size:.63rem;color:var(--muted);margin-bottom:.15rem}
 .cmh b{color:var(--ink)}
+/* validated categorical palette for the visits timeline (dark steps swap in dark mode) */
+:root{--c-birds:#2a78d6;--c-night:#eb6834;--c-rodents:#1baf7a;--c-pets:#eda100;--c-canids:#e87ba4;--c-person:#4a3aa7;--c-other:#9a988f}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]){--c-birds:#3987e5;--c-night:#d95926;--c-rodents:#199e70;--c-pets:#c98500;--c-canids:#d55181;--c-person:#9085e9;--c-other:#8a887f}}
+:root[data-theme=dark]{--c-birds:#3987e5;--c-night:#d95926;--c-rodents:#199e70;--c-pets:#c98500;--c-canids:#d55181;--c-person:#9085e9;--c-other:#8a887f}
+.vtl svg{width:100%;height:120px;display:block}
+.vleg{display:flex;flex-wrap:wrap;gap:.1rem .8rem;font-family:var(--mono);font-size:.64rem;color:var(--muted);margin-top:.35rem}
+.vleg span{display:inline-flex;align-items:center;gap:.28rem}
+.vleg i{width:9px;height:9px;border-radius:2px;display:inline-block}
+.vtip{position:fixed;z-index:50;pointer-events:none;background:var(--ink);color:var(--frame);font-family:var(--mono);font-size:.66rem;padding:.3rem .45rem;border-radius:6px;opacity:0;transition:opacity .08s;max-width:220px;line-height:1.45}
 .clabel{display:flex;justify-content:space-between;gap:1rem;font-family:var(--mono);font-size:.66rem;color:var(--muted);margin-top:.35rem;flex-wrap:wrap}
 .xax{display:flex;justify-content:space-between;font-family:var(--mono);font-size:.62rem;color:var(--muted);margin-top:.15rem;padding:0 3px}
 .filters{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-bottom:1rem}
@@ -425,8 +441,11 @@ dialog .vmeta a{color:var(--accent);cursor:pointer}
   <select id="taxon"><option value="">all species</option></select>
   <select id="camera"><option value="">all cameras</option></select>
 </div>
+<div class="sect">Visits over time</div>
+<div class="chart vtl" id="vtl"></div>
 <div class="sect">Visits</div>
 <div class="grid" id="grid"></div>
+<div class="vtip" id="vtip"></div>
 <div class="empty" id="empty" style="display:none">No visits in this window.</div>
 <div class="sect">Live</div>
 <div class="grid" id="live"></div>
@@ -596,11 +615,46 @@ async function loadStatsGrid(el){const d=await (await fetch('/api/stats/all?sinc
   html+=`</div><div class="clabel"><span><b style="color:var(--accent)">lag</b> (area, shared scale) &middot; <b style="color:var(--good)">activity</b> (line, per-camera) &middot; <span class="bad">drops</span>${capNote}</span>`+
     `<span>${(d.from||'').slice(0,10)} &middot; ${(d.from||'').slice(11,16)}&ndash;${(d.to||'').slice(11,16)}</span></div>`;
   el.innerHTML=html;}
+// ---- visits timeline (what visited, when) ----
+const GROUP_CLASS={songbirds:'birds',jays:'birds',crows:'birds','doves/pigeons':'birds',hawks:'birds',owls:'birds',bird:'birds',
+  raccoon:'night',skunk:'night',opossum:'night', rat:'rodents',squirrel:'rodents',rodent:'rodents',
+  cat:'pets',dog:'pets', fox:'canids',coyote:'canids', person:'person'};
+const TL_CLASSES=[['birds','birds','--c-birds'],['night','night-critters','--c-night'],['rodents','rodents','--c-rodents'],
+  ['pets','cat/dog','--c-pets'],['canids','fox/coyote','--c-canids'],['person','person','--c-person'],['other','other','--c-other']];
+const classOf=g=>GROUP_CLASS[g]||'other';
+function showTip(e,html){const t=$('#vtip');t.innerHTML=html;t.style.opacity='1';
+  t.style.left=Math.min(e.clientX+12,innerWidth-230)+'px';t.style.top=(e.clientY+14)+'px';}
+function hideTip(){$('#vtip').style.opacity='0';}
+async function loadTimeline(){const el=$('#vtl'); try{
+  const p=new URLSearchParams();p.set('since',$('#since').value);if($('#camera').value)p.set('camera',$('#camera').value);
+  const d=await (await fetch('/api/visits/timeline?'+p.toString())).json();
+  const bins=d.bins||[];
+  if(!d.visits){el.innerHTML='<div class="empty" style="padding:1rem">no visits in this window</div>';return;}
+  const data=bins.map(b=>{const c={};for(const[g,v]of Object.entries(b.grps||{}))c[classOf(g)]=(c[classOf(g)]||0)+v;return {t:b.t,c,raw:b.grps};});
+  const present=TL_CLASSES.filter(([k])=>data.some(b=>b.c[k]));
+  const maxTot=Math.max(1,...data.map(b=>Object.values(b.c).reduce((s,v)=>s+v,0)));
+  const W=1000,H=120,pad=4,n=data.length,bw=(W-2*pad)/n;
+  let bars='';
+  data.forEach((b,i)=>{let y=H-pad;const x=pad+i*bw;
+    present.forEach(([k,,v])=>{const cnt=b.c[k]||0;if(!cnt)return;const h=(cnt/maxTot)*(H-2*pad);
+      bars+=`<rect x="${(x+0.6).toFixed(1)}" y="${(y-h).toFixed(1)}" width="${Math.max(0.5,bw-1.2).toFixed(1)}" height="${h.toFixed(1)}" fill="var(${v})"></rect>`;
+      y-=h+(h>3?0.8:0);});
+    const tot=Object.values(b.c).reduce((s,v)=>s+v,0);
+    const lines=Object.entries(b.raw).sort((a,b)=>b[1]-a[1]).map(([g,c])=>g+' '+c).join('<br>');
+    bars+=`<rect x="${x.toFixed(1)}" y="0" width="${bw.toFixed(1)}" height="${H}" fill="transparent" class="vhit" data-tip="${(b.t||'').slice(11,16)} &middot; ${tot} visit${tot==1?'':'s'}<br>${lines}"></rect>`;});
+  const tix=[0,.25,.5,.75,1].map(f=>Math.round(f*(bins.length-1)));
+  el.innerHTML=`<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${bars}</svg>`+
+    `<div class="xax">`+tix.map((i,k)=>`<span style="${k===0?'':(k===4?'text-align:right':'text-align:center')}">${(bins[i].t||'').slice(11,16)}</span>`).join('')+`</div>`+
+    `<div class="vleg">`+present.map(([,label,v])=>`<span><i style="background:var(${v})"></i>${label}</span>`).join('')+
+    `<span style="margin-left:auto">${d.visits} visits &middot; ${(d.from||'').slice(0,10)}</span></div>`;
+  el.querySelectorAll('.vhit').forEach(r=>{r.addEventListener('mousemove',e=>showTip(e,r.dataset.tip));r.addEventListener('mouseleave',hideTip);});
+}catch(e){el.innerHTML='<div class="empty" style="padding:1rem">timeline unavailable</div>';}}
 ['since','taxon','camera'].forEach(id=>$('#'+id).onchange=()=>{loadVisits();loadStats();});
+['since','camera'].forEach(id=>$('#'+id).addEventListener('change',loadTimeline));
 $('#since').addEventListener('change',loadHealth);  // the header summarises the selected window
 $('#chartcam').onchange=loadStats;
-tick();setInterval(tick,1000);loadCameras();loadSpecies();loadHealth();loadStats();loadVisits();
-setInterval(()=>{loadHealth();loadStats();},60000);
+tick();setInterval(tick,1000);loadCameras();loadSpecies();loadHealth();loadStats();loadTimeline();loadVisits();
+setInterval(()=>{loadHealth();loadStats();loadTimeline();},60000);
 </script></div></body></html>"""
 
 

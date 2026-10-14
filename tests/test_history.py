@@ -327,3 +327,12 @@ def test_coverage_reports_motion_that_was_never_analysed(log):
 
     rows = sqlite3.connect(history.db_path).execute("SELECT COUNT(*) FROM analysis_skipped").fetchone()[0]
     assert rows == 1  # the two touching spans were merged
+
+
+def test_visits_timeline_bins_by_group(log):
+    history, data = log
+    d = history.visits_timeline(since="30h", bins=30)
+    assert d["visits"] >= 1 and len(d["bins"]) == 30
+    # the known fixture visits (songbirds, cat, jays, bird, raccoon, rat) show up in the group totals
+    assert "songbirds" in d["total"] or "cat" in d["total"]
+    assert sum(sum(b["grps"].values()) for b in d["bins"]) == d["visits"]

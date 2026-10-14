@@ -346,6 +346,37 @@ class History:
                              "frames": r["analyzed"], "dropped": r["dropped"]} for r in rs[::step]]
         return {**window, "cameras": cameras}
 
+    def visits_timeline(self, since: str = "24h", until: str | None = None,
+                        cameras: list[str] | None = None, taxon: str | None = None, bins: int = 48) -> dict:
+        """Visit counts over the window, binned into `bins` time buckets and split by group (grp),
+        for a stacked timeline of what visited and when. The web layer maps groups to display
+        classes/colors."""
+        now = time.time()
+        t0, t1 = parse_when(since, now, self.tz), parse_when(until, now, self.tz)
+        window = {"from": self._local(self._iso(t0)), "to": self._local(self._iso(t1))}
+        names = [find_camera(self.cameras, c).name for c in (cameras or []) if find_camera(self.cameras, c)]
+        q = "SELECT started_at, grp FROM visits WHERE started_at >= ? AND started_at <= ?"
+        params: list = [self._iso(t0), self._iso(t1)]
+        if names:
+            q += f" AND camera IN ({','.join('?' * len(names))})"
+            params += names
+        with closing(self._db()) as db:
+            rows = db.execute(q, params).fetchall()
+        span = max(1e-6, t1 - t0)
+        width = span / max(1, bins)
+        buckets: list[dict] = [defaultdict(int) for _ in range(bins)]
+        total: dict[str, int] = defaultdict(int)
+        for r in rows:
+            try:
+                ts = datetime.fromisoformat(r["started_at"]).timestamp()
+            except (ValueError, TypeError):
+                continue
+            bi = min(bins - 1, max(0, int((ts - t0) / width)))
+            buckets[bi][r["grp"]] += 1
+            total[r["grp"]] += 1
+        out = [{"t": self._local(self._iso(t0 + (i + 0.5) * width)), "grps": dict(b)} for i, b in enumerate(buckets)]
+        return {**window, "bins": out, "bin_seconds": round(width), "total": dict(total), "visits": len(rows)}
+
     def visit_boxes(self, visit_id: int) -> dict:
         """A visit's per-frame detector boxes (the visit_frames table), with its camera, start time
         and whether a clip was kept. Each frame's `boxes` are fractions of the analysis frame — i.e.
