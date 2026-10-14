@@ -432,6 +432,8 @@ dialog{border:1px solid var(--line);border-radius:12px;background:var(--frame);c
 dialog .vmeta{font-family:var(--mono);font-size:.74rem;padding:.6rem .8rem;display:flex;justify-content:space-between;gap:.8rem;align-items:center;flex-wrap:wrap}
 dialog .vmeta a{color:var(--accent);cursor:pointer}
 .vact{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
+.clipx{position:absolute;top:.4rem;right:.4rem;z-index:3;width:2rem;height:2rem;border-radius:50%;
+  border:1px solid var(--line);background:rgba(0,0,0,.55);color:#fff;font-size:1rem;line-height:1;cursor:pointer}
 .lblset{display:inline-flex;gap:.3rem}
 .lblbtn{border:1px solid var(--line);border-radius:6px;padding:.15rem .5rem;color:var(--muted);background:none;font-family:var(--mono);font-size:.72rem;cursor:pointer}
 .lblbtn:hover:not(:disabled){border-color:var(--ink);color:var(--ink)}
@@ -491,7 +493,7 @@ dialog .vmeta a{color:var(--accent);cursor:pointer}
   <div class="chart vtl" id="vtl"></div>
 </section>
 <div class="vtip" id="vtip"></div>
-<dialog id="clip"><div class="stage pan" id="stage"><div class="pz" id="pz">
+<dialog id="clip"><div class="stage pan" id="stage"><button class="clipx" id="clipclose" aria-label="close">&times;</button><div class="pz" id="pz">
     <img id="still" alt="frame">
     <video controls style="display:none"></video>
     <svg class="boxov" id="boxov" viewBox="0 0 100 100" preserveAspectRatio="none"></svg></div></div>
@@ -502,7 +504,7 @@ dialog .vmeta a{color:var(--accent);cursor:pointer}
       <button class="lblbtn" data-v="real">&check; real</button>
       <button class="lblbtn" data-v="false">&times; false</button>
       <button class="lblbtn" data-v="wrong_species">&times; wrong sp.</button></span>
-    <button class="boxbtn on" id="boxbtn">hide boxes</button> &middot; <a id="cliplink" target="_blank">open</a>
+    <button class="boxbtn on" id="boxbtn">hide boxes</button> &middot; <a id="cliplink">open raw</a>
   </span></div></dialog>
 <script>
 const $=s=>document.querySelector(s), params=()=>{const p=new URLSearchParams();
@@ -605,6 +607,9 @@ $('#clip video').addEventListener('loadeddata',()=>{if(mode!=='video')return;
   stage.addEventListener('pointerup',()=>{drag=false;stage.classList.remove('panning');});
   stage.addEventListener('dblclick',()=>{if(mode==='image')resetZoom();});})();
 $('#clip').onclick=e=>{if(e.target.id==='clip')$('#clip').close();};
+$('#clipclose').addEventListener('pointerdown',e=>e.stopPropagation());  // don't start a pan
+$('#clipclose').onclick=e=>{e.stopPropagation();$('#clip').close();};
+$('#clip').addEventListener('close',()=>{const v=$('#clip video');try{v.pause();}catch(_){}} );  // stop audio on close
 // one lag-area chart as an SVG string; shared by the big chart and the per-camera minis
 function lagSVG(pts,W,H,maxLag,grid){const pad=4,n=pts.length,cap=1800;
   const X=i=>pad+i*(W-2*pad)/(n-1||1), Y=v=>H-pad-(v/maxLag)*(H-2*pad);
