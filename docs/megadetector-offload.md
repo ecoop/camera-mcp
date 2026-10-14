@@ -1,9 +1,11 @@
-# Plan: offload MegaDetector to a CUDA GPU (used RTX)
+# Plan: offload MegaDetector to a discrete GPU (used RTX, or AMD via ROCm)
 
 _Last updated: 2026-10-14_
 
-Status: **scoping / design.** Nothing built. This is a throughput fix: a TensorRT engine on a discrete GPU,
-served as a remote detector service.
+Status: **scoping / design.** Nothing built. This is a throughput fix: move the detector stage off the
+Studio's single GPU onto a faster discrete GPU on the LAN, run as a remote detector service. It is also
+pathfinding — a bounded way to explore the space of options (NVIDIA/TensorRT, AMD/ROCm) and see what
+actually works before committing hardware.
 
 Two earlier directions were considered and set aside:
 - The **COCO edge gate** ([frigate-coral-edge-gate.md](frigate-coral-edge-gate.md)) — rejected: a generic
@@ -15,7 +17,7 @@ Two earlier directions were considered and set aside:
 This plan keeps SpeciesNet's accuracy and attacks the *actual* bottleneck with hardware that is genuinely
 faster than the Studio for this model: **a discrete NVIDIA RTX GPU (bought used) in a small Linux box on
 the LAN, running MegaDetector as a TensorRT engine.** On a real CUDA GPU the performance verdict flips
-from "probably no-go" to "expected net win," and the build doubles as CUDA/TensorRT experience.
+from "probably no-go" to "expected net win." (An AMD/ROCm variant of the same plan is at the end.)
 
 ## Why this is viable now (and the iGPU wasn't): the pipeline is barely Mac-specific
 
@@ -32,23 +34,27 @@ Keychain (RTSP passwords), iMessage via `osascript`, `caffeinate`. On the Linux 
 systemd + a secrets file + SMTP (already supported) + nothing. **So the inference pipeline ports to CUDA
 for free; only the detector *service* wrapper is new work.**
 
+What the build involves, technically: a **TensorRT** export of MDv5a (YOLOv5x6) to an FP16/INT8 engine
+(§1), the **CUDA toolkit** on the box (drivers, `nvidia-smi`, CUDA/cuDNN/TensorRT version matching), the
+detector service in a **GPU container** (`nvidia-container-toolkit`, `--gpus`), and optionally **Triton
+Inference Server** instead of a plain FastAPI wrapper for dynamic batching + metrics.
 
 ## Hardware (buy used)
 
 You can't eGPU to the Mac — Apple Silicon has no NVIDIA eGPU path — so this is a **separate small Linux
-tower** (Ubuntu LTS) on the LAN: a used desktop + a used card. Candidates, for *MDv5/YOLO inference +
-learning* (used US prices are ~mid-2026 aggregator data and the late-2026 memory shortage is inflating
-them — re-check sold listings before buying):
+tower** (Ubuntu LTS) on the LAN: a used desktop + a used card. Candidates for MDv5/YOLO inference (used US
+prices are ~mid-2026 aggregator data and the late-2026 memory shortage is inflating them — re-check sold
+listings before buying):
 
 | card (used) | VRAM | arch | ~used price | notes |
 |---|---|---|---|---|
-| **RTX 3060** | 12 GB | Ampere | ~$270–300 | Cheapest genuinely-capable pick. Runs MDv5@1280 far faster than the M2 Max; 12 GB also allows small LLM/SD dabbling. New-retail spiked (~$500) after a relaunch, so used is the value. |
-| **RTX 4060 Ti 16 GB** | 16 GB | **Ada** | ~$450–490 | Best *current*: Ada adds FP8 + newer TensorRT features, more VRAM headroom. The recommended pick if the premium is tolerable. |
-| RTX 3090 | 24 GB | Ampere | ~$600–800 (rough) | Only if you also want real LLM/fine-tune experiments — big VRAM, strong value, but power-hungry and overkill for the detector. |
+| **RTX 3060** | 12 GB | Ampere | ~$270–300 | Cheapest genuinely-capable pick. Runs MDv5@1280 far faster than the M2 Max; 12 GB leaves headroom for other small models. New-retail spiked (~$500) after a relaunch, so used is the value. |
+| **RTX 4060 Ti 16 GB** | 16 GB | **Ada** | ~$450–490 | Newest arch: Ada adds FP8 + newer TensorRT features, more VRAM headroom. The recommended pick if the premium is tolerable. |
+| RTX 3090 | 24 GB | Ampere | ~$600–800 (rough) | Big VRAM for larger models too, strong value, but power-hungry and more than the detector needs. |
 
-**Recommendation:** **RTX 4060 Ti 16 GB** (newest arch you'll touch, FP8, comfortable VRAM) if the used
-premium is fine; otherwise **RTX 3060 12 GB** as the low-risk entry — even it is a large throughput win
-*and* teaches the same CUDA/TensorRT stack.
+**Recommendation:** **RTX 4060 Ti 16 GB** (newest arch, FP8, comfortable VRAM) if the used premium is
+fine; otherwise **RTX 3060 12 GB** as the low-risk entry — even it is a large throughput win on the same
+CUDA/TensorRT toolchain.
 
 **Used-buying + host checklist:** avoid obviously mining-worn cards (fan hours / repaste history); confirm
 the host PC's **PSU wattage and PCIe power connectors** and a free x16 slot; 40-series uses the 12VHPWR
@@ -72,8 +78,8 @@ auto=True)`.
 - The weight is a stock YOLOv5 checkpoint, so Ultralytics `export.py --weights md_v5a.0.1.pt --include
   engine --imgsz 1280 --half` builds the FP16 TensorRT engine directly (internally `.pt` → ONNX →
   `trtexec`-style build). Equivalently, export ONNX first and build with `trtexec
-  --onnx=... --fp16 --saveEngine=...` to get hands-on with the TensorRT builder (better for the learning
-  goal and for inspecting layer precision).
+  --onnx=... --fp16 --saveEngine=...`, which exposes the builder's precision and profiling controls
+  directly.
 - Build at **input size 1280** to match `IMG_SIZE`. Produce an **FP16** engine first (near-lossless), then
   an **INT8** engine (TensorRT INT8 calibration on a sample of *our own* frames, day and IR-night — not
   COCO). INT8 is where the biggest speedups and the biggest parity risk both live.
@@ -152,12 +158,12 @@ Two places this plugs in:
 | option | wire | latency | throughput | complexity | verdict |
 |---|---|---|---|---|---|
 | **(a) small HTTP detector service on the RTX box** | POST frame → JSON boxes | one LAN RTT (sub-ms) + inference | one TensorRT engine instance; batch the 5 tiles in one execute | low — a FastAPI/`uvicorn` wrapper around the engine | **recommended first build** |
-| **(b) Triton Inference Server** | gRPC/HTTP (KServe) | similar | mature dynamic batching, versioning, metrics | medium — run Triton in a container, load the engine as a model, write a client | **recommended learning upgrade** once (a) works |
+| **(b) Triton Inference Server** | gRPC/HTTP (KServe) | similar | mature dynamic batching, versioning, metrics | medium — run Triton in a container, load the engine as a model, write a client | **recommended upgrade** once (a) works |
 | (c) shared queue (MQTT/Redis) | publish frame ref, consume boxes | adds broker latency + a decode on the box | decouples producer/consumer | medium — Frigate-style event bus; we don't need the decoupling yet | defer |
 
 **Path: build (a) first** (a thin HTTP service — simplest drop-in, keeps TensorRT specifics on the box),
-then **re-platform onto Triton (b)** as the next step — Triton gives dynamic batching and
-Prometheus metrics for free. Containerize either with `nvidia-container-toolkit`.
+then optionally **re-platform onto Triton (b)** — Triton gives dynamic batching and Prometheus metrics
+for free. Containerize either with `nvidia-container-toolkit`.
 
 ### Wire format (drop-in for `_boxes`)
 
@@ -205,7 +211,7 @@ loss.
 ## 4. Benchmark plan (run once the box + card are assembled)
 
 Pure measurement on the RTX box + a sample corpus; greenlights (or, less likely now, kills) the project
-before any pipeline code changes — and the steps *are* the TensorRT/CUDA learning.
+before any pipeline code changes.
 
 **(a) Install + export.**
 1. On the RTX box (Ubuntu LTS): install the NVIDIA driver + CUDA toolkit + TensorRT; confirm `nvidia-smi`
@@ -268,9 +274,9 @@ as a *local analysis*, not a drop, so the queue's defer accounting stays honest.
 ## AMD / ROCm variant (alternative path)
 
 Everything above assumes NVIDIA. The same offload works on a **used AMD Radeon** via **ROCm**, and
-it is worth doing if you want more VRAM per used dollar. Only the hardware, the toolchain, and the export engine change — the split
-architecture (§2), the wire format, the geometry invariant, and the parity gate (§1) are all
-identical, because they are device-agnostic.
+it is worth it if you prefer the AMD ecosystem or want more VRAM per used dollar. Only the hardware,
+the toolchain, and the export engine change — the split architecture (§2), the wire format, the
+geometry invariant, and the parity gate (§1) are all identical, because they are device-agnostic.
 
 **Why it still ports for free.** PyTorch's ROCm build presents to the code as `"cuda"`
 (`torch.cuda.is_available()` returns True, device string `"cuda"`), so SpeciesNet's
@@ -295,6 +301,10 @@ identical, because they are device-agnostic.
 | RX 7900 XTX | 24 GB | ~$800–975 | the cheapest sane 24 GB card — only if you also want big local LLMs |
 | RX 6800 (RDNA2) | 16 GB | ~$335–365 | **not officially supported**; runs only via `HSA_OVERRIDE_GFX_VERSION` hacks — avoid unless you want that fight |
 
+**Toolchain (AMD).** ROCm toolkit (drivers, `rocm-smi`, HIP/MIOpen versioning) → **MIGraphX** export +
+quantization (the TensorRT-equivalent step) → ROCm GPU containers → optionally ONNX Runtime's
+ROCm/MIGraphX execution provider.
+
 **Expected performance.** RDNA3 is a strong inference GPU; MDv5a @1280 should run **well under the
 Studio's 0.24 s whole / 0.57 s tiled** (estimate — confirm on the bench), so, as with the RTX path,
 the box has headroom and won't become the bottleneck.
@@ -313,14 +323,14 @@ precision that passes parity. The only substitution is "TensorRT engine" → "MI
 
 ## Rollout (shadow first, pausable at every step)
 
-1. **Assemble + bench** (§4). Export, parity, throughput — the CUDA/TensorRT (or ROCm/MIGraphX) learning happens here.
+1. **Assemble + bench** (§4). Export, parity, throughput — the export/parity/throughput work happens here.
 2. **Shadow mode:** the box detects and returns boxes; the Studio logs them alongside the live local
    pipeline without changing behavior. Compare recall vs the local MegaDetector (especially small feeder
    birds) and the realized GPU-load drop on the Studio.
 3. **Flip the box-source** per camera class (whole-frame cameras first, then tiled feeders): the Studio
    classifies box-detected boxes instead of running its own MegaDetector; local path stays behind the flag
    as the timeout fallback.
-4. **(stretch) re-platform the service** onto Triton (NVIDIA) or ONNX Runtime / MIGraphX serving (AMD), containerized, as a production-style service.
+4. **(optional) re-platform the service** onto Triton (NVIDIA) or ONNX Runtime / MIGraphX serving (AMD), containerized, for dynamic batching + metrics.
 5. **Keep both paths** indefinitely; do not retire the Studio-side MegaDetector. The offload is a
    reversible fast path, not a replacement.
 
