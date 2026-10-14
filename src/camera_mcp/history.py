@@ -346,6 +346,33 @@ class History:
                              "frames": r["analyzed"], "dropped": r["dropped"]} for r in rs[::step]]
         return {**window, "cameras": cameras}
 
+    def stats_heatmap(self, since: str = "7d", until: str | None = None) -> dict:
+        """Analyzer load by local hour-of-day (0-23) × camera over the window, for a heatmap of when
+        and where the congestion is. Each cell totals frames analysed and segments dropped in that
+        hour across the window (so a multi-day window shows the recurring daily pattern)."""
+        now = time.time()
+        t0, t1 = parse_when(since, now, self.tz), parse_when(until, now, self.tz)
+        window = {"from": self._local(self._iso(t0)), "to": self._local(self._iso(t1))}
+        with closing(self._db()) as db:
+            if "analysis_camera_stats" not in _tables(db):
+                return {**window, "cameras": [], "cells": {}, "max_frames": 0, "max_dropped": 0}
+            rows = db.execute("SELECT camera, at, analyzed, dropped FROM analysis_camera_stats "
+                              "WHERE at >= ? AND at <= ?", (self._iso(t0), self._iso(t1))).fetchall()
+        cells: dict[str, list] = defaultdict(lambda: [{"frames": 0, "dropped": 0} for _ in range(24)])
+        for r in rows:
+            try:
+                hour = datetime.fromisoformat(r["at"]).astimezone(self.tz).hour
+            except (ValueError, TypeError):
+                continue
+            c = cells[r["camera"]][hour]
+            c["frames"] += r["analyzed"]
+            c["dropped"] += r["dropped"]
+        cams = sorted(cells)
+        allc = [c for cam in cells.values() for c in cam]
+        return {**window, "cameras": cams, "cells": {cam: cells[cam] for cam in cams},
+                "max_frames": max((c["frames"] for c in allc), default=0),
+                "max_dropped": max((c["dropped"] for c in allc), default=0)}
+
     def visits_timeline(self, since: str = "24h", until: str | None = None,
                         cameras: list[str] | None = None, taxon: str | None = None, bins: int = 48) -> dict:
         """Visit counts over the window, binned into `bins` time buckets and split by group (grp),

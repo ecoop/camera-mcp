@@ -120,6 +120,10 @@ def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
         r = _ask(history.analysis_series_all, since=request.query_params.get("since", "24h"))
         return r if isinstance(r, Response) else JSONResponse(r)
 
+    async def api_stats_heatmap(request: Request):
+        r = _ask(history.stats_heatmap, since=request.query_params.get("since", "24h"))
+        return r if isinstance(r, Response) else JSONResponse(r)
+
     async def api_visit_boxes(request: Request):
         vid = int(request.path_params["vid"])
         try:
@@ -332,6 +336,7 @@ def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
         Route("/api/summary", api_summary),
         Route("/api/stats", api_stats),
         Route("/api/stats/all", api_stats_all),
+        Route("/api/stats/heatmap", api_stats_heatmap),
         Route("/api/zones", api_zones),
         Route("/api/zones/{camera}", api_zones_save, methods=["POST"]),
         Route("/api/snapshot/{camera}", api_snapshot),
@@ -390,6 +395,12 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 .vleg span{display:inline-flex;align-items:center;gap:.28rem}
 .vleg i{width:9px;height:9px;border-radius:2px;display:inline-block}
 .vtip{position:fixed;z-index:50;pointer-events:none;background:var(--ink);color:var(--frame);font-family:var(--mono);font-size:.66rem;padding:.3rem .45rem;border-radius:6px;opacity:0;transition:opacity .08s;max-width:220px;line-height:1.45}
+#hmap{overflow-x:auto}
+.hgrid{display:grid;gap:2px;font-family:var(--mono);font-size:.6rem;min-width:520px}
+.hcell{height:15px;border-radius:2px;background:var(--chrome)}
+.hlab{color:var(--muted);display:flex;align-items:center;justify-content:center}
+.hcamlab{color:var(--ink);padding-right:.45rem;white-space:nowrap;justify-content:flex-end}
+.hmode{display:inline-flex;gap:.3rem}
 .clabel{display:flex;justify-content:space-between;gap:1rem;font-family:var(--mono);font-size:.66rem;color:var(--muted);margin-top:.35rem;flex-wrap:wrap}
 .xax{display:flex;justify-content:space-between;font-family:var(--mono);font-size:.62rem;color:var(--muted);margin-top:.15rem;padding:0 3px}
 .filters{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-bottom:1rem}
@@ -435,6 +446,11 @@ dialog .vmeta a{color:var(--accent);cursor:pointer}
     <option value="">all cameras</option><option value="__each__">per camera (grid)</option></select>
 </div>
 <div class="chart" id="chart"></div>
+<div class="sect" style="display:flex;justify-content:space-between;align-items:center;gap:1rem">
+  <span>Hourly load &middot; by camera</span>
+  <span class="hmode"><button class="boxbtn on" data-m="dropped">drops</button><button class="boxbtn" data-m="frames">activity</button></span>
+</div>
+<div class="chart" id="hmap"></div>
 <div class="filters">
   <select id="since"><option value="2h">last 2h</option><option value="12h">12h</option>
     <option value="24h" selected>24h</option><option value="3d">3 days</option><option value="7d">7 days</option></select>
@@ -649,12 +665,29 @@ async function loadTimeline(){const el=$('#vtl'); try{
     `<span style="margin-left:auto">${d.visits} visits &middot; ${(d.from||'').slice(0,10)}</span></div>`;
   el.querySelectorAll('.vhit').forEach(r=>{r.addEventListener('mousemove',e=>showTip(e,r.dataset.tip));r.addEventListener('mouseleave',hideTip);});
 }catch(e){el.innerHTML='<div class="empty" style="padding:1rem">timeline unavailable</div>';}}
+// ---- hourly load heatmap (hour-of-day x camera) ----
+async function loadHeatmap(){const el=$('#hmap'),mode=$('.hmode .on').dataset.m; try{
+  const d=await (await fetch('/api/stats/heatmap?since='+$('#since').value)).json();
+  const cams=d.cameras||[];
+  if(!cams.length){el.innerHTML='<div class="empty" style="padding:1rem">no per-camera stats yet (recorded from the latest build on)</div>';return;}
+  const max=mode==='dropped'?d.max_dropped:d.max_frames, hue=mode==='dropped'?'--warn':'--accent';
+  let html='<div class="hgrid" style="grid-template-columns:auto repeat(24,1fr)"><div></div>';
+  for(let h=0;h<24;h++)html+=`<div class="hlab">${h%6===0?h:''}</div>`;
+  cams.forEach(cam=>{html+=`<div class="hlab hcamlab">${cam}</div>`;
+    d.cells[cam].forEach((c,h)=>{const v=mode==='dropped'?c.dropped:c.frames,intl=max?v/max:0;
+      const bg=v?`color-mix(in srgb, var(${hue}) ${Math.round(12+intl*88)}%, transparent)`:'var(--chrome)';
+      html+=`<div class="hcell" style="background:${bg}" data-tip="<b>${cam}</b> &middot; ${h}:00&ndash;${h+1}:00<br>${c.frames.toLocaleString()} frames &middot; ${c.dropped} dropped"></div>`;});});
+  html+=`</div><div class="clabel"><span>${mode==='dropped'?'<span class="bad">segments dropped</span>':'frames analysed'} per hour of day &middot; darker = more &middot; hover a cell</span><span>${(d.from||'').slice(0,10)} &rarr; ${(d.to||'').slice(0,10)}</span></div>`;
+  el.innerHTML=html;
+  el.querySelectorAll('.hcell').forEach(c=>{c.addEventListener('mousemove',e=>showTip(e,c.dataset.tip));c.addEventListener('mouseleave',hideTip);});
+}catch(e){el.innerHTML='<div class="empty" style="padding:1rem">heatmap unavailable</div>';}}
+$('.hmode').querySelectorAll('button').forEach(b=>b.onclick=()=>{$('.hmode .on').classList.remove('on');b.classList.add('on');loadHeatmap();});
 ['since','taxon','camera'].forEach(id=>$('#'+id).onchange=()=>{loadVisits();loadStats();});
 ['since','camera'].forEach(id=>$('#'+id).addEventListener('change',loadTimeline));
-$('#since').addEventListener('change',loadHealth);  // the header summarises the selected window
+$('#since').addEventListener('change',()=>{loadHealth();loadHeatmap();});  // header + heatmap follow the window
 $('#chartcam').onchange=loadStats;
-tick();setInterval(tick,1000);loadCameras();loadSpecies();loadHealth();loadStats();loadTimeline();loadVisits();
-setInterval(()=>{loadHealth();loadStats();loadTimeline();},60000);
+tick();setInterval(tick,1000);loadCameras();loadSpecies();loadHealth();loadStats();loadTimeline();loadHeatmap();loadVisits();
+setInterval(()=>{loadHealth();loadStats();loadTimeline();loadHeatmap();},60000);
 </script></div></body></html>"""
 
 

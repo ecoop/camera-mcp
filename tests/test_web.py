@@ -287,3 +287,20 @@ def test_frame_prefers_saved_still(tmp_path):
     c = starlette_testclient.TestClient(build_app({"cam": Camera("cam", "c.mp4")}, tmp_path, None))
     r = c.get("/media/visit/1/frame")
     assert r.status_code == 200 and r.content == b"\xff\xd8 a jpeg"   # served the aligned still, no ffmpeg
+
+
+def test_heatmap_hour_by_camera(tmp_path):
+    import time
+    from camera_mcp.store import Store
+    from camera_mcp.config import Camera
+    from camera_mcp.web import build_app
+    store = Store(tmp_path / "monitor.db")
+    now = time.time()
+    store.add_camera_stats(now - 60, [("east_fence", 2, 100.0, 40, 5, 10.0), ("backyard", 0, 5.0, 10, 0, 2.0)])
+    store.close()
+    cams = {"east_fence": Camera("east_fence", "e.mp4"), "backyard": Camera("backyard", "b.mp4")}
+    c = starlette_testclient.TestClient(build_app(cams, tmp_path, None))
+    d = c.get("/api/stats/heatmap?since=2h").json()
+    assert set(d["cameras"]) == {"east_fence", "backyard"}
+    assert len(d["cells"]["east_fence"]) == 24 and d["max_dropped"] == 5
+    assert sum(cell["frames"] for cell in d["cells"]["east_fence"]) == 40
