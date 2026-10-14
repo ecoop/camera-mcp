@@ -448,11 +448,12 @@ const $=s=>document.querySelector(s), params=()=>{const p=new URLSearchParams();
   p.set('since',$('#since').value); if($('#taxon').value)p.set('taxon',$('#taxon').value);
   if($('#camera').value)p.set('camera',$('#camera').value); return p.toString();};
 function tick(){$('#clock').textContent=new Date().toLocaleString();}
-async function loadHealth(){try{const h=await (await fetch('/api/health?since=24h')).json();
+async function loadHealth(){try{const win=$('#since').value;
+  const h=await (await fetch('/api/health?since='+win)).json();
   const st=await (await fetch('/api/status')).json();
   const watching=st.filter(c=>c.watching_now).length, total=st.filter(c=>c.state!=='never seen by the monitor').length;
   let s;
-  if(h.samples){const dr=h.segments_dropped; s=`<b>Analysis (24h):</b> ${h.frames_analyzed.toLocaleString()} frames &middot; `+
+  if(h.samples){const dr=h.segments_dropped; s=`<b>Analysis (${win}):</b> ${h.frames_analyzed.toLocaleString()} frames &middot; `+
     `<span class="${dr?'bad':'ok'}">${dr?dr+' dropped':'none dropped'}</span> &middot; peak lag ${Math.round(h.peak_lag_seconds)}s`;}
   else s='<b>Analysis:</b> no stats yet';
   s+=`<div class="cams">`+st.map(c=>`<span class="chip ${c.watching_now?'live':(c.state==='paused'?'off':'')}">`+
@@ -549,14 +550,23 @@ function lagSVG(pts,W,H,maxLag,grid){const pad=4,n=pts.length,cap=1800;
   let area='M'+X(0).toFixed(1)+','+(H-pad);
   pts.forEach((p,i)=>area+=' L'+X(i).toFixed(1)+','+Y(p.lag).toFixed(1));
   area+=' L'+X(n-1).toFixed(1)+','+(H-pad)+' Z';
+  // activity: frames analysed per sample, on its own scale (shape, not comparable to lag)
+  const maxF=pts.reduce((m,p)=>Math.max(m,p.frames||0),0);
+  let act='';
+  if(maxF>0){const YF=v=>H-pad-(v/maxF)*(H-2*pad);
+    act='<polyline fill="none" stroke="var(--good)" stroke-width="1.2" opacity=".85" points="'+
+        pts.map((p,i)=>X(i).toFixed(1)+','+YF(p.frames||0).toFixed(1)).join(' ')+'"/>';}
   const dh=Math.max(5,H*0.06);
   const drops=pts.map((p,i)=>p.dropped>0?`<rect x="${X(i).toFixed(1)}" y="${(H-dh).toFixed(1)}" width="2" height="${dh.toFixed(1)}" fill="var(--warn)"/>`:'').join('');
   let g='';
   if(grid){const tix=[0,.25,.5,.75,1].map(f=>Math.round(f*(n-1)));
     g=tix.map(i=>`<line x1="${X(i).toFixed(1)}" y1="0" x2="${X(i).toFixed(1)}" y2="${(H-9).toFixed(1)}" stroke="var(--line)" stroke-width="1" opacity=".45"/>`).join('');}
-  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">`+g+
-    `<line x1="0" y1="${Y(cap).toFixed(1)}" x2="${W}" y2="${Y(cap).toFixed(1)}" stroke="var(--warn)" stroke-dasharray="5 5" stroke-width="1" opacity=".55"/>`+
-    `<path d="${area}" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.5"/>${drops}</svg>`;}
+  const capLine=cap<=maxLag?`<line x1="0" y1="${Y(cap).toFixed(1)}" x2="${W}" y2="${Y(cap).toFixed(1)}" stroke="var(--warn)" stroke-dasharray="5 5" stroke-width="1" opacity=".55"/>`:'';
+  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">`+g+capLine+
+    `<path d="${area}" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.5"/>${act}${drops}</svg>`;}
+const peakFrames=pts=>pts.reduce((m,p)=>Math.max(m,p.frames||0),0);
+const sumFrames=pts=>pts.reduce((s,p)=>s+(p.frames||0),0);
+const fmtK=n=>n>=1000?(n/1000).toFixed(n>=10000?0:1)+'k':''+n;
 function xAxis(pts){const n=pts.length,tix=[0,.25,.5,.75,1].map(f=>Math.round(f*(n-1)));
   return tix.map((i,k)=>`<span style="${k===0?'':(k===tix.length-1?'text-align:right':'text-align:center')}">${(pts[i].at||'').slice(11,16)}</span>`).join('');}
 const peakLag=pts=>pts.reduce((m,p)=>Math.max(m,p.lag),0);
@@ -565,26 +575,29 @@ async function loadStats(){const el=$('#chart'); try{const cc=$('#chartcam').val
   const d=await (await fetch('/api/stats?since='+$('#since').value+(cc?'&camera='+encodeURIComponent(cc):''))).json();
   const pts=d.points||[];
   if(!pts.length){el.innerHTML='<div class="empty" style="padding:1rem">'+(d.camera?'no per-camera stats for '+d.camera+' yet (recorded from this build on)':'no stats yet')+'</div>';return;}
-  const maxLag=Math.max(1800,peakLag(pts));
+  const maxLag=Math.max(30,peakLag(pts));  // fit the data; the 30-min cap line shows only when neared
   el.innerHTML=lagSVG(pts,1000,132,maxLag,true)+
     `<div class="xax">${xAxis(pts)}</div>`+
-    `<div class="clabel"><span>${d.camera?'<b>'+d.camera+'</b> &middot; ':''}analysis lag (area) &middot; <span class="bad">drops</span> (ticks) &middot; dashed = 30-min cap</span>`+
-    `<span>${(d.from||'').slice(0,10)}</span></div>`;
+    `<div class="clabel"><span>${d.camera?'<b>'+d.camera+'</b> &middot; ':''}<b style="color:var(--accent)">lag</b> (area) &middot; <b style="color:var(--good)">activity</b> (line) &middot; <span class="bad">drops</span> (ticks)${peakLag(pts)>=1800?' &middot; dashed = 30-min cap':''}</span>`+
+    `<span>${fmtK(sumFrames(pts))} frames &middot; ${(d.from||'').slice(0,10)}</span></div>`;
 }catch(e){el.innerHTML='<div class="empty" style="padding:1rem">stats unavailable</div>';}}
 async function loadStatsGrid(el){const d=await (await fetch('/api/stats/all?since='+$('#since').value)).json();
   const cams=d.cameras||{}, names=Object.keys(cams).filter(n=>cams[n].length);
   if(!names.length){el.innerHTML='<div class="empty" style="padding:1rem">no per-camera stats yet (recorded from the latest build on)</div>';return;}
-  let maxLag=1800; names.forEach(n=>{const p=peakLag(cams[n]); if(p>maxLag)maxLag=p;});  // shared scale
-  const totDrop=n=>cams[n].reduce((s,p)=>s+p.dropped,0);  // rank by drops (lag saturates at the cap)
-  names.sort((a,b)=>(totDrop(b)-totDrop(a))||(peakLag(cams[b])-peakLag(cams[a])));         // worst first
+  let maxLag=30; names.forEach(n=>{const p=peakLag(cams[n]); if(p>maxLag)maxLag=p;});  // shared lag scale, fit to data
+  const totDrop=n=>cams[n].reduce((s,p)=>s+p.dropped,0);
+  const busy=n=>totDrop(n)*1e7+sumFrames(cams[n]);  // worst first: drops, then total activity
+  names.sort((a,b)=>busy(b)-busy(a));
   let html='<div class="cgrid">';
-  names.forEach(n=>{const pts=cams[n], pk=Math.round(peakLag(pts)), dr=pts.reduce((s,p)=>s+p.dropped,0);
-    html+=`<div class="cmini"><div class="cmh"><b>${n}</b><span>peak ${pk}s${dr?' &middot; <span class="bad">'+dr+' drop</span>':''}</span></div>`+
+  names.forEach(n=>{const pts=cams[n], pk=Math.round(peakLag(pts)), dr=totDrop(n);
+    html+=`<div class="cmini"><div class="cmh"><b>${n}</b><span>${fmtK(sumFrames(pts))}f &middot; peak ${pk}s${dr?' &middot; <span class="bad">'+dr+' drop</span>':''}</span></div>`+
       lagSVG(pts,500,52,maxLag,false)+'</div>';});
-  html+='</div><div class="clabel"><span>per-camera analysis lag &middot; shared scale (worst first) &middot; <span class="bad">drops</span> &middot; dashed = 30-min cap</span>'+
+  const capNote=maxLag>=1800?' &middot; dashed = 30-min cap':'';
+  html+=`</div><div class="clabel"><span><b style="color:var(--accent)">lag</b> (area, shared scale) &middot; <b style="color:var(--good)">activity</b> (line, per-camera) &middot; <span class="bad">drops</span>${capNote}</span>`+
     `<span>${(d.from||'').slice(0,10)} &middot; ${(d.from||'').slice(11,16)}&ndash;${(d.to||'').slice(11,16)}</span></div>`;
   el.innerHTML=html;}
 ['since','taxon','camera'].forEach(id=>$('#'+id).onchange=()=>{loadVisits();loadStats();});
+$('#since').addEventListener('change',loadHealth);  // the header summarises the selected window
 $('#chartcam').onchange=loadStats;
 tick();setInterval(tick,1000);loadCameras();loadSpecies();loadHealth();loadStats();loadVisits();
 setInterval(()=>{loadHealth();loadStats();},60000);
