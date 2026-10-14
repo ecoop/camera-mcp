@@ -269,3 +269,21 @@ def test_stats_all_returns_each_camera(tmp_path):
     d = c.get("/api/stats/all").json()
     assert set(d["cameras"]) == {"backyard", "alley"}
     assert d["cameras"]["alley"][0]["lag"] == 90 and d["cameras"]["alley"][0]["dropped"] == 2
+
+
+def test_frame_prefers_saved_still(tmp_path):
+    import time
+    from camera_mcp.store import Store
+    from camera_mcp.visits import Visit
+    from camera_mcp.config import Camera
+    from camera_mcp.web import build_app
+    store = Store(tmp_path / "monitor.db")
+    (tmp_path / "stills" / "cam").mkdir(parents=True)
+    (tmp_path / "stills" / "cam" / "s.jpg").write_bytes(b"\xff\xd8 a jpeg")
+    v = Visit("cam", "animal", start=time.time(), last_seen=time.time() + 1, frames=1)
+    v.votes[("animal", "")] = 1.0
+    store.add_visit(v, model="m", thumbnail=None, clip=None, still="stills/cam/s.jpg")
+    store.close()
+    c = starlette_testclient.TestClient(build_app({"cam": Camera("cam", "c.mp4")}, tmp_path, None))
+    r = c.get("/media/visit/1/frame")
+    assert r.status_code == 200 and r.content == b"\xff\xd8 a jpeg"   # served the aligned still, no ffmpeg

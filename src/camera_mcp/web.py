@@ -202,11 +202,17 @@ def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
         return FileResponse(path, media_type="video/mp4")
 
     async def media_frame(request: Request):
-        """A full-resolution still of the visit's best-box moment, extracted from the clip (cached).
-        The thumbnail is a low-res crop; this is the full frame, for zooming/panning in the viewer."""
+        """A full-resolution still of the visit's best-box moment, for zooming/panning in the viewer.
+        Prefers the still the monitor saved at detection time (exactly aligned to the box); falls back
+        to extracting a frame from the clip (approximate) for older visits that have no saved still."""
         from starlette.responses import FileResponse
         from camera_mcp.capture import FFMPEG
         vid = int(request.path_params["vid"])
+        try:  # the aligned still the monitor saved at detection time
+            return FileResponse(history.visit_still(vid, data_dir), media_type="image/jpeg",
+                                headers={"Cache-Control": "max-age=86400"})
+        except HistoryError:
+            pass
         cache = data_dir / "frames" / f"{vid}.jpg"
         if cache.exists():
             return FileResponse(cache, media_type="image/jpeg", headers={"Cache-Control": "max-age=86400"})

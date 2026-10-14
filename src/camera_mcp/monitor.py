@@ -444,18 +444,21 @@ class CameraWorker:
             if not (final or any(seg.start > clip_end for seg in segments)):
                 continue
             keep_images = visit.key != "person" or self.s.save_people_images
-            thumbnail = clip = None
+            thumbnail = clip = still = None
             if keep_images:
                 stamp = datetime.fromtimestamp(visit.start, timezone.utc)
                 name = f"{stamp:%H%M%SZ}-{re.sub(r'[^a-z0-9]+', '-', visit.key)}"
                 try:
-                    thumbnail = self._write_thumbnail(visit, f"{stamp:%Y-%m-%d}/{name}.jpg")
+                    rel = f"{stamp:%Y-%m-%d}/{name}.jpg"
+                    thumbnail = self._write_thumbnail(visit, rel)
+                    still = self._write_still(visit, rel)  # full-res frame aligned to the detection
                     usable = segments if self.recorder_done.is_set() else segments[:-1]
                     clip = self._write_clip(ringbuffer.covering(usable, visit.start - self.s.pre_seconds, clip_end),
                                             visit.start, f"{name}.mp4")
                 except Exception:  # keep the visit even if its media can't be written
                     log.exception("%s: couldn't save media for the %s visit", self.camera.name, visit.key)
-            self.store.add_visit(visit, model=self.analyzer.model if self.analyzer else "", thumbnail=thumbnail, clip=clip)
+            self.store.add_visit(visit, model=self.analyzer.model if self.analyzer else "",
+                                 thumbnail=thumbnail, clip=clip, still=still)
             with self.lock:
                 self.pending_visits.remove(visit)
 
@@ -471,6 +474,23 @@ class CameraWorker:
             return None
         out.write_bytes(jpeg.tobytes())
         return str(out.relative_to(self.data_dir))
+
+    def _write_still(self, visit: Visit, rel: str) -> str | None:
+        """The full, uncropped frame the detection happened on, decoded from its ring-buffer segment
+        at the exact moment — no clip-timeline guessing (the clip and the analysis clocks drift, and
+        a long visit's best frame may fall outside the capped clip). None if that segment is already
+        gone; the web app then falls back to a clip-extracted frame."""
+        if not visit.best_seg or not Path(visit.best_seg).exists():
+            return None
+        out = self.data_dir / "stills" / self.camera.name / rel
+        out.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            r = subprocess.run([FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin",
+                                "-ss", f"{visit.best_seg_off:.3f}", "-i", visit.best_seg,
+                                "-frames:v", "1", "-q:v", "2", str(out)], capture_output=True, timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return str(out.relative_to(self.data_dir)) if r.returncode == 0 and out.exists() else None
 
     def _finish_pending(self, final: bool) -> None:
         segments = ringbuffer.list_segments(self.seg_dir)
@@ -675,6 +695,9 @@ class Analyzer:
                 before = set(worker.tracker.open)
                 closed = worker.tracker.feed(t, detections, frame)
                 still_open = dict(worker.tracker.open)
+            for visit in still_open.values():  # frame that just became the best: remember its segment
+                if visit.best_t == t:
+                    visit.best_seg, visit.best_seg_off = str(seg.path), max(0.0, t - seg.start)
             for key, visit in sorted(still_open.items()):
                 if visit.db_id is None:  # arrived (or took over an unidentified visit's row)
                     if key not in before:

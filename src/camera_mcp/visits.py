@@ -49,6 +49,9 @@ class Visit:
     votes: dict[tuple[str, str], float] = field(default_factory=lambda: defaultdict(float))
     best_conf: float = 0.0
     thumbnail: np.ndarray | None = None  # RGB crop of the best box so far
+    best_t: float = 0.0  # time of the best-box frame (so the monitor can save the full frame)
+    best_seg: str | None = None  # the ring-buffer segment that frame came from, and its offset within it
+    best_seg_off: float = 0.0
     log: list[tuple[float, list[Detection]]] = field(default_factory=list)  # per frame
     db_id: int | None = None  # its row in the store, written when it opened
 
@@ -107,6 +110,7 @@ class VisitTracker:
             if frame is not None and best.box.conf > visit.best_conf:
                 visit.best_conf = best.box.conf
                 visit.thumbnail = crop(frame, best.box)
+                visit.best_t = t  # the monitor tags this with its segment and saves the full frame
             visit.log.append((t, dets))
         return self._close(lambda v: t - v.last_seen >= self.close_after)
 

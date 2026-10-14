@@ -392,6 +392,19 @@ class History:
         by_verdict = {r["verdict"]: r["n"] for r in rows}
         return {"total": sum(by_verdict.values()), "by_verdict": by_verdict}
 
+    def visit_still(self, visit_id: int, data_dir: Path) -> Path:
+        """The full-res still saved at detection time (aligned to the box). Raises HistoryError if the
+        visit has no stored still (older visit, or its segment had aged out) — caller falls back."""
+        with closing(self._db()) as db:
+            has = "still" in {r[1] for r in db.execute("PRAGMA table_info(visits)")}
+            row = db.execute("SELECT still FROM visits WHERE id = ?", (visit_id,)).fetchone() if has else None
+        if row is None or not row["still"]:
+            raise HistoryError(f"no stored still for visit {visit_id}")
+        path = Path(data_dir) / row["still"]
+        if not path.exists():
+            raise HistoryError(f"still file missing for visit {visit_id}")
+        return path
+
     def visit_clip(self, visit_id: int, data_dir: Path) -> Path:
         """The path to a visit's saved clip. Raises HistoryError if the visit or its clip is missing."""
         with closing(self._db()) as db:

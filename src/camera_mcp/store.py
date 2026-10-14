@@ -113,6 +113,7 @@ CREATE TABLE IF NOT EXISTS analysis_camera_stats (  -- the same sample, split pe
 ADDED_COLUMNS = {
     "visits": {
         "open": "INTEGER NOT NULL DEFAULT 0",  # 1 while the animal is still there (ended_at = last seen so far)
+        "still": "TEXT",  # full-res frame aligned to the detection (path); the viewer's default image
     },
     "camera_status": {
         "view_score": "REAL",  # last moved-camera check: how well the view matched its reference, 0-1
@@ -215,22 +216,23 @@ class Store:
         with self._lock:
             self._db.executemany("INSERT OR REPLACE INTO analysis_camera_stats VALUES (?, ?, ?, ?, ?, ?, ?)", values)
 
-    def add_visit(self, visit, *, model: str, thumbnail: str | None, clip: str | None) -> int:
+    def add_visit(self, visit, *, model: str, thumbnail: str | None, clip: str | None,
+                  still: str | None = None) -> int:
         """Store a closed visits.Visit and its per-frame detections (completing its open row, if any)."""
         label = visit.label
         values = (visit.camera, iso(visit.start), iso(visit.last_seen), label.name, label.taxonomy, visit.key,
-                  round(label.score, 3), visit.frames, visit.max_count, thumbnail, clip, model)
+                  round(label.score, 3), visit.frames, visit.max_count, thumbnail, clip, still, model)
         with self._lock:
             if getattr(visit, "db_id", None):
                 self._db.execute(
                     "UPDATE visits SET camera = ?, started_at = ?, ended_at = ?, label = ?, taxonomy = ?, grp = ?,"
-                    " score = ?, frames = ?, max_count = ?, thumbnail = ?, clip = ?, model = ?, open = 0"
+                    " score = ?, frames = ?, max_count = ?, thumbnail = ?, clip = ?, still = ?, model = ?, open = 0"
                     " WHERE id = ?", (*values, visit.db_id))
                 visit_id = visit.db_id
             else:
                 cur = self._db.execute(
                     "INSERT INTO visits (camera, started_at, ended_at, label, taxonomy, grp, score, frames,"
-                    " max_count, thumbnail, clip, model) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", values)
+                    " max_count, thumbnail, clip, still, model) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", values)
                 visit_id = int(cur.lastrowid)
             rows = []
             for t, dets in visit.log:
