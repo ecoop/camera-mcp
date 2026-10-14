@@ -42,19 +42,20 @@ Inference Server** instead of a plain FastAPI wrapper for dynamic batching + met
 ## Hardware (buy used)
 
 You can't eGPU to the Mac — Apple Silicon has no NVIDIA eGPU path — so this is a **separate small Linux
-tower** (Ubuntu LTS) on the LAN: a used desktop + a used card. Candidates for MDv5/YOLO inference (used US
-prices are ~mid-2026 aggregator data and the late-2026 memory shortage is inflating them — re-check sold
-listings before buying):
+tower** (Ubuntu LTS) on the LAN: a used desktop + a card. Candidates for MDv5/YOLO inference (US prices
+are ~mid/late-2026 aggregator data and the late-2026 memory shortage is inflating everything, new and
+used alike — re-check live listings before buying; `~new` is the typical in-stock street price, well
+above the original MSRP shown):
 
-| card (used) | VRAM | arch | ~used price | notes |
-|---|---|---|---|---|
-| **RTX 3060** | 12 GB | Ampere | ~$270–300 | Cheapest genuinely-capable pick. Runs MDv5@1280 far faster than the M2 Max; 12 GB leaves headroom for other small models. New-retail spiked (~$500) after a relaunch, so used is the value. |
-| **RTX 4060 Ti 16 GB** | 16 GB | **Ada** | ~$450–490 | Newest arch: Ada adds FP8 + newer TensorRT features, more VRAM headroom. The recommended pick if the premium is tolerable. |
-| RTX 3090 | 24 GB | Ampere | ~$600–800 (rough) | Big VRAM for larger models too, strong value, but power-hungry and more than the detector needs. |
+| card | VRAM | arch | ~used | ~new | notes |
+|---|---|---|---|---|---|
+| **RTX 3060** | 12 GB | Ampere | ~$270–300 | ~$330–500 (MSRP $329) | Cheapest genuinely-capable pick; relaunched new in 2026. Runs MDv5@1280 far faster than the M2 Max; 12 GB leaves headroom for other small models. |
+| **RTX 4060 Ti 16 GB** | 16 GB | **Ada** | ~$450–490 | ~$480–550+ (MSRP $499) | Newest arch: Ada adds FP8 + newer TensorRT features, more VRAM headroom. Stock is thin, so new prices vary a lot. |
+| RTX 3090 | 24 GB | Ampere | ~$600–800 (rough) | n/a (discontinued) | Used only now. Big VRAM, power-hungry, more than the detector needs. |
 
-**Recommendation:** **RTX 4060 Ti 16 GB** (newest arch, FP8, comfortable VRAM) if the used premium is
-fine; otherwise **RTX 3060 12 GB** as the low-risk entry — even it is a large throughput win on the same
-CUDA/TensorRT toolchain.
+**Recommendation:** **RTX 4060 Ti 16 GB** (newest arch, FP8, comfortable VRAM); otherwise **RTX 3060
+12 GB** as the low-risk entry. Buying **new** (small premium, full warranty, no mining-wear risk) is a
+reasonable simpler path than used — both are a large throughput win on the same CUDA/TensorRT toolchain.
 
 **Used-buying + host checklist:** avoid obviously mining-worn cards (fan hours / repaste history); confirm
 the host PC's **PSU wattage and PCIe power connectors** and a free x16 slot; 40-series uses the 12VHPWR
@@ -293,13 +294,15 @@ geometry invariant, and the parity gate (§1) are all identical, because they ar
 | Container step | `nvidia-container-toolkit` | ROCm container (`--device=/dev/kfd --device=/dev/dri`) |
 | OS | Ubuntu LTS | **Ubuntu LTS, native** — *not* Windows (see caveats) |
 
-**Hardware (buy used).** Prefer **RDNA3** — it is on ROCm's officially-supported list:
+**Hardware.** Prefer **RDNA3** — it is on ROCm's officially-supported list (new or used; prices ~mid/late
+2026, memory-shortage inflated — re-check live):
 
-| card (used) | VRAM | ~used price | notes |
-|---|---|---|---|
-| **RX 7900 XT / GRE** | 20 / 16 GB | < XTX | best value with official ROCm support; 16 GB is plenty for MDv5 |
-| RX 7900 XTX | 24 GB | ~$800–975 | the cheapest sane 24 GB card — only if you also want big local LLMs |
-| RX 6800 (RDNA2) | 16 GB | ~$335–365 | **not officially supported**; runs only via `HSA_OVERRIDE_GFX_VERSION` hacks — avoid unless you want that fight |
+| card | VRAM | ~used | ~new | notes |
+|---|---|---|---|---|
+| **RX 7900 GRE** | 16 GB | ~$520–560 | ~$540–600 (MSRP $549) | **Best value** with official ROCm support; 16 GB is plenty for MDv5. |
+| **RX 7900 XT** | 20 GB | ~$600–625 | ~$650–750 (MSRP $899) | More headroom; official ROCm support. |
+| RX 7900 XTX | 24 GB | ~$800–975 | ~$900–1,000+ (MSRP $999) | The cheapest sane 24 GB card — only if you also want big local LLMs. Premium coolers (NITRO+) run $1,400+. |
+| RX 6800 (RDNA2) | 16 GB | ~$335–365 | ~$400+ | **Not officially supported**; runs only via `HSA_OVERRIDE_GFX_VERSION` hacks — avoid unless you want that fight. |
 
 **Toolchain (AMD).** ROCm toolkit (drivers, `rocm-smi`, HIP/MIOpen versioning) → **MIGraphX** export +
 quantization (the TensorRT-equivalent step) → ROCm GPU containers → optionally ONNX Runtime's
