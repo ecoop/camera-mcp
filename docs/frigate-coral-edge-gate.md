@@ -2,8 +2,11 @@
 
 _Last updated: 2026-10-13_
 
-Status: **idea / low priority, not scheduled.** Captured so it isn't lost; sequenced behind the web
-app ([#47]) and the analysis-quality work. Nothing here is built.
+Status: **COCO-gate path rejected by the offline validation (2026-10-13)** — a generic COCO detector
+rejects our leaves well but misses most of our animals (see "Validation results" below). The useful
+pivot is to run **MegaDetector itself** on an Intel iGPU to offload detection from the Mac GPU — see
+[megadetector-offload.md](megadetector-offload.md). The Frigate plumbing below (decode, zones, MQTT,
+event-consumer monitor) still applies to that pivot; only the *detector* changes. Nothing is built.
 
 ## Summary
 
@@ -158,6 +161,31 @@ leaf-rejection *and* high animal-recall, **and** (2) the label audit shows midda
 costing real sightings. If (1) fails, the gate doesn't fix *our* problem regardless of how elegant
 the architecture is. If (2) fails, there's nothing to fix. Either cheap check can kill the project
 before the hardware order — which is the point.
+
+### Validation results (2026-10-13) — check (1) FAILED
+
+Ran the Coral's class of model (torchvision **SSDLite-MobileNetV3**, COCO) offline on the Mac over
+labelled frames from the visit log — no hardware. "Fires" = an animal/person COCO class overlapping
+or within the frame of a known animal. ~100 frames per set (`fp_validation.py`).
+
+| metric | @0.3 conf | @0.5 conf |
+| --- | --- | --- |
+| **leaf-rejection** (want high) | 87% | 96% |
+| mammal recall — raccoon/opossum/rat/squirrel/cat | 27% | 8% |
+| **bird recall** | ~0% (birds mislabelled "person"; → 0% at 0.5) | 0% |
+| person recall | 5% | 0% |
+
+**Leaf-rejection is excellent — and it throws the animals out with the leaves.** Same root cause for
+both: our key species (raccoon, opossum, rat, squirrel) are **not COCO classes**, and the footage is
+small/distant/nocturnal-IR — out of distribution for a COCO model trained on daytime color photos.
+A COCO gate would quietly drop ~70–100% of real sightings. So **a generic detector is a strictly
+worse MegaDetector for our domain**, and the gate's leaf-rejection and its animal-miss are one and
+the same failure. Check (2) (do midday drops cost real sightings?) is now moot for *this* approach.
+
+**The pivot:** keep all the Frigate plumbing, but run **MegaDetector** (exported to OpenVINO) on the
+iGPU instead of a COCO model — same detector, same accuracy on our animals, just moved off the Mac's
+GPU bottleneck. That is a throughput fix without the recall cliff. See
+[megadetector-offload.md](megadetector-offload.md).
 
 ## Risks / open questions
 
