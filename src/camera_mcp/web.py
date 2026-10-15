@@ -125,12 +125,10 @@ def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
         r = _ask(history.stats_heatmap, since=request.query_params.get("since", "24h"))
         return r if isinstance(r, Response) else JSONResponse(r)
 
-    async def api_visit_boxes(request: Request):
-        vid = int(request.path_params["vid"])
-        try:
-            d = history.visit_boxes(vid)
-        except HistoryError as e:
-            return JSONResponse({"error": str(e)}, status_code=404)
+    def mapped_boxes(vid: int) -> dict:
+        """A visit's per-frame boxes as fractions of the FULL frame (roi-mapped), each frame's clip
+        offset, and `best`: the frame with the most confident box. Raises HistoryError."""
+        d = history.visit_boxes(vid)
         cam = find_camera(cameras, d["camera"])
         roi = cam.roi if cam else None  # boxes are fractions of the roi crop; map to the full frame
         pre = cam.monitor.pre_seconds if cam else 5.0
@@ -162,9 +160,14 @@ def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
                 best_conf, best_i = fc, i
             frames.append({"offset": round(max(0.0, offset), 2), "label": f["label"],
                            "taxonomy": f["taxonomy"], "score": f["score"], "boxes": boxes})
-        return JSONResponse({"camera": d["camera"], "has_clip": d["has_clip"],
-                             "roi": list(roi) if roi else None, "label": d["label"],
-                             "taxonomy": d["taxonomy"], "best": best_i, "frames": frames})
+        return {"camera": d["camera"], "has_clip": d["has_clip"], "roi": list(roi) if roi else None,
+                "label": d["label"], "taxonomy": d["taxonomy"], "best": best_i, "frames": frames}
+
+    async def api_visit_boxes(request: Request):
+        try:
+            return JSONResponse(mapped_boxes(int(request.path_params["vid"])))
+        except HistoryError as e:
+            return JSONResponse({"error": str(e)}, status_code=404)
 
     async def api_visit_label_get(request: Request):
         vid = int(request.path_params["vid"])
@@ -212,26 +215,23 @@ def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
             return Response(status_code=404)
         return FileResponse(path, media_type="video/mp4")
 
-    async def media_frame(request: Request):
-        """A full-resolution still of the visit's best-box moment, for zooming/panning in the viewer.
+    async def frame_path(vid: int) -> Path | int:
+        """The full-resolution still of the visit's best-box moment, or an HTTP error status.
         Prefers the still the monitor saved at detection time (exactly aligned to the box); falls back
         to extracting a frame from the clip (approximate) for older visits that have no saved still."""
-        from starlette.responses import FileResponse
         from camera_mcp.capture import FFMPEG
-        vid = int(request.path_params["vid"])
         try:  # the aligned still the monitor saved at detection time
-            return FileResponse(history.visit_still(vid, data_dir), media_type="image/jpeg",
-                                headers={"Cache-Control": "max-age=86400"})
+            return history.visit_still(vid, data_dir)
         except HistoryError:
             pass
         cache = data_dir / "frames" / f"{vid}.jpg"
         if cache.exists():
-            return FileResponse(cache, media_type="image/jpeg", headers={"Cache-Control": "max-age=86400"})
+            return cache
         try:
             d = history.visit_boxes(vid)
             clip = history.visit_clip(vid, data_dir)
         except HistoryError:
-            return Response(status_code=404)
+            return 404
         cam = find_camera(cameras, d["camera"])  # clip time of the best-box frame (same math as /boxes)
         pre = cam.monitor.pre_seconds if cam else 5.0
         try:
@@ -254,7 +254,38 @@ def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
             [FFMPEG, "-y", "-ss", f"{off:.2f}", "-i", str(clip), "-frames:v", "1", "-q:v", "2", str(cache)],
             capture_output=True, timeout=30))
         if r.returncode != 0 or not cache.exists():
-            return Response(status_code=502)
+            return 502
+        return cache
+
+    async def media_frame(request: Request):
+        """The full-resolution still, for zooming/panning in the viewer (see frame_path)."""
+        from starlette.responses import FileResponse
+        path = await frame_path(int(request.path_params["vid"]))
+        if isinstance(path, int):
+            return Response(status_code=path)
+        return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "max-age=86400"})
+
+    async def media_frame_boxed(request: Request):
+        """The full-resolution still with the best frame's detector boxes and confidences drawn on it:
+        a plain image to open on its own and zoom into, so what was boxed can be inspected closely."""
+        from starlette.responses import FileResponse
+        vid = int(request.path_params["vid"])
+        cache = data_dir / "frames" / f"{vid}-boxed.jpg"  # a visit's boxes never change once it's stored
+        if not cache.exists():
+            path = await frame_path(vid)
+            if isinstance(path, int):
+                return Response(status_code=path)
+            try:
+                boxes = mapped_boxes(vid)
+            except HistoryError:
+                return Response(status_code=404)
+            frames = boxes["frames"]
+            best = frames[boxes["best"]]["boxes"] if frames else []
+            jpeg = await _to_thread(draw_boxes, path.read_bytes(), best)
+            if jpeg is None:
+                return Response(status_code=502)
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            cache.write_bytes(jpeg)
         return FileResponse(cache, media_type="image/jpeg", headers={"Cache-Control": "max-age=86400"})
 
     async def zones_page(request: Request) -> HTMLResponse:
@@ -347,8 +378,50 @@ def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
         Route("/api/visit/{vid:int}/label", api_visit_label_set, methods=["POST"]),
         Route("/media/visit/{vid:int}/thumb", media_thumb),
         Route("/media/visit/{vid:int}/frame", media_frame),
+        Route("/media/visit/{vid:int}/frame/boxed", media_frame_boxed),
         Route("/media/visit/{vid:int}/clip", media_clip),
     ])
+
+
+def draw_boxes(jpeg: bytes, boxes: list[dict]) -> bytes | None:
+    """`jpeg` with each box (fractions of the full frame, with `conf`) outlined in red and labelled
+    with its confidence; line and text scale with the image so they read at full resolution. Labels
+    go where they don't cover another label or box (a flock's boxes crowd together)."""
+    img = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        return None
+    h, w = img.shape[:2]
+    thick = max(2, round(w / 640))
+    scale, tthick, gap = max(0.5, w / 2400), max(1, thick - 1), thick + 2
+    rects = [(round(b["x"] * w), round(b["y"] * h), round((b["x"] + b["w"]) * w), round((b["y"] + b["h"]) * h))
+             for b in boxes]
+    for r in rects:
+        cv2.rectangle(img, r[:2], r[2:], (40, 40, 230), thick)
+
+    def overlaps(a, b):
+        return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
+
+    placed: list[tuple] = []
+    for i in sorted(range(len(boxes)), key=lambda i: -(boxes[i].get("conf") or 0)):  # most confident picks first
+        if boxes[i].get("conf") is None:
+            continue
+        text = f"{round(boxes[i]['conf'] * 100)}%"
+        (tw, th), base = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, tthick)
+        x0, y0, x1, y1 = rects[i]
+        spots = [(x0, y0 - gap - th - base), (x0, y1 + gap), (x1 - tw, y0 - gap - th - base), (x1 - tw, y1 + gap),
+                 (x1 + gap, y0), (x0 - gap - tw, y0)]  # top-left corners: above, below, right-aligned, beside
+        inside = [(x, y, x + tw, y + th + base) for x, y in spots if x >= 0 and y >= 0 and x + tw <= w and y + th + base <= h]
+        others = [r for j, r in enumerate(rects) if j != i]
+        spot = next((r for r in inside if not any(overlaps(r, o) for o in placed + others)), None) \
+            or next((r for r in inside if not any(overlaps(r, o) for o in placed)), None) \
+            or (inside or [(x0, max(0, y0 - th - base), x0 + tw, max(0, y0 - th - base) + th + base)])[0]
+        placed.append(spot)
+        org = (spot[0], spot[1] + th)
+        cv2.putText(img, text, org, cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), tthick + 3, cv2.LINE_AA)  # outline
+        cv2.putText(img, text, org, cv2.FONT_HERSHEY_SIMPLEX, scale, (60, 60, 255), tthick, cv2.LINE_AA)
+    # imencode, not imwrite: SpeciesNet's yolov5 replaces cv2.imwrite with a 2-argument version.
+    ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 92])
+    return buf.tobytes() if ok else None
 
 
 async def _to_thread(fn, *a):
@@ -447,7 +520,15 @@ dialog .vmeta a{color:var(--accent);cursor:pointer}
 .tile.sup img{opacity:.72}
 .tile .badge{position:absolute;top:.4rem;left:.4rem;font-family:var(--mono);font-size:.62rem;padding:.05rem .4rem;
   border-radius:999px;background:var(--frame);color:var(--warn);border:1px solid var(--warn)}
-.tile .vd{float:right;font-weight:600} .tile .vd.real{color:var(--good)} .tile .vd.false,.tile .vd.wrong_species{color:var(--warn)}
+/* labelled tiles: outlined, dimmed and badged from data-verdict, so what's left to label stands out */
+.tile[data-verdict=real]{outline:2px solid var(--good);outline-offset:-1px}
+.tile[data-verdict=false],.tile[data-verdict=wrong_species]{outline:2px solid var(--warn);outline-offset:-1px}
+.tile[data-verdict=real] img,.tile[data-verdict=false] img,.tile[data-verdict=wrong_species] img{opacity:.45}
+.tile .vpill{display:none;position:absolute;top:.4rem;right:.4rem;font-family:var(--mono);font-size:.66rem;font-weight:600;
+  padding:.05rem .45rem;border-radius:999px;background:var(--frame);border:1px solid}
+.tile[data-verdict=real] .vpill{display:block;color:var(--good)} .tile[data-verdict=real] .vpill::after{content:"\\2713  real"}
+.tile[data-verdict=false] .vpill,.tile[data-verdict=wrong_species] .vpill{display:block;color:var(--warn)}
+.tile[data-verdict=false] .vpill::after{content:"\\2717  false"} .tile[data-verdict=wrong_species] .vpill::after{content:"\\2717  wrong sp."}
 #hidnote{text-transform:none;letter-spacing:0}
 .boxov{position:absolute;top:0;left:0;pointer-events:none;display:none}
 .boxov rect{fill:none;stroke:#ff3b30;stroke-width:2;vector-effect:non-scaling-stroke}
@@ -516,7 +597,7 @@ dialog .vmeta a{color:var(--accent);cursor:pointer}
       <button class="lblbtn" data-v="false">&times; false</button>
       <button class="lblbtn" data-v="wrong_species">&times; wrong sp.</button></span>
     <button class="boxbtn" id="nextbtn" title="the next visit in the grid you haven't labelled">next unlabelled &rsaquo;</button>
-    <button class="boxbtn on" id="boxbtn">hide boxes</button> &middot; <a id="cliplink" title="the full-resolution still, on its own (pinch or zoom to inspect)">full-res image</a>
+    <button class="boxbtn on" id="boxbtn">hide boxes</button> &middot; <a id="cliplink" title="the full-resolution still with the detector's boxes, on its own (pinch or zoom to inspect)">full-res image</a>
   </span></div></dialog>
 <script>
 const $=s=>document.querySelector(s), params=()=>{const p=new URLSearchParams();
@@ -548,13 +629,12 @@ async function loadVisits(){const r=await (await fetch('/api/visits?'+params()))
   const v=(r.visits||[]).filter(x=>x.has_thumbnail);
   $('#empty').style.display=v.length?'none':'block';
   $('#hidnote').textContent=r.hidden?`· ${r.hidden} hidden as likely leaves`:'';
-  const VD={real:'✓',false:'✗',wrong_species:'✗ sp'};
   $('#grid').innerHTML=v.map(x=>`<a class="tile${x.suppressed?' sup':''}" href="#" data-id="${x.id}" data-clip="${x.clip?1:0}"`+
     ` data-verdict="${x.verdict||''}" data-sup="${x.suppressed||''}">`+
     `<img loading="lazy" src="/media/visit/${x.id}/thumb" alt="${x.label}">`+
-    (x.suppressed?`<span class="badge">hidden: ${x.suppressed.replace('_',' ')}</span>`:'')+
+    (x.suppressed?`<span class="badge">hidden: ${x.suppressed.replace('_',' ')}</span>`:'')+`<span class="vpill"></span>`+
     `<div class="meta"><div class="sp">${x.label}${x.max_at_once>1?' ×'+x.max_at_once:''}`+
-    `<span class="vd ${x.verdict||''}">${VD[x.verdict]||''}</span></div>`+
+    `</div>`+
     `<div class="sub">${x.camera} &middot; ${(x.started||'').slice(11,16)}</div></div></a>`).join('');
   document.querySelectorAll('#grid .tile').forEach(t=>t.onclick=ev=>{ev.preventDefault();openVisit(t);});}
 let labelEditable=true;
@@ -569,8 +649,7 @@ async function setLabel(v){if(!labelEditable||!curVisit)return;
   try{const res=await fetch('/api/visit/'+curVisit+'/label',{method:'POST',
     headers:{'Content-Type':'application/json'},body:JSON.stringify({verdict:v})});
     if(res.ok){markLabel(v); const t=tileOf(curVisit);
-      if(t){const had=t.dataset.verdict; t.dataset.verdict=v; const m=t.querySelector('.vd');
-        if(m){m.className='vd '+v; m.textContent={real:'✓',false:'✗',wrong_species:'✗ sp'}[v];}
+      if(t){const had=t.dataset.verdict; t.dataset.verdict=v;  // CSS restyles the tile from this
         if(!had)setTimeout(nextUnlabelled,350);}}}catch(e){}}  // first label on a visit: move on to the next
 function tileOf(id){return document.querySelector('#grid .tile[data-id="'+id+'"]');}
 function nextUnlabelled(){const ts=[...document.querySelectorAll('#grid .tile')], i=ts.indexOf(tileOf(curVisit));
@@ -594,7 +673,7 @@ function openVisit(t){const id=t.dataset.id; curVisit=id; curClip=t.dataset.clip
   $('#boxbtn').classList.toggle('on',boxesOn); $('#boxbtn').textContent=boxesOn?'hide boxes':'show boxes';
   $('#clipmeta').textContent=t.querySelector('.sp').firstChild.textContent+' — '+t.querySelector('.sub').textContent+
     (t.dataset.sup?' · hidden: '+t.dataset.sup.replace('_',' '):'');
-  $('#cliplink').href=(curClip?'/media/visit/'+id+'/frame':'/media/visit/'+id+'/thumb');  // the clip has "watch clip"
+  $('#cliplink').href=(curClip?'/media/visit/'+id+'/frame/boxed':'/media/visit/'+id+'/thumb');  // the clip has "watch clip"
   loadLabel(id); if(!$('#clip').open)$('#clip').showModal();
   if(curClip) loadBoxData().then(drawBoxes);}
 async function loadBoxData(){if(boxData)return; try{boxData=await (await fetch('/api/visit/'+curVisit+'/boxes')).json();}catch(e){boxData={frames:[]};}}

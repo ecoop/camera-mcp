@@ -348,4 +348,89 @@ def test_visits_come_before_live_on_the_feeds_view(client):
 def test_viewer_links_the_full_res_still_not_the_clip(client):
     page = client.get("/").text
     assert ">full-res image</a>" in page and "open raw" not in page
-    assert "$('#cliplink').href=(curClip?'/media/visit/'+id+'/frame'" in page
+    assert "$('#cliplink').href=(curClip?'/media/visit/'+id+'/frame/boxed'" in page
+
+
+def test_draw_boxes_outlines_each_box_in_red_at_full_resolution():
+    import cv2
+    import numpy as np
+
+    from camera_mcp.web import draw_boxes
+    grey = np.full((720, 1280, 3), 128, np.uint8)
+    ok, jpeg = cv2.imencode(".jpg", grey)
+    out = cv2.imdecode(np.frombuffer(draw_boxes(jpeg.tobytes(), [{"x": 0.5, "y": 0.5, "w": 0.2, "h": 0.2,
+                                                                  "conf": 0.75}]), np.uint8), cv2.IMREAD_COLOR)
+    assert out.shape == (720, 1280, 3)  # full resolution kept
+    b, g, r = (int(v) for v in out[360 + 72, 640])  # on the box's left edge, halfway down
+    assert r > 180 and b < 110 and g < 110  # red outline
+    assert abs(int(out[100, 100][2]) - 128) < 10  # elsewhere untouched
+    assert draw_boxes(b"not a jpeg", []) is None
+
+
+def test_frame_boxed_draws_the_best_frames_boxes_on_the_saved_still(tmp_path):
+    import time
+
+    import cv2
+    import numpy as np
+
+    from camera_mcp.config import Camera
+    from camera_mcp.store import Store
+    from camera_mcp.taxa import Label
+    from camera_mcp.visits import Box, Detection, Visit
+    from camera_mcp.web import build_app
+    (tmp_path / "stills").mkdir()
+    ok, jpeg = cv2.imencode(".jpg", np.full((360, 640, 3), 128, np.uint8))
+    (tmp_path / "stills" / "s.jpg").write_bytes(jpeg.tobytes())
+    store = Store(tmp_path / "monitor.db")
+    v = Visit("cam", "animal", start=time.time(), last_seen=time.time() + 5, frames=2)
+    v.votes[("animal", "")] = 1.0
+    weak, strong = Box(0.1, 0.1, 0.1, 0.1, 0.3), Box(0.6, 0.5, 0.2, 0.2, 0.8)
+    v.log = [(v.start + i, [Detection(b, Label("animal", "", 0.5), "animal")]) for i, b in enumerate((weak, strong))]
+    store.add_visit(v, model="m", thumbnail=None, clip=None, still="stills/s.jpg")
+    store.close()
+    c = starlette_testclient.TestClient(build_app({"cam": Camera("cam", "c.mp4")}, tmp_path, None))
+    r = c.get("/media/visit/1/frame/boxed")
+    assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg"
+    img = cv2.imdecode(np.frombuffer(r.content, np.uint8), cv2.IMREAD_COLOR)
+    assert img.shape == (360, 640, 3)
+    assert img[int(0.6 * 360), int(0.6 * 640)][2] > 180  # the best (0.8) frame's box is drawn...
+    assert abs(int(img[int(0.15 * 360), int(0.1 * 640)][2]) - 128) < 15  # ...not the weaker frame's
+    assert (tmp_path / "frames" / "1-boxed.jpg").exists()  # cached: boxes never change
+    assert c.get("/media/visit/99/frame/boxed").status_code == 404
+
+
+def test_draw_boxes_keeps_crowded_labels_apart():
+    """A flock: four boxes bunched together get four labels, none overprinting another."""
+    import cv2
+    import numpy as np
+
+    import camera_mcp.web as web
+    calls = []
+    real = cv2.putText
+    ok, jpeg = cv2.imencode(".jpg", np.full((1440, 2560, 3), 128, np.uint8))
+    boxes = [{"x": 0.354, "y": 0.4215, "w": 0.03, "h": 0.045, "conf": 0.68},
+             {"x": 0.4287, "y": 0.4209, "w": 0.03, "h": 0.045, "conf": 0.5},
+             {"x": 0.3798, "y": 0.4535, "w": 0.02, "h": 0.07, "conf": 0.28},
+             {"x": 0.4302, "y": 0.4459, "w": 0.015, "h": 0.06, "conf": 0.25}]
+    try:
+        cv2.putText = lambda img, text, org, *a, **k: (calls.append((text, org, a[1])), real(img, text, org, *a, **k))
+        assert web.draw_boxes(jpeg.tobytes(), boxes)
+    finally:
+        cv2.putText = real
+    labels = {}
+    for text, (x, y), scale in calls:  # each label is drawn twice (outline, then fill) at one spot
+        (tw, th), base = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, 1)
+        labels[text] = (x, y - th, x + tw, y + base)
+    assert set(labels) == {"68%", "50%", "28%", "25%"}
+    rects = list(labels.values())
+    for i, a in enumerate(rects):
+        for b in rects[i + 1:]:
+            assert not (a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]), labels
+
+
+def test_labelled_tiles_are_styled_from_their_verdict(client):
+    page = client.get("/").text
+    assert '<span class="vpill"></span>' in page  # every tile carries the badge slot...
+    for v in ("real", "false", "wrong_species"):  # ...shown, outlined and dimmed per verdict
+        assert f".tile[data-verdict={v}] .vpill::after" in page
+    assert "t.dataset.verdict=v;" in page  # labelling restyles the tile in place
