@@ -85,12 +85,13 @@ def judge(key: str, boxes: list[Box], rules: GateRules) -> str | None:
 def in_zones(key: str, boxes: list[Box], zones, roi=None) -> str | None:
     """"zone" when every one of a closed visit's boxes sits in an exclusion zone that applies to it,
     else None. Boxes are fractions of the analysis frame (the camera's `roi` crop, if any); zones are
-    fractions of the full frame. A box is in a zone when its centre is. A zone in mode "unnamed" only
-    applies to visits keyed "animal"; mode "all" applies to any. One box outside keeps the visit."""
+    fractions of the full frame. A box is in a zone when its centre is. A "hide_unrecognized" zone only
+    applies to visits keyed "animal" (SpeciesNet couldn't identify them); an "ignore" zone applies to any
+    (normally its boxes never get this far: see monitor.zone_drop). One box outside keeps the visit."""
     if not zones or not boxes:
         return None
     rx, ry, rw, rh = roi or (0.0, 0.0, 1.0, 1.0)
-    shapes = [shape for shape, mode in zones if mode == "all" or key == GATED]
+    shapes = [shape for shape, mode in zones if mode == "ignore" or key == GATED]
     if not shapes:
         return None
     for b in boxes:

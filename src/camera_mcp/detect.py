@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections.abc import Callable
 from typing import Protocol
 
 import numpy as np
@@ -36,9 +37,12 @@ class Detector(Protocol):
     model: str  # recorded with every visit, so labels can be recomputed after a model change
 
     def analyze(self, frame: np.ndarray, *, tiles: bool | tuple[int, int] = False, min_conf: float = 0.2,
-                max_boxes: int = 8, vehicles: bool = False) -> list[Detection]:
+                max_boxes: int = 8, vehicles: bool = False,
+                drop: Callable[[Box], bool] | None = None) -> list[Detection]:
         """Boxes in an RGB frame, each with a label and visit key. `tiles`: False/True (whole frame
-        or a 2x2 grid), or an explicit (rows, cols) grid; rows*cols <= 1 means the whole frame."""
+        or a 2x2 grid), or an explicit (rows, cols) grid; rows*cols <= 1 means the whole frame.
+        `drop`: boxes it returns True for are discarded as soon as they're found, before they're
+        classified (an "ignore" exclusion zone)."""
         ...
 
 
@@ -107,7 +111,8 @@ class SpeciesNetDetector:
         return self._parts
 
     def analyze(self, frame: np.ndarray, *, tiles: bool | tuple[int, int] = False, min_conf: float = 0.2,
-                max_boxes: int = 8, vehicles: bool = False) -> list[Detection]:
+                max_boxes: int = 8, vehicles: bool = False,
+                drop: Callable[[Box], bool] | None = None) -> list[Detection]:
         from PIL import Image
         from speciesnet.utils import BBox
 
@@ -120,6 +125,8 @@ class SpeciesNetDetector:
                 for window in tile_windows(rows, cols):
                     found += self._boxes(mega, image, window)
             found = [(b, k) for b, k in merge_boxes(found) if b.conf >= min_conf and (vehicles or k != "vehicle")]
+            if drop:  # the MegaDetector -> classifier seam: an excluded box is never classified
+                found = [(b, k) for b, k in found if not drop(b)]
 
             animals = [b for b, k in found if k == "animal"][:max_boxes]
             labels: dict[Box, Label] = {}

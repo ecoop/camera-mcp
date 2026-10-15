@@ -183,11 +183,23 @@ the next unlabelled visit (or press **next unlabelled ›**). The backtest's `lb
 counts real animals the rules would hide.
 
 **Exclusion zones.** In the zones editor (`/zones`), the **exclude** tool marks spots that only
-ever produce junk: a feeder roof, a patch of hedge. A visit whose boxes *all* sit in exclusion
-zones is hidden (reason `zone`), kept and shown again with one click. Each zone hides **unnamed
-only** (bare "animal" visits; a named bird on the roof stays) or **everything**; click a zone's mode
-to switch it. Any visit can be shown or hidden by hand from the viewer (**show** / **hide**), to undo
-a wrong call by the gate or a zone. Zones apply to new visits and don't reduce analysis load.
+ever produce junk: a feeder roof's underside, a patch of hedge. Each zone has a mode (click it to
+switch):
+
+- **Ignore**: anything boxed here (box centre in the zone) is dropped as soon as MegaDetector finds
+  it, before SpeciesNet classifies it, so it never opens or extends a visit and can't keep the camera
+  analysing. For spots no animal can be. (A phantom "bird" on a feeder roof's underside once held a
+  visit open all night: 72% of that camera's analysed frames in a day.) Dropped boxes leave no visit
+  to show again, but the monitor log keeps a periodic tally ("exclusion zones dropped N on …"); to
+  undo, switch the zone to **hide unrecognized** or delete it.
+- **Hide unrecognized**: a visit SpeciesNet couldn't identify (a bare "animal"), with all its boxes
+  in the zone, is hidden when it ends (reason `zone`): kept, and shown again with one click. An
+  identified animal is never hidden. It can only act at the end: whether a visit is identified is
+  only settled then. It doesn't reduce load.
+
+Any visit can be shown or hidden by hand from the viewer (**show** / **hide**), to undo a wrong call
+by the gate or a zone. Zones apply to new visits. In `zones.json` the modes are `ignore` and
+`hide_unrecognized` (the earlier `all` / `unnamed` are still read).
 
 **Drawing zones.** The editor zooms (wheel, trackpad pinch, or **+ / − / fit**) and pans
 (**Space**-drag, middle-drag or **✋**), on a full-resolution snapshot. Motion ROI, motion mask and

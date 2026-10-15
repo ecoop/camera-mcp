@@ -932,7 +932,7 @@ button:disabled{opacity:.5;cursor:default}
 #ov .motion_roi{stroke:var(--good);fill:rgba(79,122,82,.16)}
 #ov .motion_mask{stroke:var(--warn);fill:rgba(165,81,74,.16)}
 #ov .exclude{stroke:var(--excl);fill:rgba(154,106,18,.16);stroke-dasharray:6 4}
-#ov .exclude.all{stroke-dasharray:none;fill:rgba(154,106,18,.3)}
+#ov .exclude.ignore{stroke-dasharray:none;fill:rgba(154,106,18,.3)}
 #ov .draft{fill:none;stroke:var(--ink);stroke-dasharray:4 3}
 .tags,.handles{position:absolute;inset:0;pointer-events:none}
 .tag{position:absolute;font-family:var(--mono);font-size:.6rem;padding:0 .25rem;color:#fff;background:var(--accent);
@@ -995,8 +995,8 @@ button:disabled{opacity:.5;cursor:default}
     <div style="margin-top:.6rem"><b>Motion mask</b> <span class="k">tier-1 ignore</span>
       <div class="zdesc">Motion <i>inside</i> these zones is ignored. Mute known false motion &mdash; a swaying branch, a street, a neighbour&rsquo;s window &mdash; so it never wakes the detector. Add as many as you need.</div>
       <ul class="list" id="l-motion_mask"></ul></div>
-    <div style="margin-top:.6rem"><b>Exclude</b> <span class="k">hide visits</span>
-      <div class="zdesc">A visit whose boxes <i>all</i> sit in these zones (a feeder roof, a hedge) is hidden &mdash; kept, never deleted, and shown again with one click in the viewer. Each zone hides <b>unnamed only</b> (bare &ldquo;animal&rdquo; boxes; a named bird on the roof stays) or <b>everything</b>. Click the mode to switch. Applies to new visits; doesn&rsquo;t reduce load.</div>
+    <div style="margin-top:.6rem"><b>Exclude</b> <span class="k">per-zone mode</span>
+      <div class="zdesc">For spots that only ever produce junk (a feeder roof&rsquo;s underside, a hedge). Click a zone&rsquo;s mode to switch it.<br><b>Ignore</b>: anything boxed here is dropped as soon as it&rsquo;s found, before it&rsquo;s classified &mdash; it never becomes a visit and can&rsquo;t keep the detector busy. For spots no animal can be.<br><b>Hide unrecognized</b>: a visit here that SpeciesNet couldn&rsquo;t identify is hidden when it ends (an identified bird stays) &mdash; kept, and shown again with one click in the viewer.<br>Applies to new visits.</div>
       <ul class="list" id="l-exclude"></ul></div>
     <div class="row" style="margin-top:1rem">
       <button id="apply" class="primary">apply &amp; reload</button>
@@ -1009,7 +1009,7 @@ button:disabled{opacity:.5;cursor:default}
 const $=s=>document.querySelector(s);
 // A zone shape is [x,y,w,h] (a rect) or {poly:[[x,y],...]}; all coordinates are fractions of the frame.
 let all={}, editable=true, name=null, zones={roi:null,motion_roi:null,motion_mask:[],exclude:[]}, tool='roi', shapeMode='rect';
-const MODE={unnamed:'unnamed only',all:'everything'}, VW=1600, VH=900, NS='http://www.w3.org/2000/svg';
+const MODE={hide_unrecognized:'hide unrecognized',ignore:'ignore'}, VW=1600, VH=900, NS='http://www.w3.org/2000/svg';
 const f3=v=>(+v).toFixed(3), r4=v=>+(+v).toFixed(4), clamp=(v,a,b)=>Math.min(b,Math.max(a,v));
 const isPoly=s=>s&&!Array.isArray(s), copy=s=>isPoly(s)?{poly:s.poly.map(p=>p.slice())}:s.slice();
 const bboxOf=s=>{if(!isPoly(s))return s;const xs=s.poly.map(p=>p[0]),ys=s.poly.map(p=>p[1]);
@@ -1051,7 +1051,7 @@ function svgShape(s,cls){const el=document.createElementNS(NS,isPoly(s)?'polygon
 function each(fn){  // every drawn zone: (shape, css class, tag, the object holding it, key)
   if(zones.roi)fn(zones.roi,'roi','ROI',zones,'roi'); if(zones.motion_roi)fn(zones.motion_roi,'motion_roi','mROI',zones,'motion_roi');
   zones.motion_mask.forEach((s,i)=>fn(s,'motion_mask','m'+(i+1),zones.motion_mask,i));
-  zones.exclude.forEach((z,i)=>fn(z.shape,'exclude'+(z.mode==='all'?' all':''),'x'+(i+1)+(z.mode==='all'?' all':''),z,'shape'));}
+  zones.exclude.forEach((z,i)=>fn(z.shape,'exclude'+(z.mode==='ignore'?' ignore':''),'x'+(i+1)+(z.mode==='ignore'?' ignore':''),z,'shape'));}
 function render(){
   const ov=$('#ov'); ov.innerHTML=''; $('#tags').innerHTML=''; $('#handles').innerHTML='';
   each((s,cls,tag,holder,key)=>{ov.appendChild(svgShape(s,cls)); const b=bboxOf(s), t=document.createElement('div');
@@ -1069,7 +1069,7 @@ function render(){
   document.querySelectorAll('.list button[data-cls]').forEach(b=>b.onclick=()=>{const c=b.dataset.cls,i=+b.dataset.i;
     if(c==='motion_mask'||c==='exclude')zones[c].splice(i,1);else zones[c]=null;render();});
   document.querySelectorAll('.list button.mode').forEach(b=>b.onclick=()=>{const z=zones.exclude[+b.dataset.i];
-    z.mode=z.mode==='all'?'unnamed':'all';render();});
+    z.mode=z.mode==='ignore'?'hide_unrecognized':'ignore';render();});
   applyZoom();}
 
 // ---- polygon points: drag to move, Alt-click to delete ----
@@ -1089,7 +1089,7 @@ let drag=null, draft=null, cursor=null;  // drag: a rect being dragged; draft: p
 function pt(ev){const r=$('#ov').getBoundingClientRect();  // the transformed box, so fractions hold at any zoom
   return [clamp((ev.clientX-r.left)/r.width,0,1),clamp((ev.clientY-r.top)/r.height,0,1)];}
 function place(shape){if(tool==='motion_mask')zones.motion_mask.push(shape);
-  else if(tool==='exclude')zones.exclude.push({shape,mode:'unnamed'});  // the cautious mode first
+  else if(tool==='exclude')zones.exclude.push({shape,mode:'hide_unrecognized'});  // the cautious mode first
   else zones[tool]=shape; render();}
 function drawDraft(){const ov=$('#ov'); ov.querySelectorAll('.draft').forEach(e=>e.remove()); $('#handles').querySelectorAll('.dh').forEach(e=>e.remove());
   if(drag&&drag.cur){const s=drag.start,p=drag.cur;ov.appendChild(Object.assign(svgShape([Math.min(s[0],p[0]),Math.min(s[1],p[1]),

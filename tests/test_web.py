@@ -469,7 +469,7 @@ def test_visit_hide_is_blocked_when_readonly(tmp_path, monkeypatch):
 def test_zone_editor_saves_exclusion_zones_with_their_mode(tmp_path, client, no_reload):
     import json
     zones = {"roi": None, "motion_roi": None, "motion_mask": [],
-             "exclude": [{"rect": [0.35, 0.4, 0.15, 0.15], "mode": "unnamed"}, {"rect": [0.1, 0.1, 0.1, 0.1], "mode": "all"}]}
+             "exclude": [{"rect": [0.35, 0.4, 0.15, 0.15], "mode": "hide_unrecognized"}, {"rect": [0.1, 0.1, 0.1, 0.1], "mode": "ignore"}]}
     r = client.post("/api/zones/backyard", json=zones)
     assert r.status_code == 200 and r.json()["zones"]["exclude"] == zones["exclude"]
     assert json.loads((tmp_path / "zones.json").read_text())["cameras"]["backyard"]["exclude"] == zones["exclude"]
@@ -485,7 +485,7 @@ def test_zone_editor_saves_polygons_and_keeps_the_roi_a_rectangle(tmp_path, clie
     import json
     poly = {"poly": [[0.1, 0.1], [0.5, 0.1], [0.3, 0.4]]}
     zones = {"roi": [0.0, 0.25, 1.0, 0.75], "motion_roi": poly, "motion_mask": [[0.6, 0.6, 0.1, 0.1], poly],
-             "exclude": [{"poly": poly["poly"], "mode": "all"}]}
+             "exclude": [{"poly": poly["poly"], "mode": "ignore"}]}
     r = client.post("/api/zones/backyard", json=zones)
     assert r.status_code == 200
     saved = json.loads((tmp_path / "zones.json").read_text())["cameras"]["backyard"]
@@ -496,3 +496,12 @@ def test_zone_editor_saves_polygons_and_keeps_the_roi_a_rectangle(tmp_path, clie
     assert bad.status_code == 400  # the analysis roi must stay a rectangle
     page = client.get("/zones").text
     assert 'name="shape" value="poly"' in page and 'id="zin"' in page and "w=1920" in page
+
+
+def test_zone_modes_saved_under_the_earlier_names_come_back_renamed(client, no_reload):
+    old = {"roi": None, "motion_roi": None, "motion_mask": [],
+           "exclude": [{"rect": [0.1, 0.1, 0.1, 0.1], "mode": "all"}, {"rect": [0.3, 0.3, 0.1, 0.1], "mode": "unnamed"}]}
+    r = client.post("/api/zones/backyard", json=old)
+    assert [z["mode"] for z in r.json()["zones"]["exclude"]] == ["ignore", "hide_unrecognized"]
+    page = client.get("/zones").text
+    assert "hide unrecognized" in page and "<b>Ignore</b>" in page and "everything" not in page

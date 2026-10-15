@@ -160,11 +160,11 @@ def roof_box(conf=0.5):
 
 def test_a_visit_whose_boxes_all_sit_in_a_zone_is_hidden():
     from camera_mcp.gate import in_zones
-    unnamed_only, everything = ((ROOF, "unnamed"),), ((ROOF, "all"),)
-    assert in_zones("animal", [roof_box(), roof_box()], unnamed_only) == "zone"
-    assert in_zones("songbirds", [roof_box()], unnamed_only) is None  # a named bird on the roof stays
-    assert in_zones("songbirds", [roof_box()], everything) == "zone"
-    assert in_zones("animal", [roof_box(), Box(0.8, 0.8, 0.05, 0.05, 0.5)], everything) is None  # one box outside
+    unrecognized, ignore = ((ROOF, "hide_unrecognized"),), ((ROOF, "ignore"),)
+    assert in_zones("animal", [roof_box(), roof_box()], unrecognized) == "zone"
+    assert in_zones("songbirds", [roof_box()], unrecognized) is None  # an identified bird on the roof stays
+    assert in_zones("songbirds", [roof_box()], ignore) == "zone"
+    assert in_zones("animal", [roof_box(), Box(0.8, 0.8, 0.05, 0.05, 0.5)], ignore) is None  # one box outside
     assert in_zones("animal", [roof_box()], ()) is None
 
 
@@ -172,11 +172,11 @@ def test_zones_are_full_frame_while_boxes_are_fractions_of_the_roi():
     from camera_mcp.gate import in_zones
     roi = (0.0, 0.25, 1.0, 0.75)  # boxes are fractions of this band
     on_roof = Box(0.40, (0.47 - 0.25) / 0.75 - 0.02, 0.04, 0.04, 0.5)  # maps back to (0.42, 0.47)
-    assert in_zones("animal", [on_roof], ((ROOF, "unnamed"),), roi) == "zone"
-    assert in_zones("animal", [roof_box()], ((ROOF, "unnamed"),), roi) is None  # unmapped, it's elsewhere
+    assert in_zones("animal", [on_roof], ((ROOF, "hide_unrecognized"),), roi) == "zone"
+    assert in_zones("animal", [roof_box()], ((ROOF, "hide_unrecognized"),), roi) is None  # unmapped, it's elsewhere
 
 
-def test_exclusion_zones_parse_with_a_cautious_default_mode(tmp_path):
+def test_exclusion_zones_parse_with_a_cautious_default_and_read_the_earlier_names(tmp_path):
     import json
 
     from camera_mcp.config import ConfigError, load_cameras
@@ -184,9 +184,11 @@ def test_exclusion_zones_parse_with_a_cautious_default_mode(tmp_path):
     cfg.write_text("cameras:\n  - {name: backyard, source: b.mp4}\n")
     zones = tmp_path / "zones.json"
     zones.write_text(json.dumps({"cameras": {"backyard": {"exclude": [
-        {"rect": list(ROOF)}, {"rect": [0.1, 0.1, 0.1, 0.1], "mode": "all"}]}}}))
+        {"rect": list(ROOF)}, {"rect": [0.1, 0.1, 0.1, 0.1], "mode": "ignore"},
+        {"rect": [0.2, 0.2, 0.1, 0.1], "mode": "all"}, {"rect": [0.3, 0.3, 0.1, 0.1], "mode": "unnamed"}]}}}))
     cam = load_cameras(cfg, require_login=False, zones=zones)["backyard"]
-    assert cam.exclude == ((ROOF, "unnamed"), ((0.1, 0.1, 0.1, 0.1), "all"))
+    assert cam.exclude == ((ROOF, "hide_unrecognized"), ((0.1, 0.1, 0.1, 0.1), "ignore"),
+                           ((0.2, 0.2, 0.1, 0.1), "ignore"), ((0.3, 0.3, 0.1, 0.1), "hide_unrecognized"))  # old names read
     zones.write_text(json.dumps({"cameras": {"backyard": {"exclude": [{"rect": list(ROOF), "mode": "some"}]}}}))
     with pytest.raises(ConfigError, match="exclude mode"):
         load_cameras(cfg, require_login=False, zones=zones)
@@ -194,7 +196,7 @@ def test_exclusion_zones_parse_with_a_cautious_default_mode(tmp_path):
 
 def test_monitor_hides_a_visit_in_an_exclusion_zone():
     from camera_mcp.monitor import CameraWorker
-    cam = Camera("backyard", "x", exclude=((ROOF, "unnamed"),))
+    cam = Camera("backyard", "x", exclude=((ROOF, "hide_unrecognized"),))
     worker = SimpleNamespace(camera=cam, tz=timezone.utc, lock=threading.Lock(), pending_visits=[])
     roof, fox = _visit("backyard", "animal", [roof_box()] * 3), _visit("backyard", "animal", crossing(conf=0.6))
     for v in (roof, fox):
@@ -228,7 +230,7 @@ def test_point_in_a_concave_polygon():
 
 def test_exclusion_polygon_hides_only_what_is_inside_it():
     from camera_mcp.gate import in_zones
-    zone = ((HEDGE, "unnamed"),)
+    zone = ((HEDGE, "hide_unrecognized"),)
     in_hedge, in_notch = Box(0.18, 0.18, 0.04, 0.04, 0.5), Box(0.28, 0.38, 0.04, 0.04, 0.5)
     assert in_zones("animal", [in_hedge], zone) == "zone"
     assert in_zones("animal", [in_notch], zone) is None  # a rectangle zone would have hidden this one

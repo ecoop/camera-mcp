@@ -45,6 +45,7 @@ from camera_mcp import ringbuffer
 from camera_mcp.capture import FFMPEG
 from camera_mcp.config import (
     Camera, ConfigError, default_config_path, default_data_dir, find_camera, load_cameras, load_site, redact,
+    shape_contains,
 )
 from camera_mcp.detect import Detector, SpeciesNetDetector, available
 from camera_mcp.gate import GateRules, in_zones, judge
@@ -79,6 +80,22 @@ BACKOFF = (2, 5, 10, 30, 60)  # seconds between reconnect attempts
 STATUS_EVERY = 5.0  # seconds between status writes while watching
 PAUSE_RECHECK = 30.0  # seconds between clock checks while a camera is outside its active window
 SHUTDOWN_SECONDS = 120.0  # at most this long, after stopping, to save open visits and their media
+
+
+def zone_drop(camera: Camera):
+    """A test for the detector: True for a box (fractions of the analysis frame, i.e. the camera's
+    roi crop) whose centre lies in one of the camera's "ignore" exclusion zones (fractions of the
+    full frame). None when the camera has none. Such a box is dropped before it's classified, so it
+    can't open or extend a visit: a phantom on a feeder roof can't keep the GPU busy all night."""
+    shapes = [shape for shape, mode in camera.exclude if mode == "ignore"]
+    if not shapes:
+        return None
+    rx, ry, rw, rh = camera.roi or (0.0, 0.0, 1.0, 1.0)
+
+    def drop(b) -> bool:
+        cx, cy = rx + (b.x + b.w / 2) * rw, ry + (b.y + b.h / 2) * rh
+        return any(shape_contains(shape, cx, cy) for shape in shapes)
+    return drop
 
 
 def analysis_frame(full: np.ndarray, crop: tuple[int, int, int, int] | None,
@@ -646,6 +663,8 @@ class Analyzer:
         self._behind = False
         self._skipped: dict[str, float] = defaultdict(float)  # seconds skipped per camera since the last report
         self._last_report = 0.0
+        self._zoned: dict[str, int] = defaultdict(int)  # detections dropped in "ignore" zones since the last report
+        self._last_zoned_report = 0.0
         # analysis-stats counters for the current interval, per camera (written only from the
         # analyzer thread). The aggregate written to analysis_stats is the sum/max across cameras.
         self._analyzed: dict[str, int] = defaultdict(int)
@@ -715,6 +734,19 @@ class Analyzer:
         self._max_lag.clear()
         self._last_stats = now
 
+    ZONED_REPORT_EVERY = 600.0  # seconds between "dropped in exclusion zones" log lines
+
+    def _note_zoned(self, camera: str, n: int) -> None:
+        """Count detections dropped in "ignore" exclusion zones (see zone_drop), and log a
+        periodic per-camera tally so the drops stay visible."""
+        self._zoned[camera] += n
+        now = time.time()
+        if self._zoned and now - self._last_zoned_report >= self.ZONED_REPORT_EVERY:
+            if any(self._zoned.values()):
+                log.info("exclusion zones dropped %s", ", ".join(f"{n} on {c}" for c, n in self._zoned.items() if n))
+            self._zoned.clear()
+            self._last_zoned_report = now
+
     def _skip(self, worker: CameraWorker, seg: ringbuffer.Segment) -> None:
         """Deferred past the limit and still not reached: drop it, but record the blind spot."""
         worker.store.add_skipped(worker.camera.name, seg.start, seg.end)
@@ -766,9 +798,19 @@ class Analyzer:
             full = np.frombuffer(proc.stdout[i * size:(i + 1) * size], np.uint8).reshape(native_h, native_w, 3)
             frame = analysis_frame(full, crop, scale)
             t = seg.start + i * every
+            in_zone, zoned = zone_drop(worker.camera), [0]
+
+            def drop(box, test=in_zone):  # counts each box it drops, whichever layer drops it
+                hit = test(box)
+                zoned[0] += hit
+                return hit
+            extra = {"drop": drop} if in_zone else {}  # only for cameras with "ignore" zones
             detections = self.detector.analyze(frame, tiles=tiles,
                                                min_conf=s.min_box_conf, max_boxes=s.max_boxes,
-                                               vehicles=s.detect_vehicles)
+                                               vehicles=s.detect_vehicles, **extra)
+            if in_zone:  # the detector drops these before classifying; this backstop keeps any detector honest
+                detections = [d for d in detections if not drop(d.box)]
+                self._note_zoned(worker.camera.name, zoned[0])
             detections, learned = worker.scenery.filter(t, detections, frame)
             for spot in learned:
                 log.info("%s: learned scenery at x=%.2f y=%.2f (%.0f%% x %.0f%% of the frame): a \"%s\" that "

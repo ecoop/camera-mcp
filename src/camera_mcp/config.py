@@ -186,20 +186,26 @@ def shape_contains(shape: Shape, x: float, y: float) -> bool:
     return inside
 
 
-EXCLUDE_MODES = ("unnamed", "all")  # what an exclusion zone hides: unnamed "animal" visits only, or any visit
+# What an exclusion zone does. "ignore": any box centred in it is dropped as soon as it's found, before
+# it's classified (never a visit). "hide_unrecognized": a visit that SpeciesNet couldn't identify, with all
+# its boxes in it, is hidden when it ends (reversibly). Earlier names, still accepted: "all", "unnamed".
+EXCLUDE_MODES = ("hide_unrecognized", "ignore")
+LEGACY_MODES = {"all": "ignore", "unnamed": "hide_unrecognized"}
 Exclude = tuple[Shape, str]  # an exclusion zone: (shape, mode)
 
 
 def parse_excludes(value, where: str) -> tuple[Exclude, ...]:
     """A list of exclusion zones, each {"rect": [x, y, w, h]} or {"poly": [[x, y], ...]}, with
-    "mode": "unnamed" | "all" (empty if omitted). Mode defaults to "unnamed", the cautious one."""
+    "mode": "ignore" | "hide_unrecognized" (empty if omitted). Mode defaults to "hide_unrecognized",
+    the cautious one; the earlier names "all" / "unnamed" are read as those."""
     if value is None:
         return ()
     if not isinstance(value, list) or not all(isinstance(z, dict) for z in value):
-        raise ConfigError(f"{where}: exclude must be a list of {{rect|poly, mode: unnamed|all}}")
+        raise ConfigError(f"{where}: exclude must be a list of {{rect|poly, mode: ignore|hide_unrecognized}}")
     out = []
     for z in value:
-        mode = z.get("mode", "unnamed")
+        mode = z.get("mode", "hide_unrecognized")
+        mode = LEGACY_MODES.get(mode, mode)
         if mode not in EXCLUDE_MODES:
             raise ConfigError(f"{where}: exclude mode must be one of {', '.join(EXCLUDE_MODES)}, not {mode!r}")
         shape = parse_poly(z["poly"], where, "exclude") if "poly" in z else parse_rect(z.get("rect"), where, "exclude")

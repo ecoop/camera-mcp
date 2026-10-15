@@ -152,12 +152,14 @@ class WhiteThingDetector:
     def __init__(self, label: Label, key: str):
         self.label, self.key = label, key
 
-    def analyze(self, frame, *, tiles=False, min_conf=0.2, max_boxes=8, vehicles=False):
+    def analyze(self, frame, *, tiles=False, min_conf=0.2, max_boxes=8, vehicles=False, drop=None):
         ys, xs = np.nonzero(frame.min(axis=2) > 230)
         if len(xs) < 50:
             return []
         h, w = frame.shape[:2]
         box = Box(xs.min() / w, ys.min() / h, (xs.max() - xs.min()) / w, (ys.max() - ys.min()) / h, 0.9)
+        if drop and drop(box):  # like SpeciesNet: dropped where boxes are found, before any label
+            return []
         return [Detection(box, self.label, self.key)]
 
 
@@ -442,3 +444,104 @@ def test_analysis_frame_crops_then_scales():
     out = analysis_frame(full, (0, 90, 640, 270), (320, 134))
     assert out.shape == (134, 320, 3) and out[..., 0].min() == 255 and out.flags["C_CONTIGUOUS"]
     assert analysis_frame(full, None, None).shape == full.shape  # no roi, no scale: the frame as decoded
+
+
+# ---- "ignore" exclusion zones act before classification -----------------------------------------
+
+PATH = (0.1, 0.35, 0.8, 0.3)  # covers the white square's whole crossing (centre y = 0.5, x 0.2..0.77)
+
+
+class IgnoresDrop(WhiteThingDetector):
+    """A detector without the drop seam: the analyzer's backstop must still keep zoned boxes out."""
+
+    def analyze(self, frame, *, drop=None, **kwargs):
+        return super().analyze(frame, **kwargs)
+
+
+def _zoned_run(tmp_path, clip, exclude, detector=None):
+    s = MonitorSettings(pre_seconds=1, post_seconds=1, quiet_seconds=2, visit_close_seconds=3)
+    data = tmp_path / "data"
+    det = detector or WhiteThingDetector(Label("domestic cat", CAT, 0.9), "cat")
+    Monitor([Camera("feeder", str(clip), monitor=s, exclude=exclude)], data, det).run(duration=90)
+    db = sqlite3.connect(data / "monitor.db")
+    db.row_factory = sqlite3.Row
+    return db.execute("SELECT * FROM visits").fetchall()
+
+
+@needs_ffmpeg
+def test_a_box_in_an_ignore_zone_never_opens_a_visit(tmp_path, box_crosses):
+    assert _zoned_run(tmp_path, box_crosses, ((PATH, "ignore"),)) == []  # nothing opened, nothing hidden: nothing at all
+
+
+@needs_ffmpeg
+def test_the_backstop_holds_for_a_detector_without_the_seam(tmp_path, box_crosses):
+    det = IgnoresDrop(Label("domestic cat", CAT, 0.9), "cat")
+    assert _zoned_run(tmp_path, box_crosses, ((PATH, "ignore"),), det) == []
+
+
+@needs_ffmpeg
+def test_zones_elsewhere_or_hide_unrecognized_leave_the_visit_alone(tmp_path, box_crosses):
+    elsewhere = ((0.0, 0.0, 0.2, 0.2), "ignore")
+    assert len(_zoned_run(tmp_path / "a", box_crosses, (elsewhere,))) == 1
+    (visit,) = _zoned_run(tmp_path / "b", box_crosses, ((PATH, "hide_unrecognized"),))  # an identified cat: never hidden
+    assert visit["suppressed"] is None
+
+
+def test_zone_drop_maps_roi_boxes_to_the_full_frame():
+    from camera_mcp.monitor import zone_drop
+    assert zone_drop(Camera("c", "x", exclude=((PATH, "hide_unrecognized"),))) is None  # only "ignore" zones drop
+    drop = zone_drop(Camera("c", "x", roi=(0.0, 0.25, 1.0, 0.75), exclude=((PATH, "ignore"),)))
+    centre_y = (0.5 - 0.25) / 0.75  # full-frame y 0.5, as a fraction of the roi band
+    assert drop(Box(0.45, centre_y - 0.02, 0.1, 0.04, 0.9))
+    assert not drop(Box(0.45, 0.9, 0.1, 0.04, 0.9))  # near the bottom of the band: outside the zone
+
+
+def test_speciesnet_drops_zoned_boxes_before_classifying(monkeypatch):
+    """The seam itself, with stand-in models (CI doesn't install SpeciesNet): a box in the zone is
+    never sent to the classifier; one outside is classified as usual."""
+    import sys
+    import types
+    from collections import namedtuple
+
+    from camera_mcp.config import Site
+    from camera_mcp.detect import SpeciesNetDetector
+    utils = types.ModuleType("speciesnet.utils")
+    utils.BBox = namedtuple("BBox", "xmin ymin width height")
+    pil, image = types.ModuleType("PIL"), types.ModuleType("PIL.Image")  # Pillow comes with SpeciesNet, not the base
+    image.fromarray = lambda a: types.SimpleNamespace(size=(a.shape[1], a.shape[0]))
+    pil.Image = image
+    monkeypatch.setitem(sys.modules, "PIL", pil)
+    monkeypatch.setitem(sys.modules, "PIL.Image", image)
+    monkeypatch.setitem(sys.modules, "speciesnet", types.ModuleType("speciesnet"))
+    monkeypatch.setitem(sys.modules, "speciesnet.utils", utils)
+    classified = []
+
+    class Mega:
+        def preprocess(self, image):
+            return image
+
+        def predict(self, key, image):
+            return {"detections": [{"label": "animal", "conf": 0.7, "bbox": [0.55, 0.18, 0.06, 0.06]},  # the roof
+                                   {"label": "animal", "conf": 0.8, "bbox": [0.10, 0.60, 0.08, 0.08]}]}
+
+    class Classifier:
+        def preprocess(self, image, bboxes):
+            return bboxes[0]
+
+        def batch_predict(self, keys, crops):
+            classified.extend(crops)
+            return [{"classifications": {"classes": [], "scores": []}} for _ in keys]
+
+    class Ensemble:
+        def combine(self, *a):
+            return [{"prediction": "1;mammalia;rodentia;sciuridae;sciurus;carolinensis;eastern gray squirrel",
+                     "prediction_score": 0.9}]
+
+    det = SpeciesNetDetector(Site())
+    det._parts = (Mega(), Classifier(), Ensemble())
+    roof = lambda b: 0.5 <= b.x + b.w / 2 <= 0.65 and 0.1 <= b.y + b.h / 2 <= 0.3
+    found = det.analyze(np.zeros((90, 160, 3), np.uint8), drop=roof)
+    assert [round(c.xmin, 2) for c in classified] == [0.10]  # only the squirrel went to the classifier
+    assert [round(d.box.x, 2) for d in found] == [0.10]
+    classified.clear()
+    assert len(det.analyze(np.zeros((90, 160, 3), np.uint8))) == 2 and len(classified) == 2  # no zone: both
