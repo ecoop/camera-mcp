@@ -81,17 +81,24 @@ PAUSE_RECHECK = 30.0  # seconds between clock checks while a camera is outside i
 SHUTDOWN_SECONDS = 120.0  # at most this long, after stopping, to save open visits and their media
 
 
-def capture_still(seg_path, off: float) -> bytes | None:
-    """Decode one full, uncropped frame (JPEG bytes) from a ring-buffer segment. Called during
-    analysis while the segment is guaranteed on disk — capturing at visit close is racy, because a
-    short visit's segments are pruned in the ~30s before it closes. None on any failure."""
-    try:
-        r = subprocess.run([FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin",
-                            "-ss", f"{off:.3f}", "-i", str(seg_path), "-frames:v", "1",
-                            "-q:v", "2", "-f", "mjpeg", "-"], capture_output=True, timeout=30)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return r.stdout if r.returncode == 0 and r.stdout else None
+def analysis_frame(full: np.ndarray, crop: tuple[int, int, int, int] | None,
+                   scale: tuple[int, int] | None) -> np.ndarray:
+    """The detector's input cut from a full decoded frame (RGB): the camera's roi `crop` (x, y, w, h
+    in pixels), then scaled down to `scale` (w, h). Boxes are fractions of this frame."""
+    frame = full
+    if crop:
+        x, y, w, h = crop
+        frame = frame[y:y + h, x:x + w]
+    if scale:
+        frame = cv2.resize(frame, scale, interpolation=cv2.INTER_AREA)
+    return np.ascontiguousarray(frame)
+
+
+def encode_still(full: np.ndarray) -> bytes | None:
+    """A full decoded frame (RGB) as JPEG bytes: the visit's still, the exact frame its boxes came
+    from. imencode, not imwrite: SpeciesNet's yolov5 replaces cv2.imwrite with a 2-argument version."""
+    ok, buf = cv2.imencode(".jpg", cv2.cvtColor(full, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 92])
+    return buf.tobytes() if ok else None
 
 
 def watcher_args(source: Camera, width: int, height: int, fps: float) -> list[str]:
@@ -496,7 +503,7 @@ class CameraWorker:
         return str(out.relative_to(self.data_dir))
 
     def _write_still(self, visit: Visit, rel: str) -> str | None:
-        """Write the full frame captured at the best moment (see _capture_still) to disk. None if the
+        """Write the full frame captured at the best moment (see encode_still) to disk. None if the
         visit never got one; the web app then falls back to a clip-extracted frame."""
         if not visit.still_jpeg:
             return None
@@ -730,28 +737,32 @@ class Analyzer:
                         if behind else "caught up")
         every = max(seg.end - seg.start, s.segment_seconds) if behind else s.detect_every_seconds
         native_w, native_h = worker.frame_size(seg)
-        width, height = native_w, native_h  # tracks the running (post-crop, post-scale) decode size
-        vf = f"fps=1/{every}"
+        # Full frames are decoded once; the detector's input is cut from each in-process, and the very
+        # same full frame becomes the visit's still. (Re-seeking the segment for the still drifted: its
+        # timestamps don't start at 0, so a seek past the first frame found nothing, leaving a stale or
+        # missing still that the boxes didn't line up with.)
+        crop = scale = None
+        width, height = native_w, native_h  # the detector's input size (post-crop, post-scale)
         if (roi := worker.camera.roi):  # analyse only this region; boxes stay fractions of the crop
             x, y, rw, rh = roi
-            cx, cy = int(x * native_w), int(y * native_h)
             width, height = (int(rw * native_w) // 2) * 2, (int(rh * native_h) // 2) * 2
-            vf += f",crop={width}:{height}:{cx}:{cy}"
-        if s.analysis_width and s.analysis_width < width:  # scale down for cheaper decode / lighter crops
+            crop = (int(x * native_w), int(y * native_h), width, height)
+        if s.analysis_width and s.analysis_width < width:  # scale down for lighter inference
             scaled = s.analysis_width - (s.analysis_width % 2)
             height = max(2, round(height * scaled / width / 2) * 2)
             width = scaled
-            vf += f",scale={width}:{height}"
+            scale = (width, height)
         proc = subprocess.run(
             [FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin", "-i", str(seg.path),
-             "-vf", vf, "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+             "-vf", f"fps=1/{every},scale={native_w}:{native_h}", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
             capture_output=True, timeout=60,
         )
-        size = width * height * 3
+        size = native_w * native_h * 3
         for i in range(len(proc.stdout) // size):
             if self.stop.is_set():
                 return i  # frames analysed before the stop
-            frame = np.frombuffer(proc.stdout[i * size:(i + 1) * size], np.uint8).reshape(height, width, 3)
+            full = np.frombuffer(proc.stdout[i * size:(i + 1) * size], np.uint8).reshape(native_h, native_w, 3)
+            frame = analysis_frame(full, crop, scale)
             t = seg.start + i * every
             detections = self.detector.analyze(frame, tiles=tiles,
                                                min_conf=s.min_box_conf, max_boxes=s.max_boxes,
@@ -765,10 +776,10 @@ class Analyzer:
                 before = set(worker.tracker.open)
                 closed = worker.tracker.feed(t, detections, frame)
                 still_open = dict(worker.tracker.open)
-            for visit in still_open.values():  # new best: grab the full frame now, while its segment exists
-                if visit.best_t == t:
-                    jpeg = capture_still(seg.path, max(0.0, t - seg.start))
-                    if jpeg:
+            if any(visit.best_t == t for visit in still_open.values()):  # a new best: keep this exact frame
+                jpeg = encode_still(full)
+                for visit in still_open.values():
+                    if visit.best_t == t:
                         visit.still_jpeg = jpeg
             for key, visit in sorted(still_open.items()):
                 if visit.db_id is None:  # arrived (or took over an unidentified visit's row)

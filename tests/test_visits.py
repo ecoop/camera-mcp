@@ -4,6 +4,7 @@ stand-in detector (CI doesn't install SpeciesNet). No network or hardware."""
 
 from __future__ import annotations
 
+import json
 import shutil
 import sqlite3
 import subprocess
@@ -392,3 +393,52 @@ def test_scenery_prunes_one_off_detections(tmp_path):
     assert len(scenery.spots) == 1
     scenery.filter(SINGLE_HIT_TTL + 10, [_unnamed(x=0.9)])  # much later, elsewhere: the stray is pruned
     assert all(abs(s.x - 0.1) > 0.05 for s in scenery.spots) and len(scenery.spots) == 1
+
+
+def _still_under_box(data, db, roi=None):
+    """The saved still's pixels under the visit's best box (roi-mapped to the full frame)."""
+    (visit,) = db.execute("SELECT * FROM visits").fetchall()
+    assert visit["still"], "every analysed visit gets a still"
+    still = cv2.imdecode(np.frombuffer((data / visit["still"]).read_bytes(), np.uint8), cv2.IMREAD_COLOR)
+    best = max((b for f in db.execute("SELECT boxes FROM visit_frames WHERE visit_id = ?", (visit["id"],))
+                for b in json.loads(f["boxes"])), key=lambda b: b["conf"])
+    x, y, w, h = best["bbox"]
+    if roi:
+        rx, ry, rw, rh = roi
+        x, y, w, h = rx + x * rw, ry + y * rh, w * rw, h * rh
+    H, W = still.shape[:2]
+    return still, still[int((y + h * .25) * H):int((y + h * .75) * H), int((x + w * .25) * W):int((x + w * .75) * W)]
+
+
+@needs_ffmpeg
+def test_the_still_is_the_exact_frame_the_box_came_from(tmp_path, box_crosses):
+    """The box moves 12 px per analysed tenth of a second; a still from any other moment misses it.
+    (It used to be re-decoded by seeking the segment, whose timestamps don't start at 0: a seek past the
+    first frame found nothing, leaving a stale still from an earlier moment, or none.)"""
+    data, db = _run(tmp_path, box_crosses, Label("domestic cat", CAT, 0.9), "cat")
+    still, under = _still_under_box(data, db)
+    assert still.shape[:2] == (360, 640)  # the full frame
+    assert under.size and under.min() > 200, "the box's middle on the still is the white square"
+
+
+@needs_ffmpeg
+def test_the_still_is_full_frame_and_aligned_with_a_cropped_scaled_analysis(tmp_path, box_crosses):
+    roi = (0.0, 0.25, 1.0, 0.75)  # analyse a band, scaled down: boxes are fractions of that
+    s = MonitorSettings(pre_seconds=1, post_seconds=1, quiet_seconds=2, visit_close_seconds=3, analysis_width=320)
+    data = tmp_path / "data"
+    Monitor([Camera("feeder", str(box_crosses), monitor=s, roi=roi)], data,
+            WhiteThingDetector(Label("domestic cat", CAT, 0.9), "cat")).run(duration=90)
+    db = sqlite3.connect(data / "monitor.db")
+    db.row_factory = sqlite3.Row
+    still, under = _still_under_box(data, db, roi)
+    assert still.shape[:2] == (360, 640)  # uncropped, unscaled
+    assert under.size and under.min() > 200
+
+
+def test_analysis_frame_crops_then_scales():
+    from camera_mcp.monitor import analysis_frame
+    full = np.zeros((360, 640, 3), np.uint8)
+    full[90:, :, 0] = 255  # mark the roi band
+    out = analysis_frame(full, (0, 90, 640, 270), (320, 134))
+    assert out.shape == (134, 320, 3) and out[..., 0].min() == 255 and out.flags["C_CONTIGUOUS"]
+    assert analysis_frame(full, None, None).shape == full.shape  # no roi, no scale: the frame as decoded
