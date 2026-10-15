@@ -182,6 +182,13 @@ visits show a badge with the reason. Open one and mark it real or false; the vie
 the next unlabelled visit (or press **next unlabelled ›**). The backtest's `lbl_real` column then
 counts real animals the rules would hide.
 
+**Exclusion zones.** In the zones editor (`/zones`), the **exclude** tool marks spots that only
+ever produce junk: a feeder roof, a patch of hedge. A visit whose boxes *all* sit in exclusion
+zones is hidden (reason `zone`), kept and shown again with one click. Each zone hides **unnamed
+only** (bare "animal" visits; a named bird on the roof stays) or **everything**; click a zone's mode
+to switch it. Any visit can be shown or hidden by hand from the viewer (**show** / **hide**), to undo
+a wrong call by the gate or a zone. Zones apply to new visits and don't reduce analysis load.
+
 **Moved-camera check.** Every 5 minutes, when nothing is moving, the monitor compares each
 camera's view with a stored reference (one for day, one for infrared night, in `data/views/`).
 If three checks in a row don't match, it logs a warning and sets `view_moved_since` in the

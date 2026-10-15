@@ -434,3 +434,48 @@ def test_labelled_tiles_are_styled_from_their_verdict(client):
     for v in ("real", "false", "wrong_species"):  # ...shown, outlined and dimmed per verdict
         assert f".tile[data-verdict={v}] .vpill::after" in page
     assert "t.dataset.verdict=v;" in page  # labelling restyles the tile in place
+
+
+def test_a_visit_can_be_shown_or_hidden_by_hand(tmp_path):
+    """The case-by-case undo: show a visit the gate or a zone hid, or hide one, from the viewer."""
+    from camera_mcp.config import Camera
+    from camera_mcp.store import Store
+    from camera_mcp.web import build_app
+    _one_visit(tmp_path)
+    store = Store(tmp_path / "monitor.db")
+    store.set_visit_suppressed(1, "zone")
+    store.close()
+    c = starlette_testclient.TestClient(build_app({"fence": Camera("fence", "f.mp4")}, tmp_path, None))
+    assert c.get("/api/visits?since=1h").json()["hidden"] == 1
+    assert c.post("/api/visit/1/hidden", json={"hidden": False}).json() == {"ok": True, "suppressed": None}
+    assert [v["id"] for v in c.get("/api/visits?since=1h").json()["visits"]] == [1]  # shown again
+    assert c.post("/api/visit/1/hidden", json={"hidden": True}).json()["suppressed"] == "manual"
+    assert c.get("/api/visits?since=1h").json()["hidden"] == 1
+    assert c.post("/api/visit/1/hidden", json={"hidden": "yes"}).status_code == 400
+    assert c.post("/api/visit/99/hidden", json={"hidden": True}).status_code == 404
+    page = c.get("/").text
+    assert 'id="hidebtn"' in page and "function toggleHidden" in page
+
+
+def test_visit_hide_is_blocked_when_readonly(tmp_path, monkeypatch):
+    monkeypatch.setenv("CAMERA_MCP_WEB_READONLY", "1")
+    from camera_mcp.config import Camera
+    from camera_mcp.web import build_app
+    _one_visit(tmp_path)
+    c = starlette_testclient.TestClient(build_app({"fence": Camera("fence", "f.mp4")}, tmp_path, None))
+    assert c.post("/api/visit/1/hidden", json={"hidden": True}).status_code == 403
+
+
+def test_zone_editor_saves_exclusion_zones_with_their_mode(tmp_path, client, no_reload):
+    import json
+    zones = {"roi": None, "motion_roi": None, "motion_mask": [],
+             "exclude": [{"rect": [0.35, 0.4, 0.15, 0.15], "mode": "unnamed"}, {"rect": [0.1, 0.1, 0.1, 0.1], "mode": "all"}]}
+    r = client.post("/api/zones/backyard", json=zones)
+    assert r.status_code == 200 and r.json()["zones"]["exclude"] == zones["exclude"]
+    assert json.loads((tmp_path / "zones.json").read_text())["cameras"]["backyard"]["exclude"] == zones["exclude"]
+    listed = {c["name"]: c for c in client.get("/api/zones").json()["cameras"]}
+    assert listed["backyard"]["exclude"] == zones["exclude"]
+    bad = client.post("/api/zones/backyard", json={**zones, "exclude": [{"rect": [0.9, 0.9, 0.5, 0.5]}]})
+    assert bad.status_code == 400  # out of bounds: never written
+    page = client.get("/zones").text
+    assert 'value="exclude"' in page and 'id="l-exclude"' in page

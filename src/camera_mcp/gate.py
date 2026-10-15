@@ -82,6 +82,24 @@ def judge(key: str, boxes: list[Box], rules: GateRules) -> str | None:
     return None
 
 
+def in_zones(key: str, boxes: list[Box], zones, roi=None) -> str | None:
+    """"zone" when every one of a closed visit's boxes sits in an exclusion zone that applies to it,
+    else None. Boxes are fractions of the analysis frame (the camera's `roi` crop, if any); zones are
+    fractions of the full frame. A box is in a zone when its centre is. A zone in mode "unnamed" only
+    applies to visits keyed "animal"; mode "all" applies to any. One box outside keeps the visit."""
+    if not zones or not boxes:
+        return None
+    rx, ry, rw, rh = roi or (0.0, 0.0, 1.0, 1.0)
+    rects = [r for r, mode in zones if mode == "all" or key == GATED]
+    if not rects:
+        return None
+    for b in boxes:
+        cx, cy = rx + (b.x + b.w / 2) * rw, ry + (b.y + b.h / 2) * rh
+        if not any(x <= cx <= x + w and y <= cy <= y + h for x, y, w, h in rects):
+            return None
+    return "zone"
+
+
 # ---- backtest ---------------------------------------------------------------------------
 
 def _visit_boxes(db: sqlite3.Connection, since: str, cameras: list[str]) -> list[tuple]:

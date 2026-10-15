@@ -138,6 +138,26 @@ def parse_rect(value, where: str, key: str) -> Rect:
     return (x, y, w, h)
 
 
+EXCLUDE_MODES = ("unnamed", "all")  # what an exclusion zone hides: unnamed "animal" visits only, or any visit
+Exclude = tuple[Rect, str]  # an exclusion zone: (rect, mode)
+
+
+def parse_excludes(value, where: str) -> tuple[Exclude, ...]:
+    """A list of exclusion zones, each {"rect": [x, y, w, h], "mode": "unnamed" | "all"} (empty if
+    omitted). Mode defaults to "unnamed", the cautious one."""
+    if value is None:
+        return ()
+    if not isinstance(value, list) or not all(isinstance(z, dict) for z in value):
+        raise ConfigError(f"{where}: exclude must be a list of {{rect: [x, y, w, h], mode: unnamed|all}}")
+    out = []
+    for z in value:
+        mode = z.get("mode", "unnamed")
+        if mode not in EXCLUDE_MODES:
+            raise ConfigError(f"{where}: exclude mode must be one of {', '.join(EXCLUDE_MODES)}, not {mode!r}")
+        out.append((parse_rect(z.get("rect"), where, "exclude"), mode))
+    return tuple(out)
+
+
 def parse_rects(value, where: str, key: str) -> tuple[Rect, ...]:
     """A list of [x, y, w, h] rectangles (empty if omitted)."""
     if value is None:
@@ -162,6 +182,7 @@ class Camera:
     motion_mask: tuple[Rect, ...] = ()  # tier-1 ignore rects: motion here never wakes analysis
     motion_roi: Rect | None = None  # if set, only motion inside this rectangle counts
     roi: Rect | None = None  # tier-2 analysis crop: inference runs on this region of the frame only
+    exclude: tuple[Exclude, ...] = ()  # exclusion zones: a visit whose boxes all sit in them is hidden (gate.py)
     schedule: tuple[tuple[int, int, dict], ...] = ()  # time-of-day monitor overrides (from `when:`)
 
     @property
@@ -405,13 +426,13 @@ def default_config_path() -> str:
     return os.environ.get("CAMERA_MCP_CONFIG", str(Path(__file__).resolve().parents[2] / "cameras.yaml"))
 
 
-ZONE_FIELDS = ("roi", "motion_roi", "motion_mask")  # per-camera zones the web editor owns
+ZONE_FIELDS = ("roi", "motion_roi", "motion_mask", "exclude")  # per-camera zones the web editor owns
 
 
 def load_zone_overlay(path: str | Path) -> dict[str, dict]:
     """The app-owned zone overrides (data/zones.json), parsed and validated. Maps a camera name to
-    the zone fields it overrides: `roi`/`motion_roi` as a Rect (or None to clear) and `motion_mask`
-    as a tuple of Rects. A missing file is no overrides ({}); a malformed one fails loudly, the way
+    the zone fields it overrides: `roi`/`motion_roi` as a Rect (or None to clear), `motion_mask`
+    as a tuple of Rects and `exclude` as a tuple of (Rect, mode). A missing file is no overrides ({}); a malformed one fails loudly, the way
     a bad cameras.yaml does. The web editor is the sole writer."""
     path = Path(path).expanduser()
     if not path.exists():
@@ -435,13 +456,15 @@ def load_zone_overlay(path: str | Path) -> dict[str, dict]:
             over["motion_roi"] = parse_rect(raw["motion_roi"], where, "motion_roi") if raw["motion_roi"] else None
         if "motion_mask" in raw:
             over["motion_mask"] = parse_rects(raw["motion_mask"], where, "motion_mask")
+        if "exclude" in raw:
+            over["exclude"] = parse_excludes(raw["exclude"], where)
         if over:
             overlay[name] = over
     return overlay
 
 
 def apply_zone_overlay(cameras: dict[str, Camera], overlay: dict[str, dict]) -> dict[str, Camera]:
-    """Merge a zone overlay into `cameras` in place, overriding roi/motion_roi/motion_mask where the
+    """Merge a zone overlay into `cameras` in place, overriding roi/motion_roi/motion_mask/exclude where the
     overlay sets them. Overlay names matching no camera are ignored. Returns the same dict."""
     for name, over in overlay.items():
         if name in cameras:
@@ -503,6 +526,7 @@ def load_cameras(
             motion_mask=parse_rects(raw.get("motion_mask"), where, "motion_mask"),
             motion_roi=parse_rect(raw["motion_roi"], where, "motion_roi") if raw.get("motion_roi") else None,
             roi=parse_rect(raw["roi"], where, "roi") if raw.get("roi") else None,
+            exclude=parse_excludes(raw.get("exclude"), where),
             schedule=_schedule(raw, where),
             monitor=_settings(site, raw, where, strict=False),
         )

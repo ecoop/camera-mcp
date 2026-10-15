@@ -31,8 +31,8 @@ from starlette.routing import Route
 
 from camera_mcp.capture import CaptureError, grab_any
 from camera_mcp.config import (ConfigError, default_config_path, default_data_dir, find_camera,
-                               load_cameras, load_site, load_zone_overlay, parse_rect, parse_rects,
-                               save_zone_overlay)
+                               load_cameras, load_site, load_zone_overlay, parse_excludes, parse_rect,
+                               parse_rects, save_zone_overlay)
 from camera_mcp.history import History, HistoryError
 from camera_mcp.store import VERDICTS, Store
 
@@ -64,7 +64,8 @@ def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
         return {"name": cam.name, "label": cam.label, "stream": cam.is_stream,
                 "roi": list(cam.roi) if cam.roi else None,
                 "motion_roi": list(cam.motion_roi) if cam.motion_roi else None,
-                "motion_mask": [list(r) for r in cam.motion_mask]}
+                "motion_mask": [list(r) for r in cam.motion_mask],
+                "exclude": [{"rect": list(r), "mode": m} for r, m in cam.exclude]}
 
     def _ask(fn, *a, **k):
         try:
@@ -200,6 +201,30 @@ def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
             store.close()
         return JSONResponse({"ok": True, "label": {"verdict": verdict, "note": note}})
 
+    async def api_visit_hidden_set(request: Request):
+        """Show or hide one visit by hand ({"hidden": true|false}), overriding the gate or an exclusion
+        zone: the case-by-case undo. Hiding records the reason "manual"."""
+        if not editable:
+            return JSONResponse({"error": "editing is disabled (CAMERA_MCP_WEB_READONLY)"}, status_code=403)
+        vid = int(request.path_params["vid"])
+        try:
+            hidden = (await request.json()).get("hidden")
+        except (ValueError, json.JSONDecodeError, AttributeError):
+            return JSONResponse({"error": "invalid JSON"}, status_code=400)
+        if not isinstance(hidden, bool):
+            return JSONResponse({"error": "hidden must be true or false"}, status_code=400)
+        if not db_path.exists():
+            return JSONResponse({"error": "there's no visit log yet: the monitor hasn't run"}, status_code=503)
+        reason = "manual" if hidden else None
+        store = Store(db_path)
+        try:
+            store.set_visit_suppressed(vid, reason)
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=404)
+        finally:
+            store.close()
+        return JSONResponse({"ok": True, "suppressed": reason})
+
     async def media_thumb(request: Request):
         try:
             data, _ = history.visit_thumbnail(int(request.path_params["vid"]), data_dir)
@@ -310,6 +335,7 @@ def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
             roi = parse_rect(body["roi"], where, "roi") if body.get("roi") else None
             motion_roi = parse_rect(body["motion_roi"], where, "motion_roi") if body.get("motion_roi") else None
             motion_mask = parse_rects(body.get("motion_mask"), where, "motion_mask")
+            exclude = parse_excludes(body.get("exclude"), where)
         except ConfigError as e:
             return JSONResponse({"error": str(e)}, status_code=400)
         new_roi = tuple(roi) if roi else None
@@ -326,7 +352,8 @@ def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
                 raw = {"cameras": {}}
         raw["cameras"][cam.name] = {"roi": list(roi) if roi else None,
                                     "motion_roi": list(motion_roi) if motion_roi else None,
-                                    "motion_mask": [list(r) for r in motion_mask]}
+                                    "motion_mask": [list(r) for r in motion_mask],
+                                    "exclude": [{"rect": list(r), "mode": m} for r, m in exclude]}
         try:
             save_zone_overlay(zones_path, raw)
             load_zone_overlay(zones_path)  # re-validate the file as written
@@ -334,7 +361,7 @@ def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
             return JSONResponse({"error": f"could not save: {e}"}, status_code=500)
 
         from dataclasses import replace
-        cameras[cam.name] = replace(cam, roi=roi, motion_roi=motion_roi, motion_mask=motion_mask)
+        cameras[cam.name] = replace(cam, roi=roi, motion_roi=motion_roi, motion_mask=motion_mask, exclude=exclude)
         reloaded, detail = _reload_monitor()
         return JSONResponse({"ok": True, "reloaded": reloaded, "reload_detail": detail,
                              "scenery_reset": bool(scenery_reset), "zones": _zone_state(cameras[cam.name])})
@@ -376,6 +403,7 @@ def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
         Route("/api/visit/{vid:int}/boxes", api_visit_boxes),
         Route("/api/visit/{vid:int}/label", api_visit_label_get, methods=["GET"]),
         Route("/api/visit/{vid:int}/label", api_visit_label_set, methods=["POST"]),
+        Route("/api/visit/{vid:int}/hidden", api_visit_hidden_set, methods=["POST"]),
         Route("/media/visit/{vid:int}/thumb", media_thumb),
         Route("/media/visit/{vid:int}/frame", media_frame),
         Route("/media/visit/{vid:int}/frame/boxed", media_frame_boxed),
@@ -597,6 +625,7 @@ dialog .vmeta a{color:var(--accent);cursor:pointer}
       <button class="lblbtn" data-v="false">&times; false</button>
       <button class="lblbtn" data-v="wrong_species">&times; wrong sp.</button></span>
     <button class="boxbtn" id="nextbtn" title="the next visit in the grid you haven't labelled">next unlabelled &rsaquo;</button>
+    <button class="boxbtn" id="hidebtn" title="hide this visit, or show one the gate or a zone hid (undo a mistake)">hide</button>
     <button class="boxbtn on" id="boxbtn">hide boxes</button> &middot; <a id="cliplink" title="the full-resolution still with the detector's boxes, on its own (pinch or zoom to inspect)">full-res image</a>
   </span></div></dialog>
 <script>
@@ -662,7 +691,18 @@ let zs=1, ztx=0, zty=0;
 function applyZoom(){$('#pz').style.transform='translate('+ztx+'px,'+zty+'px) scale('+zs+')';}
 function resetZoom(){zs=1;ztx=0;zty=0;applyZoom();}
 function activeMedia(){return mode==='video'?$('#clip video'):$('#still');}
-function openVisit(t){const id=t.dataset.id; curVisit=id; curClip=t.dataset.clip==='1';
+// Show/hide by hand: the case-by-case override of the gate and exclusion zones.
+function markHidden(t){const sup=t&&t.dataset.sup; $('#hidebtn').textContent=sup?'show ('+sup.replace('_',' ')+')':'hide';
+  $('#hidebtn').classList.toggle('on',!!sup);}
+async function toggleHidden(){const t=tileOf(curVisit); if(!t||!labelEditable)return; const hide=!t.dataset.sup;
+  try{const res=await fetch('/api/visit/'+curVisit+'/hidden',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({hidden:hide})}); if(!res.ok)return; const d=await res.json();
+    t.dataset.sup=d.suppressed||''; t.classList.toggle('sup',!!d.suppressed);
+    let b=t.querySelector('.badge'); if(d.suppressed){if(!b){b=document.createElement('span');b.className='badge';
+      t.insertBefore(b,t.querySelector('.vpill'));} b.textContent='hidden: '+d.suppressed;} else if(b)b.remove();
+    markHidden(t); $('#clipmeta').textContent=$('#clipmeta').textContent.replace(/ · hidden: .*$/,'')+
+      (d.suppressed?' · hidden: '+d.suppressed:'');}catch(e){}}
+function openVisit(t){const id=t.dataset.id; curVisit=id; curClip=t.dataset.clip==='1'; markHidden(t);
   boxData=null; mode='image'; boxesOn=curClip; stillFB=false; resetZoom();
   const img=$('#still'), vid=$('#clip video');
   img.style.display=''; vid.pause(); vid.removeAttribute('src'); vid.style.display='none';
@@ -695,7 +735,7 @@ function playClip(){if(!curClip)return; const img=$('#still'), vid=$('#clip vide
   else{mode='image'; resetZoom(); $('#stage').classList.add('pan');
     vid.pause(); vid.removeAttribute('src'); vid.style.display='none'; img.style.display='';
     $('#playbtn').textContent='watch clip ▶'; drawBoxes();}}
-$('#playbtn').onclick=playClip; $('#boxbtn').onclick=toggleBoxes; $('#nextbtn').onclick=nextUnlabelled;
+$('#playbtn').onclick=playClip; $('#boxbtn').onclick=toggleBoxes; $('#nextbtn').onclick=nextUnlabelled; $('#hidebtn').onclick=toggleHidden;
 $('#still').addEventListener('load',()=>{if(mode==='image')drawBoxes();});
 $('#still').addEventListener('error',()=>{if(curClip&&!stillFB){stillFB=true;$('#still').src='/media/visit/'+curVisit+'/thumb';}});
 $('#clip video').addEventListener('loadeddata',()=>{if(mode!=='video')return;
@@ -850,12 +890,12 @@ ZONES_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Zones &middot; Yard Sentry</title>
 <style>
 :root{--paper:#f5f4ef;--frame:#fff;--ink:#2c2b27;--muted:#6d6a60;--line:#d3d0c6;--chrome:#eceae2;
-  --accent:#5b6b8c;--accent-soft:#dde3ee;--good:#4f7a52;--warn:#a5514a;
+  --accent:#5b6b8c;--accent-soft:#dde3ee;--good:#4f7a52;--warn:#a5514a;--excl:#9a6a12;
   --mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
   --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
 @media(prefers-color-scheme:dark){:root:not([data-theme=light]){--paper:#12141a;--frame:#191c22;
   --ink:#d6d9e0;--muted:#868b95;--line:#353a45;--chrome:#20242c;--accent:#8fa6cf;--accent-soft:#28324a;
-  --good:#7fae82;--warn:#d98b83;}}
+  --good:#7fae82;--warn:#d98b83;--excl:#d9a441;}}
 *{box-sizing:border-box}body{background:var(--paper);color:var(--ink);font-family:var(--sans);
   margin:0;line-height:1.5;-webkit-font-smoothing:antialiased}
 .wrap{max-width:1180px;margin:0 auto;padding:1.4rem 20px 3rem}
@@ -875,6 +915,7 @@ button:disabled{opacity:.5;cursor:default}
 .tools label.roi.on{color:var(--accent);border-color:var(--accent)}
 .tools label.motion_roi.on{color:var(--good);border-color:var(--good)}
 .tools label.motion_mask.on{color:var(--warn);border-color:var(--warn)}
+.tools label.exclude.on{color:var(--excl);border-color:var(--excl)}
 .stage{position:relative;border:1px solid var(--line);border-radius:11px;overflow:hidden;background:var(--chrome);
   max-width:960px;aspect-ratio:16/9;min-height:240px;touch-action:none;user-select:none}
 .stage img{width:100%;height:100%;object-fit:contain;display:block}
@@ -886,6 +927,10 @@ button:disabled{opacity:.5;cursor:default}
 .zr.roi{border-color:var(--accent);background:rgba(91,107,140,.14)}
 .zr.motion_roi{border-color:var(--good);background:rgba(79,122,82,.16)}
 .zr.motion_mask{border-color:var(--warn);background:rgba(165,81,74,.16)}
+.zr.exclude{border-color:var(--excl);border-style:dashed;background:rgba(154,106,18,.16)}
+.zr.exclude.all{border-style:solid;background:rgba(154,106,18,.3)}
+.zr.exclude .tag{background:var(--excl)}
+.list button.mode{color:var(--excl);border-color:var(--excl)}
 .zr .tag{position:absolute;top:-1px;left:-1px;font-family:var(--mono);font-size:.6rem;padding:0 .25rem;
   color:#fff;background:var(--accent)}
 .zr.motion_roi .tag{background:var(--good)} .zr.motion_mask .tag{background:var(--warn)}
@@ -908,6 +953,7 @@ button:disabled{opacity:.5;cursor:default}
     <label class="roi on"><input type="radio" name="tool" value="roi" checked>analysis ROI</label>
     <label class="motion_roi"><input type="radio" name="tool" value="motion_roi">motion ROI</label>
     <label class="motion_mask"><input type="radio" name="tool" value="motion_mask">motion mask</label>
+    <label class="exclude"><input type="radio" name="tool" value="exclude">exclude</label>
   </div>
   <button id="snap">reload snapshot</button>
 </div>
@@ -926,6 +972,9 @@ button:disabled{opacity:.5;cursor:default}
     <div style="margin-top:.6rem"><b>Motion mask</b> <span class="k">tier-1 ignore</span>
       <div class="zdesc">Motion <i>inside</i> these boxes is ignored. Mute known false motion &mdash; a swaying branch, a street, a neighbour&rsquo;s window &mdash; so it never wakes the detector. Add as many as you need.</div>
       <ul class="list" id="l-motion_mask"></ul></div>
+    <div style="margin-top:.6rem"><b>Exclude</b> <span class="k">hide visits</span>
+      <div class="zdesc">A visit whose boxes <i>all</i> sit in these zones (a feeder roof, a hedge) is hidden &mdash; kept, never deleted, and shown again with one click in the viewer. Each zone hides <b>unnamed only</b> (bare &ldquo;animal&rdquo; boxes; a named bird on the roof stays) or <b>everything</b>. Click the mode to switch. Applies to new visits; doesn&rsquo;t reduce load.</div>
+      <ul class="list" id="l-exclude"></ul></div>
     <div class="row" style="margin-top:1rem">
       <button id="apply" class="primary">apply &amp; reload</button>
       <button id="revert">revert</button>
@@ -935,7 +984,8 @@ button:disabled{opacity:.5;cursor:default}
 </div>
 <script>
 const $=s=>document.querySelector(s);
-let all={}, editable=true, name=null, zones={roi:null,motion_roi:null,motion_mask:[]}, tool='roi';
+let all={}, editable=true, name=null, zones={roi:null,motion_roi:null,motion_mask:[],exclude:[]}, tool='roi';
+const MODE={unnamed:'unnamed only',all:'everything'};
 const f3=v=>(+v).toFixed(3);
 function tool_of(){return document.querySelector('input[name=tool]:checked').value;}
 function setToolUI(){document.querySelectorAll('.tools label').forEach(l=>l.classList.remove('on'));
@@ -947,17 +997,24 @@ function render(){
     d.innerHTML='<span class="tag">'+tag+'</span>';ov.appendChild(d);};
   put(zones.roi,'roi','ROI'); put(zones.motion_roi,'motion_roi','mROI');
   zones.motion_mask.forEach((r,i)=>put(r,'motion_mask','m'+(i+1)));
+  zones.exclude.forEach((z,i)=>put(z.rect,'exclude'+(z.mode==='all'?' all':''),'x'+(i+1)+(z.mode==='all'?' all':'')));
   const li=(r,cls,label,idx)=>`<li><span class="k">${label}</span><span>[${r.map(f3).join(', ')}] `+
     `<button data-cls="${cls}" data-i="${idx}">&times;</button></span></li>`;
   $('#l-roi').innerHTML=zones.roi?li(zones.roi,'roi','ROI',-1):'<li class="k">none</li>';
   $('#l-motion_roi').innerHTML=zones.motion_roi?li(zones.motion_roi,'motion_roi','mROI',-1):'<li class="k">none</li>';
   $('#l-motion_mask').innerHTML=zones.motion_mask.length?zones.motion_mask.map((r,i)=>li(r,'motion_mask','m'+(i+1),i)).join(''):'<li class="k">none</li>';
-  document.querySelectorAll('.list button').forEach(b=>b.onclick=()=>{const c=b.dataset.cls,i=+b.dataset.i;
-    if(c==='motion_mask')zones.motion_mask.splice(i,1);else zones[c]=null;render();});
+  $('#l-exclude').innerHTML=zones.exclude.length?zones.exclude.map((z,i)=>`<li><span class="k">x${i+1}</span><span>`+
+    `<button class="mode" data-i="${i}" title="switch what this zone hides">${MODE[z.mode]}</button> `+
+    `<button data-cls="exclude" data-i="${i}">&times;</button></span></li>`).join(''):'<li class="k">none</li>';
+  document.querySelectorAll('.list button[data-cls]').forEach(b=>b.onclick=()=>{const c=b.dataset.cls,i=+b.dataset.i;
+    if(c==='motion_mask'||c==='exclude')zones[c].splice(i,1);else zones[c]=null;render();});
+  document.querySelectorAll('.list button.mode').forEach(b=>b.onclick=()=>{const z=zones.exclude[+b.dataset.i];
+    z.mode=z.mode==='all'?'unnamed':'all';render();});
 }
 function loadCam(n){name=n;const c=all[n];
   zones={roi:c.roi?c.roi.slice():null,motion_roi:c.motion_roi?c.motion_roi.slice():null,
-    motion_mask:(c.motion_mask||[]).map(r=>r.slice())};
+    motion_mask:(c.motion_mask||[]).map(r=>r.slice()),
+    exclude:(c.exclude||[]).map(z=>({rect:z.rect.slice(),mode:z.mode}))};
   $('#shot').src='/api/snapshot/'+n+'?w=960&t='+Date.now();render();status('');}
 function status(msg,cls){const s=$('#status');s.textContent=msg;s.className='status'+(cls?' '+cls:'');}
 // draw
@@ -973,7 +1030,9 @@ ov.addEventListener('pointermove',ev=>{if(!drag)return;const p=pt(ev),s=drag.sta
 ov.addEventListener('pointerup',ev=>{if(!drag)return;const p=pt(ev),s=drag.start;drag.el.remove();drag=null;
   const x=Math.min(s[0],p[0]),y=Math.min(s[1],p[1]),w=Math.abs(p[0]-s[0]),h=Math.abs(p[1]-s[1]);
   if(w<0.01||h<0.01)return;const r=[+x.toFixed(4),+y.toFixed(4),+w.toFixed(4),+h.toFixed(4)];
-  if(tool==='motion_mask')zones.motion_mask.push(r);else zones[tool]=r;render();});
+  if(tool==='motion_mask')zones.motion_mask.push(r);
+  else if(tool==='exclude')zones.exclude.push({rect:r,mode:'unnamed'});  // the cautious mode first
+  else zones[tool]=r;render();});
 document.querySelectorAll('input[name=tool]').forEach(i=>i.onchange=()=>{tool=tool_of();setToolUI();});
 $('#shot').onerror=()=>$('#stage').classList.add('noshot');
 $('#shot').onload=()=>$('#stage').classList.remove('noshot');

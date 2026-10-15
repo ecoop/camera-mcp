@@ -147,3 +147,56 @@ def test_backtest_needs_a_rule(log):
     _, data, _, _ = log
     with pytest.raises(SystemExit):
         main(["--data-dir", str(data)])
+
+
+# ---- exclusion zones ------------------------------------------------------------------------
+
+ROOF = (0.35, 0.40, 0.15, 0.15)  # a feeder roof, as a fraction of the full frame
+
+
+def roof_box(conf=0.5):
+    return Box(0.40, 0.45, 0.04, 0.04, conf)  # centred at (0.42, 0.47): on the roof
+
+
+def test_a_visit_whose_boxes_all_sit_in_a_zone_is_hidden():
+    from camera_mcp.gate import in_zones
+    unnamed_only, everything = ((ROOF, "unnamed"),), ((ROOF, "all"),)
+    assert in_zones("animal", [roof_box(), roof_box()], unnamed_only) == "zone"
+    assert in_zones("songbirds", [roof_box()], unnamed_only) is None  # a named bird on the roof stays
+    assert in_zones("songbirds", [roof_box()], everything) == "zone"
+    assert in_zones("animal", [roof_box(), Box(0.8, 0.8, 0.05, 0.05, 0.5)], everything) is None  # one box outside
+    assert in_zones("animal", [roof_box()], ()) is None
+
+
+def test_zones_are_full_frame_while_boxes_are_fractions_of_the_roi():
+    from camera_mcp.gate import in_zones
+    roi = (0.0, 0.25, 1.0, 0.75)  # boxes are fractions of this band
+    on_roof = Box(0.40, (0.47 - 0.25) / 0.75 - 0.02, 0.04, 0.04, 0.5)  # maps back to (0.42, 0.47)
+    assert in_zones("animal", [on_roof], ((ROOF, "unnamed"),), roi) == "zone"
+    assert in_zones("animal", [roof_box()], ((ROOF, "unnamed"),), roi) is None  # unmapped, it's elsewhere
+
+
+def test_exclusion_zones_parse_with_a_cautious_default_mode(tmp_path):
+    import json
+
+    from camera_mcp.config import ConfigError, load_cameras
+    cfg = tmp_path / "cameras.yaml"
+    cfg.write_text("cameras:\n  - {name: backyard, source: b.mp4}\n")
+    zones = tmp_path / "zones.json"
+    zones.write_text(json.dumps({"cameras": {"backyard": {"exclude": [
+        {"rect": list(ROOF)}, {"rect": [0.1, 0.1, 0.1, 0.1], "mode": "all"}]}}}))
+    cam = load_cameras(cfg, require_login=False, zones=zones)["backyard"]
+    assert cam.exclude == ((ROOF, "unnamed"), ((0.1, 0.1, 0.1, 0.1), "all"))
+    zones.write_text(json.dumps({"cameras": {"backyard": {"exclude": [{"rect": list(ROOF), "mode": "some"}]}}}))
+    with pytest.raises(ConfigError, match="exclude mode"):
+        load_cameras(cfg, require_login=False, zones=zones)
+
+
+def test_monitor_hides_a_visit_in_an_exclusion_zone():
+    from camera_mcp.monitor import CameraWorker
+    cam = Camera("backyard", "x", exclude=((ROOF, "unnamed"),))
+    worker = SimpleNamespace(camera=cam, tz=timezone.utc, lock=threading.Lock(), pending_visits=[])
+    roof, fox = _visit("backyard", "animal", [roof_box()] * 3), _visit("backyard", "animal", crossing(conf=0.6))
+    for v in (roof, fox):
+        CameraWorker._visit_closed(worker, v)
+    assert (roof.suppressed, fox.suppressed) == ("zone", None)

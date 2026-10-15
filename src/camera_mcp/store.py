@@ -262,6 +262,13 @@ class Store:
                 (visit_id, verdict, note, iso(time.time())),
             )
 
+    def set_visit_suppressed(self, visit_id: int, reason: str | None) -> None:
+        """A human's override of whether a visit is hidden: a reason ("manual") hides it, None shows
+        it, whatever the gate or an exclusion zone decided. Raises ValueError for an unknown visit."""
+        with self._lock:
+            if self._db.execute("UPDATE visits SET suppressed = ? WHERE id = ?", (reason, visit_id)).rowcount == 0:
+                raise ValueError(f"no visit {visit_id}")
+
     def visits(self, camera: str | None = None) -> list[sqlite3.Row]:
         with self._lock:
             self._db.row_factory = sqlite3.Row
