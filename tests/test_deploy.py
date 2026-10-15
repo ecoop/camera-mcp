@@ -91,3 +91,15 @@ def test_webapp_plist_renders(tmp_path):
     assert "9000" in plist["ProgramArguments"]
     assert plist["KeepAlive"] is True
     assert plist["StandardOutPath"] == "/srv/cam/data/web.log"
+
+
+def test_web_agent_is_told_the_monitors_label(tmp_path):
+    """The zone editor's "apply & reload" restarts the monitor by its label; the web agent's plist
+    carries it, from the same CAMERA_MCP_LABEL that install-service.sh uses."""
+    env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "CAMERA_MCP_DATA": "/srv/cam/data"}
+    web = REPO / "deploy" / "install-webapp.sh"
+    for extra, want in (({}, "camera-mcp"), ({"CAMERA_MCP_LABEL": "example.camera-mcp"}, "example.camera-mcp")):
+        out = subprocess.run(["bash", str(web), "--dry-run"], capture_output=True, text=True, env={**env, **extra}, check=True)
+        assert "@@" not in out.stdout
+        plist = plistlib.loads(out.stdout.encode())
+        assert plist["EnvironmentVariables"]["CAMERA_MCP_LABEL"] == want

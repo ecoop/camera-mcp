@@ -505,3 +505,47 @@ def test_zone_modes_saved_under_the_earlier_names_come_back_renamed(client, no_r
     assert [z["mode"] for z in r.json()["zones"]["exclude"]] == ["ignore", "hide_unrecognized"]
     page = client.get("/zones").text
     assert "hide unrecognized" in page and "<b>Ignore</b>" in page and "everything" not in page
+
+
+LAUNCHCTL_LIST = """PID\tStatus\tLabel
+123\t0\texample.camera-mcp.web
+456\t0\texample.camera-mcp
+-\t0\texample.camera-mcp.brief
+-\t0\texample.camera-mcp.health
+789\t0\tcom.apple.something
+"""
+
+
+def test_the_monitor_service_is_found_among_the_loaded_agents(monkeypatch):
+    """"apply & reload" must restart the monitor whatever prefix it was installed under: the one
+    agent named camera-mcp or *.camera-mcp, not .web/.brief/.health."""
+    import subprocess
+    from types import SimpleNamespace
+
+    import camera_mcp.web as web
+    calls = []
+
+    def run(cmd, **kw):
+        calls.append(cmd)
+        out = LAUNCHCTL_LIST if cmd[:2] == ["launchctl", "list"] else ""
+        return SimpleNamespace(returncode=0, stdout=out, stderr="")
+    monkeypatch.delenv("CAMERA_MCP_LABEL", raising=False)
+    monkeypatch.setattr(subprocess, "run", run)
+    assert web._monitor_label() == "example.camera-mcp"
+    ok, detail = web._reload_monitor()
+    assert ok and detail == "restarted example.camera-mcp"
+    assert calls[-1][:3] == ["launchctl", "kickstart", "-k"] and calls[-1][3].endswith("/example.camera-mcp")
+    monkeypatch.setenv("CAMERA_MCP_LABEL", "set.by.installer")  # an explicit label wins
+    assert web._monitor_label() == "set.by.installer"
+
+
+def test_reload_says_what_to_do_when_there_is_no_monitor_service(monkeypatch):
+    import subprocess
+    from types import SimpleNamespace
+
+    import camera_mcp.web as web
+    monkeypatch.delenv("CAMERA_MCP_LABEL", raising=False)
+    monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: SimpleNamespace(
+        returncode=0, stdout="PID\tStatus\tLabel\n-\t0\tcom.apple.something\n", stderr=""))
+    ok, detail = web._reload_monitor()
+    assert not ok and "CAMERA_MCP_LABEL" in detail and "restart the monitor by hand" in detail

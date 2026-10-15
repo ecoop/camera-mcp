@@ -10,6 +10,7 @@
 set -euo pipefail
 
 LABEL="${CAMERA_MCP_WEB_LABEL:-camera-mcp.web}"
+MONITOR_LABEL="${CAMERA_MCP_LABEL:-camera-mcp}"  # the monitor's label (install-service.sh); "apply & reload" restarts it
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DATA="${CAMERA_MCP_DATA:-$REPO/data}"
 PLIST="${CAMERA_MCP_PLIST_DIR:-$HOME/Library/LaunchAgents}/$LABEL.plist"
@@ -21,7 +22,8 @@ PORT="${CAMERA_MCP_WEB_PORT:-8080}"
 
 render() {
     sed -e "s|@@LABEL@@|$LABEL|g" -e "s|@@REPO@@|$REPO|g" -e "s|@@DATA@@|$DATA|g" \
-        -e "s|@@PATH@@|$SVC_PATH|g" -e "s|@@HOST@@|$HOST|g" -e "s|@@PORT@@|$PORT|g" "$TEMPLATE"
+        -e "s|@@PATH@@|$SVC_PATH|g" -e "s|@@HOST@@|$HOST|g" -e "s|@@PORT@@|$PORT|g" \
+        -e "s|@@MONITOR_LABEL@@|$MONITOR_LABEL|g" "$TEMPLATE"
 }
 
 case "${1:-install}" in

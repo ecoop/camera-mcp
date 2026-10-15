@@ -36,21 +36,37 @@ from camera_mcp.config import (ConfigError, default_config_path, default_data_di
 from camera_mcp.history import History, HistoryError
 from camera_mcp.store import VERDICTS, Store
 
-# The monitor's launchd label, kicked to reload cameras.yaml + the zone overlay after an edit.
-MONITOR_LABEL = os.environ.get("CAMERA_MCP_LABEL", "camera-mcp")
+def _monitor_label() -> str | None:
+    """The monitor's launchd label, kicked to reload cameras.yaml + the zone overlay after an edit.
+    CAMERA_MCP_LABEL if set (install-webapp.sh writes it); else found among the loaded services: the
+    one named "camera-mcp" or ending in ".camera-mcp" (deploy/install-service.sh installs it under
+    CAMERA_MCP_LABEL, which can carry a reverse-domain prefix; the .web/.brief/... agents don't
+    match). None if there's no such service (e.g. off the monitor host)."""
+    if label := os.environ.get("CAMERA_MCP_LABEL"):
+        return label
+    try:
+        r = subprocess.run(["launchctl", "list"], capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    labels = [line.split()[-1] for line in r.stdout.splitlines()[1:] if line.split()]
+    found = [lb for lb in labels if lb == "camera-mcp" or lb.endswith(".camera-mcp")]
+    return found[0] if len(found) == 1 else None
 
 
 def _reload_monitor() -> tuple[bool, str]:
     """Restart the monitor LaunchAgent so it re-reads the zone overlay. Best-effort: returns
-    (ok, detail). Off the Studio (no such service) this just reports it couldn't."""
-    label = f"gui/{os.getuid()}/{MONITOR_LABEL}"
+    (ok, detail); the detail says what to do when it couldn't."""
+    label = _monitor_label()
+    if label is None:
+        return False, ("couldn't find the monitor's service (no loaded launchd agent named camera-mcp or "
+                       "*.camera-mcp); set CAMERA_MCP_LABEL for the web app, or restart the monitor by hand")
     try:
-        r = subprocess.run(["launchctl", "kickstart", "-k", label],
+        r = subprocess.run(["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/{label}"],
                            capture_output=True, text=True, timeout=15)
     except (OSError, subprocess.SubprocessError) as e:
         return False, f"could not run launchctl ({e})"
     if r.returncode == 0:
-        return True, f"restarted {MONITOR_LABEL}"
+        return True, f"restarted {label}"
     return False, (r.stderr or r.stdout or f"launchctl exit {r.returncode}").strip()
 
 
