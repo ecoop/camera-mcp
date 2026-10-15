@@ -189,6 +189,15 @@ only** (bare "animal" visits; a named bird on the roof stays) or **everything**;
 to switch it. Any visit can be shown or hidden by hand from the viewer (**show** / **hide**), to undo
 a wrong call by the gate or a zone. Zones apply to new visits and don't reduce analysis load.
 
+**Drawing zones.** The editor zooms (wheel, trackpad pinch, or **+ / − / fit**) and pans
+(**Space**-drag, middle-drag or **✋**), on a full-resolution snapshot. Motion ROI, motion mask and
+exclusion zones can be **polygons** as well as rectangles: pick **polygon**, click points, close
+with **Enter**, a double-click or a click on the first point; drag a point to move it, **Alt**-click
+to delete one. The analysis ROI is always a rectangle (the detector needs one). Polygons cost no
+throughput: motion zones are rasterised into a pixel mask once at startup (per frame it's one
+multiply, whatever the shape), and exclusion zones are checked once per visit. In `zones.json` a
+polygon is `{"poly": [[x, y], ...]}` beside the `[x, y, w, h]` rectangles.
+
 **Moved-camera check.** Every 5 minutes, when nothing is moving, the monitor compares each
 camera's view with a stored reference (one for day, one for infrared night, in `data/views/`).
 If three checks in a row don't match, it logs a warning and sets `view_moved_since` in the

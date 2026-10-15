@@ -479,3 +479,20 @@ def test_zone_editor_saves_exclusion_zones_with_their_mode(tmp_path, client, no_
     assert bad.status_code == 400  # out of bounds: never written
     page = client.get("/zones").text
     assert 'value="exclude"' in page and 'id="l-exclude"' in page
+
+
+def test_zone_editor_saves_polygons_and_keeps_the_roi_a_rectangle(tmp_path, client, no_reload):
+    import json
+    poly = {"poly": [[0.1, 0.1], [0.5, 0.1], [0.3, 0.4]]}
+    zones = {"roi": [0.0, 0.25, 1.0, 0.75], "motion_roi": poly, "motion_mask": [[0.6, 0.6, 0.1, 0.1], poly],
+             "exclude": [{"poly": poly["poly"], "mode": "all"}]}
+    r = client.post("/api/zones/backyard", json=zones)
+    assert r.status_code == 200
+    saved = json.loads((tmp_path / "zones.json").read_text())["cameras"]["backyard"]
+    assert saved == zones
+    listed = {c["name"]: c for c in client.get("/api/zones").json()["cameras"]}["backyard"]
+    assert {k: listed[k] for k in zones} == zones
+    bad = client.post("/api/zones/backyard", json={**zones, "roi": poly})
+    assert bad.status_code == 400  # the analysis roi must stay a rectangle
+    page = client.get("/zones").text
+    assert 'name="shape" value="poly"' in page and 'id="zin"' in page and "w=1920" in page

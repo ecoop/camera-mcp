@@ -17,7 +17,7 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
-from camera_mcp.config import MonitorSettings, Rect
+from camera_mcp.config import MonitorSettings, Shape, is_poly
 
 
 class MotionDetector:
@@ -26,12 +26,12 @@ class MotionDetector:
     change (one small bird at a far feeder, which is a tiny share of a wide view). Isolated
     changed pixels (sensor noise, night grain) are removed before patches are measured.
 
-    `ignore` rectangles (and an optional `roi` the motion must fall inside) are zeroed out of
+    `ignore` zones, rectangles or polygons (and an optional `roi` the motion must fall inside), are zeroed out of
     the change mask, so motion in dead or noisy regions (a swaying tree, a street) never counts
     and so never wakes the detector downstream."""
 
     def __init__(self, settings: MonitorSettings, adapt: float = 0.05,
-                 ignore: tuple[Rect, ...] = (), roi: Rect | None = None):
+                 ignore: tuple[Shape, ...] = (), roi: Shape | None = None):
         self.threshold = settings.pixel_threshold
         self.min_changed = settings.min_changed
         self.min_blob = settings.min_blob_fraction
@@ -49,16 +49,18 @@ class MotionDetector:
         h, w = shape
         keep = np.zeros((h, w), np.uint8) if self.roi else np.ones((h, w), np.uint8)
 
-        def px(rect: Rect) -> tuple[int, int, int, int]:
-            x, y, rw, rh = rect
-            return int(x * w), int(y * h), int((x + rw) * w), int((y + rh) * h)
+        def fill(shape: Shape, value: int) -> None:  # rasterised once; per frame it's a single multiply
+            if is_poly(shape):
+                pts = np.array([[round(x * w), round(y * h)] for x, y in shape], np.int32)
+                cv2.fillPoly(keep, [pts], value)
+            else:
+                x, y, rw, rh = shape
+                keep[int(y * h):int((y + rh) * h), int(x * w):int((x + rw) * w)] = value
 
         if self.roi:
-            x0, y0, x1, y1 = px(self.roi)
-            keep[y0:y1, x0:x1] = 1
-        for rect in self.ignore:
-            x0, y0, x1, y1 = px(rect)
-            keep[y0:y1, x0:x1] = 0
+            fill(self.roi, 1)
+        for shape in self.ignore:
+            fill(shape, 0)
         return keep
 
     def update(self, gray: np.ndarray) -> float:

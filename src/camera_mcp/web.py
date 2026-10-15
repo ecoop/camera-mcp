@@ -31,8 +31,8 @@ from starlette.routing import Route
 
 from camera_mcp.capture import CaptureError, grab_any
 from camera_mcp.config import (ConfigError, default_config_path, default_data_dir, find_camera,
-                               load_cameras, load_site, load_zone_overlay, parse_excludes, parse_rect,
-                               parse_rects, save_zone_overlay)
+                               exclude_json, load_cameras, load_site, load_zone_overlay, parse_excludes,
+                               parse_rect, parse_shape, parse_shapes, save_zone_overlay, shape_json)
 from camera_mcp.history import History, HistoryError
 from camera_mcp.store import VERDICTS, Store
 
@@ -63,9 +63,9 @@ def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
     def _zone_state(cam):
         return {"name": cam.name, "label": cam.label, "stream": cam.is_stream,
                 "roi": list(cam.roi) if cam.roi else None,
-                "motion_roi": list(cam.motion_roi) if cam.motion_roi else None,
-                "motion_mask": [list(r) for r in cam.motion_mask],
-                "exclude": [{"rect": list(r), "mode": m} for r, m in cam.exclude]}
+                "motion_roi": shape_json(cam.motion_roi) if cam.motion_roi else None,
+                "motion_mask": [shape_json(z) for z in cam.motion_mask],
+                "exclude": [exclude_json(z) for z in cam.exclude]}
 
     def _ask(fn, *a, **k):
         try:
@@ -333,8 +333,8 @@ def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
         where = f"zones for {cam.name!r}"
         try:  # validate with the same parsers load_cameras uses, so a bad zone can never be written
             roi = parse_rect(body["roi"], where, "roi") if body.get("roi") else None
-            motion_roi = parse_rect(body["motion_roi"], where, "motion_roi") if body.get("motion_roi") else None
-            motion_mask = parse_rects(body.get("motion_mask"), where, "motion_mask")
+            motion_roi = parse_shape(body["motion_roi"], where, "motion_roi") if body.get("motion_roi") else None
+            motion_mask = parse_shapes(body.get("motion_mask"), where, "motion_mask")
             exclude = parse_excludes(body.get("exclude"), where)
         except ConfigError as e:
             return JSONResponse({"error": str(e)}, status_code=400)
@@ -351,9 +351,9 @@ def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
             except (ValueError, OSError):
                 raw = {"cameras": {}}
         raw["cameras"][cam.name] = {"roi": list(roi) if roi else None,
-                                    "motion_roi": list(motion_roi) if motion_roi else None,
-                                    "motion_mask": [list(r) for r in motion_mask],
-                                    "exclude": [{"rect": list(r), "mode": m} for r, m in exclude]}
+                                    "motion_roi": shape_json(motion_roi) if motion_roi else None,
+                                    "motion_mask": [shape_json(z) for z in motion_mask],
+                                    "exclude": [exclude_json(z) for z in exclude]}
         try:
             save_zone_overlay(zones_path, raw)
             load_zone_overlay(zones_path)  # re-validate the file as written
@@ -908,7 +908,7 @@ select,button{font-family:var(--mono);font-size:.78rem;background:var(--frame);c
   border:1px solid var(--line);border-radius:7px;padding:.35rem .6rem;cursor:pointer}
 button.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
 button:disabled{opacity:.5;cursor:default}
-.tools{display:flex;gap:.3rem}
+.tools{display:flex;gap:.3rem;flex-wrap:wrap}
 .tools label{font-family:var(--mono);font-size:.72rem;border:1px solid var(--line);border-radius:999px;
   padding:.2rem .6rem;cursor:pointer;color:var(--muted);display:inline-flex;gap:.3rem;align-items:center}
 .tools input{accent-color:var(--accent)}
@@ -916,24 +916,37 @@ button:disabled{opacity:.5;cursor:default}
 .tools label.motion_roi.on{color:var(--good);border-color:var(--good)}
 .tools label.motion_mask.on{color:var(--warn);border-color:var(--warn)}
 .tools label.exclude.on{color:var(--excl);border-color:var(--excl)}
+.tools label.shape.on{color:var(--ink);border-color:var(--ink)}
+.tools label.dis{opacity:.4;cursor:default}
 .stage{position:relative;border:1px solid var(--line);border-radius:11px;overflow:hidden;background:var(--chrome);
-  max-width:960px;aspect-ratio:16/9;min-height:240px;touch-action:none;user-select:none}
-.stage img{width:100%;height:100%;object-fit:contain;display:block}
+  max-width:960px;aspect-ratio:16/9;min-height:200px;touch-action:none;user-select:none}
+.pz{position:absolute;inset:0;transform-origin:0 0}
+.pz img{width:100%;height:100%;object-fit:contain;display:block;pointer-events:none}
 .stage .msg{position:absolute;inset:0;display:none;align-items:center;justify-content:center;
-  font-family:var(--mono);font-size:.74rem;color:var(--muted);text-align:center;padding:1rem}
+  font-family:var(--mono);font-size:.74rem;color:var(--muted);text-align:center;padding:1rem;pointer-events:none}
 .stage.noshot .msg{display:flex}
-.ov{position:absolute;inset:0;cursor:crosshair}
-.zr{position:absolute;border:2px solid var(--accent);background:rgba(91,107,140,.14);pointer-events:none}
-.zr.roi{border-color:var(--accent);background:rgba(91,107,140,.14)}
-.zr.motion_roi{border-color:var(--good);background:rgba(79,122,82,.16)}
-.zr.motion_mask{border-color:var(--warn);background:rgba(165,81,74,.16)}
-.zr.exclude{border-color:var(--excl);border-style:dashed;background:rgba(154,106,18,.16)}
-.zr.exclude.all{border-style:solid;background:rgba(154,106,18,.3)}
-.zr.exclude .tag{background:var(--excl)}
+#ov{position:absolute;inset:0;width:100%;height:100%;cursor:crosshair;overflow:visible}
+.stage.panning #ov,.stage.pan #ov{cursor:grab}
+#ov .z{stroke-width:2;vector-effect:non-scaling-stroke}
+#ov .roi{stroke:var(--accent);fill:rgba(91,107,140,.14)}
+#ov .motion_roi{stroke:var(--good);fill:rgba(79,122,82,.16)}
+#ov .motion_mask{stroke:var(--warn);fill:rgba(165,81,74,.16)}
+#ov .exclude{stroke:var(--excl);fill:rgba(154,106,18,.16);stroke-dasharray:6 4}
+#ov .exclude.all{stroke-dasharray:none;fill:rgba(154,106,18,.3)}
+#ov .draft{fill:none;stroke:var(--ink);stroke-dasharray:4 3}
+.tags,.handles{position:absolute;inset:0;pointer-events:none}
+.tag{position:absolute;font-family:var(--mono);font-size:.6rem;padding:0 .25rem;color:#fff;background:var(--accent);
+  transform-origin:0 0;white-space:nowrap}
+.tag.motion_roi{background:var(--good)} .tag.motion_mask{background:var(--warn)} .tag.exclude{background:var(--excl)}
+.hd{position:absolute;width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:50%;background:var(--frame);
+  border:2px solid var(--ink);pointer-events:auto;cursor:move;transform-origin:50% 50%}
+.hd.first{background:var(--ink)}
+.zoombar{position:absolute;right:.5rem;bottom:.5rem;display:flex;gap:.25rem;z-index:2}
+.zoombar button{padding:.15rem .5rem;font-size:.8rem;opacity:.9}
+.zoombar button.on{background:var(--ink);color:var(--frame)}
+.zoombar .lvl{font-family:var(--mono);font-size:.68rem;color:var(--muted);background:var(--frame);border:1px solid var(--line);
+  border-radius:7px;padding:.15rem .4rem;min-width:3.2rem;text-align:center}
 .list button.mode{color:var(--excl);border-color:var(--excl)}
-.zr .tag{position:absolute;top:-1px;left:-1px;font-family:var(--mono);font-size:.6rem;padding:0 .25rem;
-  color:#fff;background:var(--accent)}
-.zr.motion_roi .tag{background:var(--good)} .zr.motion_mask .tag{background:var(--warn)}
 .side{font-family:var(--mono);font-size:.72rem}
 .zdesc{font-family:var(--sans);font-size:.72rem;color:var(--muted);line-height:1.4;margin:.2rem 0 .1rem}
 .list{margin:.3rem 0 0;padding:0;list-style:none}
@@ -955,22 +968,32 @@ button:disabled{opacity:.5;cursor:default}
     <label class="motion_mask"><input type="radio" name="tool" value="motion_mask">motion mask</label>
     <label class="exclude"><input type="radio" name="tool" value="exclude">exclude</label>
   </div>
+  <div class="tools">
+    <label class="shape on" data-s="rect"><input type="radio" name="shape" value="rect" checked>&#9645; rect</label>
+    <label class="shape" data-s="poly"><input type="radio" name="shape" value="poly">&#11040; polygon</label>
+  </div>
   <button id="snap">reload snapshot</button>
 </div>
-<div class="hint">Drag on the frame to draw. <b>Analysis ROI</b> and <b>motion ROI</b> are single rectangles (a new draw replaces); <b>motion mask</b> is a list (each draw adds a box). Zones are fractions of the frame; see what each does below.</div>
+<div class="hint" id="hint"></div>
 <div class="cols">
-  <div class="stage" id="stage"><img id="shot" alt="snapshot">
-  <div class="msg">snapshot unavailable (camera busy or offline) &mdash; you can still draw and save; zones are fractions of the frame</div>
-  <div class="ov" id="ov"></div></div>
+  <div class="stage" id="stage">
+    <div class="pz" id="pz"><img id="shot" alt="snapshot">
+      <svg id="ov" viewBox="0 0 1600 900" preserveAspectRatio="none"></svg>
+      <div class="tags" id="tags"></div><div class="handles" id="handles"></div></div>
+    <div class="msg">snapshot unavailable (camera busy or offline) &mdash; you can still draw and save; zones are fractions of the frame</div>
+    <div class="zoombar"><button id="zout" title="zoom out">&minus;</button><span class="lvl" id="zlvl">100%</span>
+      <button id="zin" title="zoom in">+</button><button id="zfit" title="fit the whole frame">fit</button>
+      <button id="zpan" title="pan mode: drag to move around (or hold Space, or middle-drag)">&#9995;</button></div>
+  </div>
   <div class="side">
     <div><b>Analysis ROI</b> <span class="k">tier-2 crop</span>
-      <div class="zdesc">Crops the frame before SpeciesNet looks, so it only analyses this region &mdash; cheaper, and sharper on what matters (e.g. a feeder). Doesn&rsquo;t change how <i>often</i> analysis runs. Changing it makes the camera relearn its scenery.</div>
+      <div class="zdesc">Crops the frame before SpeciesNet looks, so it only analyses this region &mdash; cheaper, and sharper on what matters (e.g. a feeder). Doesn&rsquo;t change how <i>often</i> analysis runs. Always a rectangle (the detector needs one). Changing it makes the camera relearn its scenery.</div>
       <ul class="list" id="l-roi"></ul></div>
     <div style="margin-top:.6rem"><b>Motion ROI</b> <span class="k">tier-1 gate</span>
-      <div class="zdesc">Only motion <i>inside</i> this box wakes the detector, so fewer frames get analysed at all. The biggest lever on load &mdash; use it to point a camera at just the active area.</div>
+      <div class="zdesc">Only motion <i>inside</i> this zone wakes the detector, so fewer frames get analysed at all. The biggest lever on load &mdash; use it to point a camera at just the active area.</div>
       <ul class="list" id="l-motion_roi"></ul></div>
     <div style="margin-top:.6rem"><b>Motion mask</b> <span class="k">tier-1 ignore</span>
-      <div class="zdesc">Motion <i>inside</i> these boxes is ignored. Mute known false motion &mdash; a swaying branch, a street, a neighbour&rsquo;s window &mdash; so it never wakes the detector. Add as many as you need.</div>
+      <div class="zdesc">Motion <i>inside</i> these zones is ignored. Mute known false motion &mdash; a swaying branch, a street, a neighbour&rsquo;s window &mdash; so it never wakes the detector. Add as many as you need.</div>
       <ul class="list" id="l-motion_mask"></ul></div>
     <div style="margin-top:.6rem"><b>Exclude</b> <span class="k">hide visits</span>
       <div class="zdesc">A visit whose boxes <i>all</i> sit in these zones (a feeder roof, a hedge) is hidden &mdash; kept, never deleted, and shown again with one click in the viewer. Each zone hides <b>unnamed only</b> (bare &ldquo;animal&rdquo; boxes; a named bird on the roof stays) or <b>everything</b>. Click the mode to switch. Applies to new visits; doesn&rsquo;t reduce load.</div>
@@ -984,65 +1007,154 @@ button:disabled{opacity:.5;cursor:default}
 </div>
 <script>
 const $=s=>document.querySelector(s);
-let all={}, editable=true, name=null, zones={roi:null,motion_roi:null,motion_mask:[],exclude:[]}, tool='roi';
-const MODE={unnamed:'unnamed only',all:'everything'};
-const f3=v=>(+v).toFixed(3);
-function tool_of(){return document.querySelector('input[name=tool]:checked').value;}
-function setToolUI(){document.querySelectorAll('.tools label').forEach(l=>l.classList.remove('on'));
-  document.querySelector('.tools label.'+tool).classList.add('on');}
+// A zone shape is [x,y,w,h] (a rect) or {poly:[[x,y],...]}; all coordinates are fractions of the frame.
+let all={}, editable=true, name=null, zones={roi:null,motion_roi:null,motion_mask:[],exclude:[]}, tool='roi', shapeMode='rect';
+const MODE={unnamed:'unnamed only',all:'everything'}, VW=1600, VH=900, NS='http://www.w3.org/2000/svg';
+const f3=v=>(+v).toFixed(3), r4=v=>+(+v).toFixed(4), clamp=(v,a,b)=>Math.min(b,Math.max(a,v));
+const isPoly=s=>s&&!Array.isArray(s), copy=s=>isPoly(s)?{poly:s.poly.map(p=>p.slice())}:s.slice();
+const bboxOf=s=>{if(!isPoly(s))return s;const xs=s.poly.map(p=>p[0]),ys=s.poly.map(p=>p[1]);
+  return [Math.min(...xs),Math.min(...ys),Math.max(...xs)-Math.min(...xs),Math.max(...ys)-Math.min(...ys)];};
+function status(msg,cls){const s=$('#status');s.textContent=msg;s.className='status'+(cls?' '+cls:'');}
+function hint(){$('#hint').innerHTML=shapeMode==='poly'
+  ?'<b>Polygon:</b> click to add points; close by clicking the first point, double-clicking or pressing <b>Enter</b>. <b>Backspace</b> removes the last point, <b>Esc</b> cancels. Drag a point to move it; <b>Alt-click</b> a point to delete it.'
+  :'<b>Rect:</b> drag on the frame to draw. Drag any polygon point to adjust it.';
+  $('#hint').innerHTML+=' Zoom with the wheel / pinch or the buttons; pan with <b>Space</b>-drag, middle-drag or &#9995;. <b>Analysis ROI</b> and <b>motion ROI</b> are single zones (a new one replaces); <b>motion mask</b> and <b>exclude</b> are lists.';}
+
+// ---- zoom & pan: the snapshot, zones, tags and handles all live in #pz, transformed together ----
+let zs=1, tx=0, ty=0, panMode=false, spaceDown=false, pan=null;
+function stageSize(){const r=$('#stage').getBoundingClientRect();return [r.width,r.height];}
+function applyZoom(){const [W,H]=stageSize(); tx=clamp(tx,W-W*zs,0); ty=clamp(ty,H-H*zs,0);
+  $('#pz').style.transform=`translate(${tx}px,${ty}px) scale(${zs})`; $('#zlvl').textContent=Math.round(zs*100)+'%';
+  document.querySelectorAll('.tag').forEach(t=>t.style.transform=`scale(${1/zs})`);  // labels and handles keep their size
+  document.querySelectorAll('.hd').forEach(h=>h.style.transform=`scale(${1/zs})`);}
+function zoomAt(f,cx,cy){const n=clamp(zs*f,1,10); if(cx==null){const [W,H]=stageSize();cx=W/2;cy=H/2;}
+  tx=cx-(cx-tx)*n/zs; ty=cy-(cy-ty)*n/zs; zs=n; applyZoom();}
+$('#stage').addEventListener('wheel',ev=>{ev.preventDefault();const r=$('#stage').getBoundingClientRect();
+  zoomAt(Math.exp(-ev.deltaY*(ev.ctrlKey?0.01:0.0015)),ev.clientX-r.left,ev.clientY-r.top);},{passive:false});
+$('#zin').onclick=()=>zoomAt(1.5); $('#zout').onclick=()=>zoomAt(1/1.5);
+$('#zfit').onclick=()=>{zs=1;tx=0;ty=0;applyZoom();};
+$('#zpan').onclick=()=>{panMode=!panMode;$('#zpan').classList.toggle('on',panMode);$('#stage').classList.toggle('pan',panMode);};
+addEventListener('keydown',ev=>{if(ev.code==='Space'&&ev.target===document.body){ev.preventDefault();spaceDown=true;$('#stage').classList.add('panning');}});
+addEventListener('keyup',ev=>{if(ev.code==='Space'){spaceDown=false;$('#stage').classList.remove('panning');}});
+addEventListener('resize',applyZoom);
+const stage=$('#stage');
+stage.addEventListener('pointerdown',ev=>{if(!(ev.button===1||panMode||spaceDown)||ev.target.closest('.zoombar'))return;
+  ev.preventDefault();ev.stopPropagation();pan={x:ev.clientX,y:ev.clientY,tx,ty};stage.setPointerCapture(ev.pointerId);},true);
+stage.addEventListener('pointermove',ev=>{if(!pan)return;tx=pan.tx+ev.clientX-pan.x;ty=pan.ty+ev.clientY-pan.y;applyZoom();});
+stage.addEventListener('pointerup',()=>{pan=null;});
+
+// ---- render ----
+function svgShape(s,cls){const el=document.createElementNS(NS,isPoly(s)?'polygon':'rect');el.setAttribute('class','z '+cls);
+  if(isPoly(s))el.setAttribute('points',s.poly.map(p=>p[0]*VW+','+p[1]*VH).join(' '));
+  else{el.setAttribute('x',s[0]*VW);el.setAttribute('y',s[1]*VH);el.setAttribute('width',s[2]*VW);el.setAttribute('height',s[3]*VH);}
+  return el;}
+function each(fn){  // every drawn zone: (shape, css class, tag, the object holding it, key)
+  if(zones.roi)fn(zones.roi,'roi','ROI',zones,'roi'); if(zones.motion_roi)fn(zones.motion_roi,'motion_roi','mROI',zones,'motion_roi');
+  zones.motion_mask.forEach((s,i)=>fn(s,'motion_mask','m'+(i+1),zones.motion_mask,i));
+  zones.exclude.forEach((z,i)=>fn(z.shape,'exclude'+(z.mode==='all'?' all':''),'x'+(i+1)+(z.mode==='all'?' all':''),z,'shape'));}
 function render(){
-  const ov=$('#ov'); ov.querySelectorAll('.zr').forEach(e=>e.remove());
-  const put=(r,cls,tag)=>{if(!r)return;const d=document.createElement('div');d.className='zr '+cls;
-    d.style.left=(r[0]*100)+'%';d.style.top=(r[1]*100)+'%';d.style.width=(r[2]*100)+'%';d.style.height=(r[3]*100)+'%';
-    d.innerHTML='<span class="tag">'+tag+'</span>';ov.appendChild(d);};
-  put(zones.roi,'roi','ROI'); put(zones.motion_roi,'motion_roi','mROI');
-  zones.motion_mask.forEach((r,i)=>put(r,'motion_mask','m'+(i+1)));
-  zones.exclude.forEach((z,i)=>put(z.rect,'exclude'+(z.mode==='all'?' all':''),'x'+(i+1)+(z.mode==='all'?' all':'')));
-  const li=(r,cls,label,idx)=>`<li><span class="k">${label}</span><span>[${r.map(f3).join(', ')}] `+
-    `<button data-cls="${cls}" data-i="${idx}">&times;</button></span></li>`;
+  const ov=$('#ov'); ov.innerHTML=''; $('#tags').innerHTML=''; $('#handles').innerHTML='';
+  each((s,cls,tag,holder,key)=>{ov.appendChild(svgShape(s,cls)); const b=bboxOf(s), t=document.createElement('div');
+    t.className='tag '+cls.split(' ')[0]; t.textContent=tag; t.style.left=b[0]*100+'%'; t.style.top=b[1]*100+'%'; $('#tags').appendChild(t);
+    if(isPoly(s))s.poly.forEach((p,i)=>handle(p[0],p[1],s,i));});
+  drawDraft();
+  const desc=s=>isPoly(s)?`polygon &middot; ${s.poly.length} pts`:`[${s.map(f3).join(', ')}]`;
+  const li=(s,cls,label,idx)=>`<li><span class="k">${label}</span><span>${desc(s)} <button data-cls="${cls}" data-i="${idx}">&times;</button></span></li>`;
   $('#l-roi').innerHTML=zones.roi?li(zones.roi,'roi','ROI',-1):'<li class="k">none</li>';
   $('#l-motion_roi').innerHTML=zones.motion_roi?li(zones.motion_roi,'motion_roi','mROI',-1):'<li class="k">none</li>';
-  $('#l-motion_mask').innerHTML=zones.motion_mask.length?zones.motion_mask.map((r,i)=>li(r,'motion_mask','m'+(i+1),i)).join(''):'<li class="k">none</li>';
-  $('#l-exclude').innerHTML=zones.exclude.length?zones.exclude.map((z,i)=>`<li><span class="k">x${i+1}</span><span>`+
+  $('#l-motion_mask').innerHTML=zones.motion_mask.length?zones.motion_mask.map((s,i)=>li(s,'motion_mask','m'+(i+1),i)).join(''):'<li class="k">none</li>';
+  $('#l-exclude').innerHTML=zones.exclude.length?zones.exclude.map((z,i)=>`<li><span class="k">x${i+1}</span><span>${isPoly(z.shape)?z.shape.poly.length+' pts':'rect'} `+
     `<button class="mode" data-i="${i}" title="switch what this zone hides">${MODE[z.mode]}</button> `+
     `<button data-cls="exclude" data-i="${i}">&times;</button></span></li>`).join(''):'<li class="k">none</li>';
   document.querySelectorAll('.list button[data-cls]').forEach(b=>b.onclick=()=>{const c=b.dataset.cls,i=+b.dataset.i;
     if(c==='motion_mask'||c==='exclude')zones[c].splice(i,1);else zones[c]=null;render();});
   document.querySelectorAll('.list button.mode').forEach(b=>b.onclick=()=>{const z=zones.exclude[+b.dataset.i];
     z.mode=z.mode==='all'?'unnamed':'all';render();});
-}
-function loadCam(n){name=n;const c=all[n];
-  zones={roi:c.roi?c.roi.slice():null,motion_roi:c.motion_roi?c.motion_roi.slice():null,
-    motion_mask:(c.motion_mask||[]).map(r=>r.slice()),
-    exclude:(c.exclude||[]).map(z=>({rect:z.rect.slice(),mode:z.mode}))};
-  $('#shot').src='/api/snapshot/'+n+'?w=960&t='+Date.now();render();status('');}
-function status(msg,cls){const s=$('#status');s.textContent=msg;s.className='status'+(cls?' '+cls:'');}
-// draw
-let drag=null;
+  applyZoom();}
+
+// ---- polygon points: drag to move, Alt-click to delete ----
+function handle(x,y,s,i){const h=document.createElement('div');h.className='hd';h.style.left=x*100+'%';h.style.top=y*100+'%';
+  h.title='drag to move · Alt-click to delete';
+  h.addEventListener('pointerdown',ev=>{if(!editable||ev.button!==0)return;ev.stopPropagation();ev.preventDefault();
+    if(ev.altKey){if(s.poly.length>3){s.poly.splice(i,1);render();}else status('a polygon needs at least 3 points','err');return;}
+    h.setPointerCapture(ev.pointerId);
+    const move=e=>{const p=pt(e);s.poly[i]=[r4(p[0]),r4(p[1])];h.style.left=p[0]*100+'%';h.style.top=p[1]*100+'%';
+      $('#ov').innerHTML='';each((sh,cls)=>$('#ov').appendChild(svgShape(sh,cls)));};
+    const up=()=>{h.removeEventListener('pointermove',move);h.removeEventListener('pointerup',up);render();};
+    h.addEventListener('pointermove',move);h.addEventListener('pointerup',up);});
+  $('#handles').appendChild(h);}
+
+// ---- drawing ----
+let drag=null, draft=null, cursor=null;  // drag: a rect being dragged; draft: polygon points so far
+function pt(ev){const r=$('#ov').getBoundingClientRect();  // the transformed box, so fractions hold at any zoom
+  return [clamp((ev.clientX-r.left)/r.width,0,1),clamp((ev.clientY-r.top)/r.height,0,1)];}
+function place(shape){if(tool==='motion_mask')zones.motion_mask.push(shape);
+  else if(tool==='exclude')zones.exclude.push({shape,mode:'unnamed'});  // the cautious mode first
+  else zones[tool]=shape; render();}
+function drawDraft(){const ov=$('#ov'); ov.querySelectorAll('.draft').forEach(e=>e.remove()); $('#handles').querySelectorAll('.dh').forEach(e=>e.remove());
+  if(drag&&drag.cur){const s=drag.start,p=drag.cur;ov.appendChild(Object.assign(svgShape([Math.min(s[0],p[0]),Math.min(s[1],p[1]),
+    Math.abs(p[0]-s[0]),Math.abs(p[1]-s[1])],'draft'),{}));}
+  if(draft&&draft.length){const pts=cursor?draft.concat([cursor]):draft;const pl=document.createElementNS(NS,'polyline');
+    pl.setAttribute('class','z draft');pl.setAttribute('points',pts.map(p=>p[0]*VW+','+p[1]*VH).join(' '));ov.appendChild(pl);
+    draft.forEach((p,i)=>{const h=document.createElement('div');h.className='hd dh'+(i===0?' first':'');h.style.left=p[0]*100+'%';
+      h.style.top=p[1]*100+'%';h.style.pointerEvents='none';h.style.transform=`scale(${1/zs})`;$('#handles').appendChild(h);});}}
+function closeDraft(){if(draft&&draft.length>=3)place({poly:draft.map(p=>[r4(p[0]),r4(p[1])])});
+  else if(draft&&draft.length)status('a polygon needs at least 3 points','err');
+  draft=null;cursor=null;drawDraft();}
 const ov=$('#ov');
-function pt(ev){const r=ov.getBoundingClientRect();
-  return [Math.min(1,Math.max(0,(ev.clientX-r.left)/r.width)),Math.min(1,Math.max(0,(ev.clientY-r.top)/r.height))];}
-ov.addEventListener('pointerdown',ev=>{if(!editable)return;ev.preventDefault();ov.setPointerCapture(ev.pointerId);
-  drag={start:pt(ev),el:document.createElement('div')};drag.el.className='zr '+tool;ov.appendChild(drag.el);});
-ov.addEventListener('pointermove',ev=>{if(!drag)return;const p=pt(ev),s=drag.start;
+ov.addEventListener('pointerdown',ev=>{
+  if(!editable||ev.button!==0)return; ev.preventDefault();
+  const p=pt(ev), poly=shapeMode==='poly'&&tool!=='roi';
+  if(poly){const [W]=stageSize(), near=draft&&draft.length>=3&&Math.hypot((p[0]-draft[0][0])*W*zs,(p[1]-draft[0][1])*W*9/16*zs)<10;
+    if(near){closeDraft();return;} (draft=draft||[]).push(p); drawDraft(); return;}
+  ov.setPointerCapture(ev.pointerId); drag={start:p,cur:null};});
+ov.addEventListener('pointermove',ev=>{
+  if(pan)return;
+  if(drag){drag.cur=pt(ev);drawDraft();} else if(draft){cursor=pt(ev);drawDraft();}});
+ov.addEventListener('pointerup',ev=>{
+  if(!drag)return; const s=drag.start,p=pt(ev); drag=null; drawDraft();
   const x=Math.min(s[0],p[0]),y=Math.min(s[1],p[1]),w=Math.abs(p[0]-s[0]),h=Math.abs(p[1]-s[1]);
-  Object.assign(drag.el.style,{left:x*100+'%',top:y*100+'%',width:w*100+'%',height:h*100+'%'});});
-ov.addEventListener('pointerup',ev=>{if(!drag)return;const p=pt(ev),s=drag.start;drag.el.remove();drag=null;
-  const x=Math.min(s[0],p[0]),y=Math.min(s[1],p[1]),w=Math.abs(p[0]-s[0]),h=Math.abs(p[1]-s[1]);
-  if(w<0.01||h<0.01)return;const r=[+x.toFixed(4),+y.toFixed(4),+w.toFixed(4),+h.toFixed(4)];
-  if(tool==='motion_mask')zones.motion_mask.push(r);
-  else if(tool==='exclude')zones.exclude.push({rect:r,mode:'unnamed'});  // the cautious mode first
-  else zones[tool]=r;render();});
-document.querySelectorAll('input[name=tool]').forEach(i=>i.onchange=()=>{tool=tool_of();setToolUI();});
+  if(w<0.005||h<0.005)return; place([r4(x),r4(y),r4(w),r4(h)]);});
+ov.addEventListener('dblclick',ev=>{if(draft){ev.preventDefault();if(draft.length>3)draft.pop();closeDraft();}});  // the 2nd click added a point
+ov.addEventListener('contextmenu',ev=>ev.preventDefault());
+addEventListener('keydown',ev=>{if(!draft)return;
+  if(ev.key==='Enter'){ev.preventDefault();closeDraft();}
+  else if(ev.key==='Escape'){draft=null;cursor=null;drawDraft();}
+  else if(ev.key==='Backspace'){ev.preventDefault();draft.pop();if(!draft.length)draft=null;drawDraft();}});
+
+// ---- tool and shape pickers ----
+function setTool(){tool=document.querySelector('input[name=tool]:checked').value;
+  document.querySelectorAll('.tools label[class]').forEach(l=>{if(!l.classList.contains('shape'))l.classList.toggle('on',l.classList.contains(tool));});
+  const polyLabel=document.querySelector('label.shape[data-s=poly]'), roi=tool==='roi';
+  polyLabel.classList.toggle('dis',roi); polyLabel.querySelector('input').disabled=roi;
+  polyLabel.title=roi?'the analysis ROI is always a rectangle: the detector needs one':'';
+  setShape();}
+function setShape(){if(tool==='roi')document.querySelector('input[name=shape][value=rect]').checked=true;
+  shapeMode=document.querySelector('input[name=shape]:checked').value;
+  document.querySelectorAll('label.shape').forEach(l=>l.classList.toggle('on',l.dataset.s===shapeMode));
+  draft=null;cursor=null;drawDraft();hint();}
+document.querySelectorAll('input[name=tool]').forEach(i=>i.onchange=setTool);
+document.querySelectorAll('input[name=shape]').forEach(i=>i.onchange=setShape);
+
+// ---- load / save ----
+function snapURL(){return '/api/snapshot/'+name+'?w=1920&t='+Date.now();}  // full detail for zooming in
+function loadCam(n){name=n;const c=all[n];
+  zones={roi:c.roi?c.roi.slice():null,motion_roi:c.motion_roi?copy(c.motion_roi):null,
+    motion_mask:(c.motion_mask||[]).map(copy),
+    exclude:(c.exclude||[]).map(z=>({shape:z.poly?{poly:z.poly.map(p=>p.slice())}:z.rect.slice(),mode:z.mode}))};
+  draft=null;drag=null;$('#shot').src=snapURL();zs=1;tx=0;ty=0;render();status('');}
+function payload(){return {roi:zones.roi,motion_roi:zones.motion_roi,motion_mask:zones.motion_mask,
+  exclude:zones.exclude.map(z=>isPoly(z.shape)?{poly:z.shape.poly,mode:z.mode}:{rect:z.shape,mode:z.mode})};}
 $('#shot').onerror=()=>$('#stage').classList.add('noshot');
 $('#shot').onload=()=>$('#stage').classList.remove('noshot');
 $('#camera').onchange=()=>loadCam($('#camera').value);
-$('#snap').onclick=()=>{$('#shot').src='/api/snapshot/'+name+'?w=960&t='+Date.now();};
+$('#snap').onclick=()=>{$('#shot').src=snapURL();};
 $('#revert').onclick=()=>loadCam(name);
 $('#apply').onclick=async()=>{if(!editable){status('editing is disabled','err');return;}
+  if(draft){status('finish the polygon first (Enter) or cancel it (Esc)','err');return;}
   $('#apply').disabled=true;status('saving & reloading the monitor…');
   try{const res=await fetch('/api/zones/'+encodeURIComponent(name),{method:'POST',
-    headers:{'Content-Type':'application/json'},body:JSON.stringify(zones)});
+    headers:{'Content-Type':'application/json'},body:JSON.stringify(payload())});
   const d=await res.json();
   if(!res.ok){status(d.error||'save failed','err');}
   else{all[name]=d.zones;let m='saved. '+(d.reloaded?'monitor restarting':'monitor NOT reloaded: '+d.reload_detail);
@@ -1052,7 +1164,7 @@ async function init(){const d=await (await fetch('/api/zones')).json();editable=
   d.cameras.filter(c=>c.stream).forEach(c=>all[c.name]=c);
   $('#camera').innerHTML=Object.keys(all).map(n=>`<option>${n}</option>`).join('');
   if(!editable){$('#apply').disabled=true;status('read-only (CAMERA_MCP_WEB_READONLY set)','err');}
-  const first=Object.keys(all)[0]; if(first)loadCam(first);}
+  setTool(); const first=Object.keys(all)[0]; if(first)loadCam(first);}
 init();
 </script></div></body></html>"""
 

@@ -200,3 +200,61 @@ def test_monitor_hides_a_visit_in_an_exclusion_zone():
     for v in (roof, fox):
         CameraWorker._visit_closed(worker, v)
     assert (roof.suppressed, fox.suppressed) == ("zone", None)
+
+
+# ---- polygon zones -------------------------------------------------------------------------
+
+HEDGE = ((0.1, 0.1), (0.5, 0.1), (0.5, 0.5), (0.3, 0.25), (0.1, 0.5))  # concave: a notch cut from the bottom
+
+
+def test_polygons_parse_round_trip_and_reject_bad_input():
+    from camera_mcp.config import ConfigError, parse_shape, parse_shapes, shape_json
+    assert parse_shape({"poly": [list(p) for p in HEDGE]}, "t", "k") == HEDGE
+    assert parse_shape([0.1, 0.2, 0.3, 0.4], "t", "k") == (0.1, 0.2, 0.3, 0.4)  # rectangles still work
+    mixed = parse_shapes([[0.1, 0.2, 0.3, 0.4], {"poly": [list(p) for p in HEDGE]}], "t", "k")
+    assert [shape_json(s) for s in mixed] == [[0.1, 0.2, 0.3, 0.4], {"poly": [list(p) for p in HEDGE]}]
+    for bad, msg in (({"poly": [[0.1, 0.1], [0.2, 0.2]]}, "at least 3"), ({"poly": [[0.1, 0.1], [1.2, 0.2], [0.3, 0.3]]}, "outside"),
+                     ({"pts": []}, "poly"), ({"poly": "nope"}, "polygon")):
+        with pytest.raises(ConfigError, match=msg):
+            parse_shape(bad, "t", "k")
+
+
+def test_point_in_a_concave_polygon():
+    from camera_mcp.config import shape_contains
+    assert shape_contains(HEDGE, 0.2, 0.2) and shape_contains(HEDGE, 0.49, 0.45)  # either side of the notch
+    assert not shape_contains(HEDGE, 0.3, 0.4)  # in the notch: inside the bounding box, outside the shape
+    assert not shape_contains(HEDGE, 0.7, 0.2)
+
+
+def test_exclusion_polygon_hides_only_what_is_inside_it():
+    from camera_mcp.gate import in_zones
+    zone = ((HEDGE, "unnamed"),)
+    in_hedge, in_notch = Box(0.18, 0.18, 0.04, 0.04, 0.5), Box(0.28, 0.38, 0.04, 0.04, 0.5)
+    assert in_zones("animal", [in_hedge], zone) == "zone"
+    assert in_zones("animal", [in_notch], zone) is None  # a rectangle zone would have hidden this one
+
+
+def test_motion_mask_polygon_is_rasterised_once_and_costs_the_same_per_frame():
+    import time
+
+    import numpy as np
+
+    from camera_mcp.motion import MotionDetector
+    s = MonitorSettings()
+    poly = MotionDetector(s, ignore=(HEDGE,))
+    keep = poly._build_keep((180, 320))
+    assert keep[int(0.2 * 180), int(0.2 * 320)] == 0  # inside the hedge: ignored
+    assert keep[int(0.4 * 180), int(0.3 * 320)] == 1  # in the notch: still counts
+    assert keep[int(0.8 * 180), int(0.8 * 320)] == 1
+    frames = [np.random.default_rng(i).integers(0, 255, (180, 320), np.uint8) for i in range(50)]
+
+    def per_frame(det):
+        det.update(frames[0])  # first frame builds the mask
+        t = time.perf_counter()
+        for f in frames:
+            det.update(f)
+        return (time.perf_counter() - t) / len(frames)
+
+    p, r = min(per_frame(MotionDetector(s, ignore=(HEDGE,))) for _ in range(3)), \
+        min(per_frame(MotionDetector(s, ignore=((0.1, 0.1, 0.4, 0.4),))) for _ in range(3))
+    assert p < r * 1.5 + 0.0005, (p, r)  # same work per frame: one multiply by the prebuilt mask

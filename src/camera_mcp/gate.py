@@ -31,7 +31,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from camera_mcp.config import default_data_dir
+from camera_mcp.config import default_data_dir, shape_contains
 from camera_mcp.history import parse_when
 from camera_mcp.store import iso
 from camera_mcp.visits import Box
@@ -90,12 +90,12 @@ def in_zones(key: str, boxes: list[Box], zones, roi=None) -> str | None:
     if not zones or not boxes:
         return None
     rx, ry, rw, rh = roi or (0.0, 0.0, 1.0, 1.0)
-    rects = [r for r, mode in zones if mode == "all" or key == GATED]
-    if not rects:
+    shapes = [shape for shape, mode in zones if mode == "all" or key == GATED]
+    if not shapes:
         return None
     for b in boxes:
         cx, cy = rx + (b.x + b.w / 2) * rw, ry + (b.y + b.h / 2) * rh
-        if not any(x <= cx <= x + w and y <= cy <= y + h for x, y, w, h in rects):
+        if not any(shape_contains(shape, cx, cy) for shape in shapes):
             return None
     return "zone"
 

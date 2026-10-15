@@ -138,33 +138,90 @@ def parse_rect(value, where: str, key: str) -> Rect:
     return (x, y, w, h)
 
 
+Poly = tuple[tuple[float, float], ...]  # a polygon: 3+ (x, y) vertices, each a fraction of the frame
+Shape = Rect | Poly  # a zone's shape (the analysis roi is always a Rect: the detector needs one)
+
+
+def is_poly(shape: Shape) -> bool:
+    return bool(shape) and isinstance(shape[0], tuple)
+
+
+def parse_poly(value, where: str, key: str) -> Poly:
+    """Validate a polygon: a list of 3+ [x, y] vertices, each within the frame."""
+    try:
+        pts = tuple((float(x), float(y)) for x, y in value)
+    except (TypeError, ValueError):
+        raise ConfigError(f"{where}: {key} polygon must be a list of [x, y] fractions, got {value!r}") from None
+    if len(pts) < 3:
+        raise ConfigError(f"{where}: {key} polygon needs at least 3 points, got {len(pts)}")
+    if not all(0 <= x <= 1 and 0 <= y <= 1 for x, y in pts):
+        raise ConfigError(f"{where}: {key} polygon has a point outside the frame (0..1)")
+    return pts
+
+
+def parse_shape(value, where: str, key: str) -> Shape:
+    """A zone shape: an [x, y, w, h] rectangle, or {"poly": [[x, y], ...]}."""
+    if isinstance(value, dict):
+        if "poly" not in value:
+            raise ConfigError(f"{where}: {key} must be [x, y, w, h] or {{poly: [[x, y], ...]}}")
+        return parse_poly(value["poly"], where, key)
+    return parse_rect(value, where, key)
+
+
+def shape_json(shape: Shape):
+    """A shape as it's written to zones.json and served to the editor."""
+    return {"poly": [list(p) for p in shape]} if is_poly(shape) else list(shape)
+
+
+def shape_contains(shape: Shape, x: float, y: float) -> bool:
+    """Whether the point (x, y) lies inside the shape (frame fractions); edges count as inside."""
+    if not is_poly(shape):
+        sx, sy, w, h = shape
+        return sx <= x <= sx + w and sy <= y <= sy + h
+    inside, n = False, len(shape)
+    for i in range(n):  # even-odd ray casting
+        (x0, y0), (x1, y1) = shape[i], shape[(i + 1) % n]
+        if (y0 > y) != (y1 > y) and x < x0 + (y - y0) * (x1 - x0) / (y1 - y0):
+            inside = not inside
+    return inside
+
+
 EXCLUDE_MODES = ("unnamed", "all")  # what an exclusion zone hides: unnamed "animal" visits only, or any visit
-Exclude = tuple[Rect, str]  # an exclusion zone: (rect, mode)
+Exclude = tuple[Shape, str]  # an exclusion zone: (shape, mode)
 
 
 def parse_excludes(value, where: str) -> tuple[Exclude, ...]:
-    """A list of exclusion zones, each {"rect": [x, y, w, h], "mode": "unnamed" | "all"} (empty if
-    omitted). Mode defaults to "unnamed", the cautious one."""
+    """A list of exclusion zones, each {"rect": [x, y, w, h]} or {"poly": [[x, y], ...]}, with
+    "mode": "unnamed" | "all" (empty if omitted). Mode defaults to "unnamed", the cautious one."""
     if value is None:
         return ()
     if not isinstance(value, list) or not all(isinstance(z, dict) for z in value):
-        raise ConfigError(f"{where}: exclude must be a list of {{rect: [x, y, w, h], mode: unnamed|all}}")
+        raise ConfigError(f"{where}: exclude must be a list of {{rect|poly, mode: unnamed|all}}")
     out = []
     for z in value:
         mode = z.get("mode", "unnamed")
         if mode not in EXCLUDE_MODES:
             raise ConfigError(f"{where}: exclude mode must be one of {', '.join(EXCLUDE_MODES)}, not {mode!r}")
-        out.append((parse_rect(z.get("rect"), where, "exclude"), mode))
+        shape = parse_poly(z["poly"], where, "exclude") if "poly" in z else parse_rect(z.get("rect"), where, "exclude")
+        out.append((shape, mode))
     return tuple(out)
 
 
-def parse_rects(value, where: str, key: str) -> tuple[Rect, ...]:
-    """A list of [x, y, w, h] rectangles (empty if omitted)."""
+def exclude_json(zone: Exclude) -> dict:
+    shape, mode = zone
+    return {"poly": [list(p) for p in shape], "mode": mode} if is_poly(shape) else {"rect": list(shape), "mode": mode}
+
+
+def parse_shapes(value, where: str, key: str) -> tuple[Shape, ...]:
+    """A list of zone shapes, rectangles and/or polygons (empty if omitted)."""
     if value is None:
         return ()
-    if not isinstance(value, list) or not all(isinstance(r, (list, tuple)) for r in value):
-        raise ConfigError(f"{where}: {key} must be a list of [x, y, w, h] rectangles")
-    return tuple(parse_rect(r, where, key) for r in value)
+    if not isinstance(value, list) or not all(isinstance(r, (list, tuple, dict)) for r in value):
+        raise ConfigError(f"{where}: {key} must be a list of [x, y, w, h] rectangles or {{poly: ...}} polygons")
+    return tuple(parse_shape(r, where, key) for r in value)
+
+
+parse_rects = parse_shapes  # the old name: motion masks were rectangles only
 
 
 @dataclass(frozen=True)
@@ -179,8 +236,8 @@ class Camera:
     monitor: MonitorSettings = field(default_factory=MonitorSettings)
     needs_login: bool = False  # a host camera loaded without a login: it can't be opened
     active: str = ""  # local-time "HH:MM-HH:MM" window this camera is watched; blank: always
-    motion_mask: tuple[Rect, ...] = ()  # tier-1 ignore rects: motion here never wakes analysis
-    motion_roi: Rect | None = None  # if set, only motion inside this rectangle counts
+    motion_mask: tuple[Shape, ...] = ()  # tier-1 ignore zones: motion here never wakes analysis
+    motion_roi: Shape | None = None  # if set, only motion inside this zone counts
     roi: Rect | None = None  # tier-2 analysis crop: inference runs on this region of the frame only
     exclude: tuple[Exclude, ...] = ()  # exclusion zones: a visit whose boxes all sit in them is hidden (gate.py)
     schedule: tuple[tuple[int, int, dict], ...] = ()  # time-of-day monitor overrides (from `when:`)
@@ -453,9 +510,9 @@ def load_zone_overlay(path: str | Path) -> dict[str, dict]:
         if "roi" in raw:
             over["roi"] = parse_rect(raw["roi"], where, "roi") if raw["roi"] else None
         if "motion_roi" in raw:
-            over["motion_roi"] = parse_rect(raw["motion_roi"], where, "motion_roi") if raw["motion_roi"] else None
+            over["motion_roi"] = parse_shape(raw["motion_roi"], where, "motion_roi") if raw["motion_roi"] else None
         if "motion_mask" in raw:
-            over["motion_mask"] = parse_rects(raw["motion_mask"], where, "motion_mask")
+            over["motion_mask"] = parse_shapes(raw["motion_mask"], where, "motion_mask")
         if "exclude" in raw:
             over["exclude"] = parse_excludes(raw["exclude"], where)
         if over:
@@ -523,8 +580,8 @@ def load_cameras(
             aliases=aliases,
             watermark=str(raw.get("watermark", "")),
             active=_active(raw, where),
-            motion_mask=parse_rects(raw.get("motion_mask"), where, "motion_mask"),
-            motion_roi=parse_rect(raw["motion_roi"], where, "motion_roi") if raw.get("motion_roi") else None,
+            motion_mask=parse_shapes(raw.get("motion_mask"), where, "motion_mask"),
+            motion_roi=parse_shape(raw["motion_roi"], where, "motion_roi") if raw.get("motion_roi") else None,
             roi=parse_rect(raw["roi"], where, "roi") if raw.get("roi") else None,
             exclude=parse_excludes(raw.get("exclude"), where),
             schedule=_schedule(raw, where),
