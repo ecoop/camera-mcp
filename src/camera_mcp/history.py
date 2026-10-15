@@ -208,7 +208,10 @@ class History:
             if not include_suppressed:
                 where = self._shown(db, where, "v.")
             total = db.execute(f"SELECT COUNT(*) FROM visits v WHERE {where}", params).fetchone()[0]
-            rows = db.execute(f"SELECT * FROM visits v WHERE {where} ORDER BY v.started_at DESC LIMIT ?",
+            verdict = ("(SELECT verdict FROM visit_labels l WHERE l.visit_id = v.id)"  # a human's label, if any
+                       if "visit_labels" in _tables(db) else "NULL")
+            rows = db.execute(f"SELECT v.*, {verdict} AS verdict FROM visits v WHERE {where}"
+                              " ORDER BY v.started_at DESC LIMIT ?",
                               (*params, max(1, min(limit, 500)))).fetchall()
             return {
                 "from": self._local(self._iso(t0)), "to": self._local(self._iso(t1)),
@@ -219,7 +222,7 @@ class History:
                     "still_there": bool(_get(r, "open", 0)), "label": r["label"], "group": r["grp"],
                     "score": r["score"], "max_at_once": r["max_count"], "frames": r["frames"],
                     "has_thumbnail": r["thumbnail"] is not None, "clip": r["clip"],
-                    "suppressed": _get(r, "suppressed"),
+                    "suppressed": _get(r, "suppressed"), "verdict": r["verdict"],
                 } for r in rows],
                 "coverage": self.coverage(names, t0, t1, db),
             }

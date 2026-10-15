@@ -441,6 +441,14 @@ dialog .vmeta a{color:var(--accent);cursor:pointer}
 .lblbtn.on[data-v=real]{color:var(--good);border-color:var(--good)}
 .lblbtn.on[data-v=false],.lblbtn.on[data-v=wrong_species]{color:var(--warn);border-color:var(--warn)}
 .lblbtn:disabled{opacity:.5;cursor:default}
+/* gate-hidden visits: shown only with "+ hidden"; a badge says why, a mark says how they were labelled */
+.hidtog{font-family:var(--mono);font-size:.78rem;color:var(--muted);display:inline-flex;align-items:center;gap:.3rem;cursor:pointer}
+.tile{position:relative}
+.tile.sup img{opacity:.72}
+.tile .badge{position:absolute;top:.4rem;left:.4rem;font-family:var(--mono);font-size:.62rem;padding:.05rem .4rem;
+  border-radius:999px;background:var(--frame);color:var(--warn);border:1px solid var(--warn)}
+.tile .vd{float:right;font-weight:600} .tile .vd.real{color:var(--good)} .tile .vd.false,.tile .vd.wrong_species{color:var(--warn)}
+#hidnote{text-transform:none;letter-spacing:0}
 .boxov{position:absolute;top:0;left:0;pointer-events:none;display:none}
 .boxov rect{fill:none;stroke:#ff3b30;stroke-width:2;vector-effect:non-scaling-stroke}
 .boxov text{fill:#ff3b30;font-family:var(--mono);font-size:3.2px;paint-order:stroke;
@@ -458,12 +466,14 @@ dialog .vmeta a{color:var(--accent);cursor:pointer}
     <option value="24h" selected>24h</option><option value="3d">3 days</option><option value="7d">7 days</option></select>
   <select id="taxon"><option value="">all species</option></select>
   <select id="camera"><option value="">all cameras</option></select>
+  <label class="hidtog" title="also show unnamed visits the gate hid as likely leaves (to review and label)">
+    <input type="checkbox" id="showhidden"> + hidden</label>
 </div>
 
 <section id="view-feeds">
   <div class="sect" style="margin-top:0">Live</div>
   <div class="grid" id="live"></div>
-  <div class="sect">Visits</div>
+  <div class="sect">Visits <span id="hidnote"></span></div>
   <div class="grid" id="grid"></div>
   <div class="empty" id="empty" style="display:none">No visits in this window.</div>
   <div class="sect" style="display:flex;justify-content:space-between;align-items:center;gap:1rem">
@@ -505,12 +515,14 @@ dialog .vmeta a{color:var(--accent);cursor:pointer}
       <button class="lblbtn" data-v="real">&check; real</button>
       <button class="lblbtn" data-v="false">&times; false</button>
       <button class="lblbtn" data-v="wrong_species">&times; wrong sp.</button></span>
+    <button class="boxbtn" id="nextbtn" title="the next visit in the grid you haven't labelled">next unlabelled &rsaquo;</button>
     <button class="boxbtn on" id="boxbtn">hide boxes</button> &middot; <a id="cliplink">open raw</a>
   </span></div></dialog>
 <script>
 const $=s=>document.querySelector(s), params=()=>{const p=new URLSearchParams();
   p.set('since',$('#since').value); if($('#taxon').value)p.set('taxon',$('#taxon').value);
-  if($('#camera').value)p.set('camera',$('#camera').value); return p.toString();};
+  if($('#camera').value)p.set('camera',$('#camera').value);
+  if($('#showhidden').checked)p.set('suppressed','1'); return p.toString();};
 function tick(){$('#clock').textContent=new Date().toLocaleString();}
 async function loadHealth(){try{const win=$('#since').value;
   const h=await (await fetch('/api/health?since='+win)).json();
@@ -535,9 +547,14 @@ async function loadSpecies(){try{const r=await (await fetch('/api/species')).jso
 async function loadVisits(){const r=await (await fetch('/api/visits?'+params())).json();
   const v=(r.visits||[]).filter(x=>x.has_thumbnail);
   $('#empty').style.display=v.length?'none':'block';
-  $('#grid').innerHTML=v.map(x=>`<a class="tile" href="#" data-id="${x.id}" data-clip="${x.clip?1:0}">`+
+  $('#hidnote').textContent=r.hidden?`· ${r.hidden} hidden as likely leaves`:'';
+  const VD={real:'✓',false:'✗',wrong_species:'✗ sp'};
+  $('#grid').innerHTML=v.map(x=>`<a class="tile${x.suppressed?' sup':''}" href="#" data-id="${x.id}" data-clip="${x.clip?1:0}"`+
+    ` data-verdict="${x.verdict||''}" data-sup="${x.suppressed||''}">`+
     `<img loading="lazy" src="/media/visit/${x.id}/thumb" alt="${x.label}">`+
-    `<div class="meta"><div class="sp">${x.label}${x.max_at_once>1?' ×'+x.max_at_once:''}</div>`+
+    (x.suppressed?`<span class="badge">hidden: ${x.suppressed.replace('_',' ')}</span>`:'')+
+    `<div class="meta"><div class="sp">${x.label}${x.max_at_once>1?' ×'+x.max_at_once:''}`+
+    `<span class="vd ${x.verdict||''}">${VD[x.verdict]||''}</span></div>`+
     `<div class="sub">${x.camera} &middot; ${(x.started||'').slice(11,16)}</div></div></a>`).join('');
   document.querySelectorAll('#grid .tile').forEach(t=>t.onclick=ev=>{ev.preventDefault();openVisit(t);});}
 let labelEditable=true;
@@ -551,7 +568,14 @@ async function loadLabel(id){markLabel(null);
 async function setLabel(v){if(!labelEditable||!curVisit)return;
   try{const res=await fetch('/api/visit/'+curVisit+'/label',{method:'POST',
     headers:{'Content-Type':'application/json'},body:JSON.stringify({verdict:v})});
-    if(res.ok)markLabel(v);}catch(e){}}
+    if(res.ok){markLabel(v); const t=tileOf(curVisit);
+      if(t){const had=t.dataset.verdict; t.dataset.verdict=v; const m=t.querySelector('.vd');
+        if(m){m.className='vd '+v; m.textContent={real:'✓',false:'✗',wrong_species:'✗ sp'}[v];}
+        if(!had)setTimeout(nextUnlabelled,350);}}}catch(e){}}  // first label on a visit: move on to the next
+function tileOf(id){return document.querySelector('#grid .tile[data-id="'+id+'"]');}
+function nextUnlabelled(){const ts=[...document.querySelectorAll('#grid .tile')], i=ts.indexOf(tileOf(curVisit));
+  const t=[...ts.slice(i+1),...ts.slice(0,Math.max(i,0))].find(x=>!x.dataset.verdict);
+  if(t)openVisit(t); else $('#clipmeta').textContent='every visit in the grid is labelled';}
 $('#lblset').querySelectorAll('.lblbtn').forEach(b=>b.onclick=()=>setLabel(b.dataset.v));
 // A visit opens on a full-res still (zoom/pan); "watch clip" swaps to the video. Boxes on by default.
 let curVisit=null, curClip=false, mode='image', boxesOn=true, boxData=null, stillFB=false;
@@ -568,9 +592,10 @@ function openVisit(t){const id=t.dataset.id; curVisit=id; curClip=t.dataset.clip
   $('#playbtn').style.display=curClip?'':'none'; $('#playbtn').textContent='watch clip ▶';
   $('#boxbtn').style.display=curClip?'':'none';
   $('#boxbtn').classList.toggle('on',boxesOn); $('#boxbtn').textContent=boxesOn?'hide boxes':'show boxes';
-  $('#clipmeta').textContent=t.querySelector('.sp').textContent+' — '+t.querySelector('.sub').textContent;
+  $('#clipmeta').textContent=t.querySelector('.sp').firstChild.textContent+' — '+t.querySelector('.sub').textContent+
+    (t.dataset.sup?' · hidden: '+t.dataset.sup.replace('_',' '):'');
   $('#cliplink').href=(curClip?'/media/visit/'+id+'/clip':'/media/visit/'+id+'/thumb');
-  loadLabel(id); $('#clip').showModal();
+  loadLabel(id); if(!$('#clip').open)$('#clip').showModal();
   if(curClip) loadBoxData().then(drawBoxes);}
 async function loadBoxData(){if(boxData)return; try{boxData=await (await fetch('/api/visit/'+curVisit+'/boxes')).json();}catch(e){boxData={frames:[]};}}
 function drawBoxes(){const svg=$('#boxov'), m=activeMedia();
@@ -591,7 +616,7 @@ function playClip(){if(!curClip)return; const img=$('#still'), vid=$('#clip vide
   else{mode='image'; resetZoom(); $('#stage').classList.add('pan');
     vid.pause(); vid.removeAttribute('src'); vid.style.display='none'; img.style.display='';
     $('#playbtn').textContent='watch clip ▶'; drawBoxes();}}
-$('#playbtn').onclick=playClip; $('#boxbtn').onclick=toggleBoxes;
+$('#playbtn').onclick=playClip; $('#boxbtn').onclick=toggleBoxes; $('#nextbtn').onclick=nextUnlabelled;
 $('#still').addEventListener('load',()=>{if(mode==='image')drawBoxes();});
 $('#still').addEventListener('error',()=>{if(curClip&&!stillFB){stillFB=true;$('#still').src='/media/visit/'+curVisit+'/thumb';}});
 $('#clip video').addEventListener('loadeddata',()=>{if(mode!=='video')return;
@@ -734,7 +759,7 @@ addEventListener('popstate',()=>setView(location.pathname.indexOf('analytics')>=
 
 $('.hmode').querySelectorAll('button').forEach(b=>b.onclick=()=>{$('.hmode .on').classList.remove('on');b.classList.add('on');loadHeatmap();});
 // filters are global; a change refreshes the header and whichever view is showing
-['since','taxon','camera'].forEach(id=>$('#'+id).addEventListener('change',()=>{loadHealth();renderView();}));
+['since','taxon','camera','showhidden'].forEach(id=>$('#'+id).addEventListener('change',()=>{loadHealth();renderView();}));
 $('#chartcam').onchange=()=>{if(VIEW==='analytics')loadStats();};
 tick();setInterval(tick,1000);loadCameras();loadSpecies();loadHealth();
 setView(location.pathname.indexOf('analytics')>=0?'analytics':'feeds',false);

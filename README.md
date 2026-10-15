@@ -177,6 +177,11 @@ against the camera's own history first (read-only):
 .venv/bin/camera-backtest --since 7d --camera east_fence --min-conf 0.3 --min-travel 0.5
 ```
 
+To check the gate by eye, pick species "animal" and tick **+ hidden** on the dashboard: hidden
+visits show a badge with the reason. Open one and mark it real or false; the viewer moves on to
+the next unlabelled visit (or press **next unlabelled ›**). The backtest's `lbl_real` column then
+counts real animals the rules would hide.
+
 **Moved-camera check.** Every 5 minutes, when nothing is moving, the monitor compares each
 camera's view with a stored reference (one for day, one for infrared night, in `data/views/`).
 If three checks in a row don't match, it logs a warning and sets `view_moved_since` in the

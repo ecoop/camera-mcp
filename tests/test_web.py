@@ -304,3 +304,37 @@ def test_heatmap_hour_by_camera(tmp_path):
     assert set(d["cameras"]) == {"east_fence", "backyard"}
     assert len(d["cells"]["east_fence"]) == 24 and d["max_dropped"] == 5
     assert sum(cell["frames"] for cell in d["cells"]["east_fence"]) == 40
+
+
+def test_visits_hide_gated_ones_unless_asked_and_carry_labels(tmp_path):
+    """The labelling flow: gate-hidden visits are counted, listed on ?suppressed=1 with their reason,
+    and every visit carries its human verdict so the dashboard can skip to the next unlabelled one."""
+    import time
+
+    from camera_mcp.config import Camera
+    from camera_mcp.store import Store
+    from camera_mcp.visits import Visit
+    from camera_mcp.web import build_app
+    store = Store(tmp_path / "monitor.db")
+    now = time.time()
+    ids = {}
+    for name, reason in (("leaf", "stationary"), ("blur", "low_conf"), ("fox", None)):
+        vis = Visit("fence", "animal", start=now - 600, last_seen=now - 300, frames=3)
+        vis.votes[("animal", "")] = 1.0
+        ids[name] = store.add_visit(vis, model="m", thumbnail=None, clip=None, suppressed=reason)
+    store.set_visit_label(ids["leaf"], "false")
+    store.close()
+    c = starlette_testclient.TestClient(build_app({"fence": Camera("fence", "f.mp4")}, tmp_path, None))
+    shown = c.get("/api/visits?since=1h").json()
+    assert ([v["id"] for v in shown["visits"]], shown["hidden"]) == ([ids["fox"]], 2)
+    every = c.get("/api/visits?since=1h&suppressed=1").json()
+    got = {v["id"]: (v["suppressed"], v["verdict"]) for v in every["visits"]}
+    assert got == {ids["leaf"]: ("stationary", "false"), ids["blur"]: ("low_conf", None), ids["fox"]: (None, None)}
+    assert every["hidden"] == 0
+
+
+def test_dashboard_has_the_hidden_toggle_and_label_queue(client):
+    page = client.get("/").text
+    assert 'id="showhidden"' in page and "p.set('suppressed','1')" in page
+    assert 'id="nextbtn"' in page and "function nextUnlabelled" in page
+    assert 'id="hidnote"' in page
