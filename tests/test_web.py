@@ -338,3 +338,8 @@ def test_dashboard_has_the_hidden_toggle_and_label_queue(client):
     assert 'id="showhidden"' in page and "p.set('suppressed','1')" in page
     assert 'id="nextbtn"' in page and "function nextUnlabelled" in page
     assert 'id="hidnote"' in page
+
+
+def test_visits_come_before_live_on_the_feeds_view(client):
+    page = client.get("/").text
+    assert page.index('id="grid"') < page.index('id="live"')

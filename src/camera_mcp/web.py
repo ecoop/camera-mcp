@@ -471,11 +471,11 @@ dialog .vmeta a{color:var(--accent);cursor:pointer}
 </div>
 
 <section id="view-feeds">
-  <div class="sect" style="margin-top:0">Live</div>
-  <div class="grid" id="live"></div>
-  <div class="sect">Visits <span id="hidnote"></span></div>
+  <div class="sect" style="margin-top:0">Visits <span id="hidnote"></span></div>
   <div class="grid" id="grid"></div>
   <div class="empty" id="empty" style="display:none">No visits in this window.</div>
+  <div class="sect">Live</div>
+  <div class="grid" id="live"></div>
   <div class="sect" style="display:flex;justify-content:space-between;align-items:center;gap:1rem">
     <span>At a glance</span>
     <span style="display:flex;gap:.6rem;align-items:center">
