@@ -459,7 +459,6 @@ def test_monitor_records_one_window_and_a_clip(tmp_path, still_move_still):
     settings = MonitorSettings(pre_seconds=1, post_seconds=1, quiet_seconds=2)
     camera = Camera("demo", str(still_move_still), monitor=settings)
     data = tmp_path / "data"
-    started = time.time()
     Monitor([camera], data).run(duration=60)  # a file source: returns when the file has played
 
     db = sqlite3.connect(data / "monitor.db")
@@ -467,8 +466,14 @@ def test_monitor_records_one_window_and_a_clip(tmp_path, still_move_still):
     windows = db.execute("SELECT * FROM motion_windows").fetchall()
     assert len(windows) == 1
     w = windows[0]
-    start, end = (datetime.fromisoformat(w[k]).timestamp() - started for k in ("started_at", "ended_at"))
-    assert 3.5 <= start <= 7.0, start  # the box appears 5 s in (reader start-up adds a little)
+    # Time zero is the first frame the watcher received (the uptime span's start), not when the
+    # test began: probing the file and starting ffmpeg take a variable few seconds on a loaded CI
+    # runner, which once pushed a correct start past a wall-clock bound. From the first frame on,
+    # `-re` paces delivery at the file's own rate, so the box's 5 s offset holds.
+    ((first_frame,),) = db.execute("SELECT started_at FROM camera_uptime WHERE camera = 'demo'").fetchall()
+    zero = datetime.fromisoformat(first_frame).timestamp()
+    start, end = (datetime.fromisoformat(w[k]).timestamp() - zero for k in ("started_at", "ended_at"))
+    assert 4.5 <= start <= 6.5, start  # the box appears 5 s into the file (pre-roll would make it 4)
     assert 1.0 <= end - start <= 5.0, (start, end)  # ...and moves for 3 s
     clip = probe_stream(Camera("clip", str(data / w["clip"])))
     assert (clip.width, clip.height) == (640, 360)
