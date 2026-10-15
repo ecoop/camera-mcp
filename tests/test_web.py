@@ -343,3 +343,9 @@ def test_dashboard_has_the_hidden_toggle_and_label_queue(client):
 def test_visits_come_before_live_on_the_feeds_view(client):
     page = client.get("/").text
     assert page.index('id="grid"') < page.index('id="live"')
+
+
+def test_viewer_links_the_full_res_still_not_the_clip(client):
+    page = client.get("/").text
+    assert ">full-res image</a>" in page and "open raw" not in page
+    assert "$('#cliplink').href=(curClip?'/media/visit/'+id+'/frame'" in page
