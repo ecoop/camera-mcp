@@ -73,6 +73,8 @@ def _reload_monitor() -> tuple[bool, str]:
 def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
     db_path = data_dir / "monitor.db"
     history = History(db_path, cameras, site)
+    from camera_mcp.ask import Asker, AskError, Budget, daily_cap
+    asker = Asker(history, Budget(data_dir / "ask_usage.json", daily_cap()))
     zones_path = data_dir / "zones.json"
     editable = os.environ.get("CAMERA_MCP_WEB_READONLY", "").lower() not in ("1", "true", "yes")
 
@@ -216,6 +218,27 @@ def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
         finally:
             store.close()
         return JSONResponse({"ok": True, "label": {"verdict": verdict, "note": note}})
+
+    async def api_ask_status(request: Request) -> JSONResponse:
+        """Whether asking is on here, and today's spend against the cap (the dashboard shows the box)."""
+        return JSONResponse({"enabled": asker.enabled, "spent_today": round(asker.budget.spent(), 4),
+                             "cap": asker.budget.cap})
+
+    async def api_ask(request: Request) -> JSONResponse:
+        """A plain-English question about the visit log, answered by Claude with read-only history
+        tools (see ask.py). Only metadata leaves the machine; spend is capped per day."""
+        try:
+            question = (await request.json()).get("question", "")
+        except (ValueError, json.JSONDecodeError, AttributeError):
+            return JSONResponse({"error": "invalid JSON"}, status_code=400)
+        try:
+            a = await _to_thread(asker.ask, str(question))
+        except AskError as e:
+            return JSONResponse({"error": str(e)}, status_code=e.status)
+        except Exception as e:  # the API or network failed: say so, don't crash the dashboard
+            return JSONResponse({"error": f"couldn't get an answer ({type(e).__name__}: {e})"}, status_code=502)
+        return JSONResponse({"answer": a.text, "visits": a.visits, "cost": a.cost, "spent_today": a.spent_today,
+                             "cap": a.cap, "refused": a.refused})
 
     async def api_visit_hidden_set(request: Request):
         """Show or hide one visit by hand ({"hidden": true|false}), overriding the gate or an exclusion
@@ -407,6 +430,8 @@ def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
         Route("/api/status", api_status),
         Route("/api/health", api_health),
         Route("/api/visits", api_visits),
+        Route("/api/ask", api_ask_status, methods=["GET"]),
+        Route("/api/ask", api_ask, methods=["POST"]),
         Route("/api/visits/timeline", api_visits_timeline),
         Route("/api/species", api_species),
         Route("/api/summary", api_summary),
@@ -574,6 +599,22 @@ dialog .vmeta a{color:var(--accent);cursor:pointer}
 .tile[data-verdict=false] .vpill,.tile[data-verdict=wrong_species] .vpill{display:block;color:var(--warn)}
 .tile[data-verdict=false] .vpill::after{content:"\\2717  false"} .tile[data-verdict=wrong_species] .vpill::after{content:"\\2717  wrong sp."}
 #hidnote{text-transform:none;letter-spacing:0}
+/* the ask box: a question about the visit log, answered with linked visits */
+.ask{margin:0 0 1rem}
+.ask form{display:flex;gap:.5rem}
+.ask input{flex:1;min-width:0;font-family:var(--sans);font-size:.9rem;background:var(--frame);color:var(--ink);
+  border:1px solid var(--line);border-radius:9px;padding:.5rem .7rem}
+.ask button{font-family:var(--mono);font-size:.8rem;background:var(--accent);color:#fff;border:1px solid var(--accent);
+  border-radius:9px;padding:.45rem .9rem;cursor:pointer}
+.ask button:disabled{opacity:.6;cursor:default}
+.askans{font-size:.92rem;line-height:1.5;margin:.6rem 0 0;white-space:normal}
+.askans:empty{display:none}
+.askans .vref{font-family:var(--mono);font-size:.8rem;color:var(--accent);cursor:pointer;text-decoration:none;
+  border-bottom:1px dotted var(--accent)}
+.askans.err{color:var(--warn)}
+.askmeta{font-family:var(--mono);font-size:.66rem;color:var(--muted);margin-top:.35rem}
+.askgrid{margin-top:.6rem}
+.askgrid:empty{display:none}
 .boxov{position:absolute;top:0;left:0;pointer-events:none;display:none}
 .boxov rect{fill:none;stroke:#ff3b30;stroke-width:2;vector-effect:non-scaling-stroke}
 .boxov text{fill:#ff3b30;font-family:var(--mono);font-size:3.2px;paint-order:stroke;
@@ -596,6 +637,13 @@ dialog .vmeta a{color:var(--accent);cursor:pointer}
 </div>
 
 <section id="view-feeds">
+  <div class="ask" id="askbox" hidden>
+    <form id="askform"><input id="askq" maxlength="500" autocomplete="off"
+      placeholder="Ask about your cameras, e.g. all skunks in the last 24 hours?"><button id="askbtn">ask</button></form>
+    <div class="askans" id="askans"></div>
+    <div class="grid askgrid" id="askgrid"></div>
+    <div class="askmeta" id="askmeta"></div>
+  </div>
   <div class="sect" style="margin-top:0">Visits <span id="hidnote"></span></div>
   <div class="grid" id="grid"></div>
   <div class="empty" id="empty" style="display:none">No visits in this window.</div>
@@ -674,14 +722,36 @@ async function loadVisits(){const r=await (await fetch('/api/visits?'+params()))
   const v=(r.visits||[]).filter(x=>x.has_thumbnail);
   $('#empty').style.display=v.length?'none':'block';
   $('#hidnote').textContent=r.hidden?`· ${r.hidden} hidden as likely leaves`:'';
-  $('#grid').innerHTML=v.map(x=>`<a class="tile${x.suppressed?' sup':''}" href="#" data-id="${x.id}" data-clip="${x.clip?1:0}"`+
-    ` data-verdict="${x.verdict||''}" data-sup="${x.suppressed||''}">`+
-    `<img loading="lazy" src="/media/visit/${x.id}/thumb" alt="${x.label}">`+
-    (x.suppressed?`<span class="badge">hidden: ${x.suppressed.replace('_',' ')}</span>`:'')+`<span class="vpill"></span>`+
-    `<div class="meta"><div class="sp">${x.label}${x.max_at_once>1?' ×'+x.max_at_once:''}`+
-    `</div>`+
-    `<div class="sub">${x.camera} &middot; ${(x.started||'').slice(11,16)}</div></div></a>`).join('');
+  $('#grid').innerHTML=v.map(tileHTML).join('');
   document.querySelectorAll('#grid .tile').forEach(t=>t.onclick=ev=>{ev.preventDefault();openVisit(t);});}
+function tileHTML(x){return `<a class="tile${x.suppressed?' sup':''}" href="#" data-id="${x.id}" data-clip="${x.clip?1:0}"`+
+    ` data-verdict="${x.verdict||''}" data-sup="${x.suppressed||''}">`+
+    `<img loading="lazy" src="/media/visit/${x.id}/thumb" alt="${esc(x.label)}">`+
+    (x.suppressed?`<span class="badge">hidden: ${x.suppressed.replace('_',' ')}</span>`:'')+`<span class="vpill"></span>`+
+    `<div class="meta"><div class="sp">${esc(x.label)}${x.max_at_once>1?' ×'+x.max_at_once:''}`+
+    `</div>`+
+    `<div class="sub">${x.camera} &middot; ${(x.started||'').slice(5,16).replace('T',' ')}</div></div></a>`;}
+const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+// ---- the ask box ----
+async function askInit(){try{const d=await (await fetch('/api/ask')).json(); if(!d.enabled)return;
+  $('#askbox').hidden=false; askMeta(d.spent_today,d.cap);}catch(e){}}
+function askMeta(spent,cap,cost){$('#askmeta').textContent=(cost!=null?`this answer ≈ $${cost.toFixed(3)} · `:'')+
+  `$${(+spent).toFixed(2)} of $${(+cap).toFixed(2)} used today · answers use the visit log only (no images)`;}
+$('#askform').addEventListener('submit',async ev=>{ev.preventDefault(); const q=$('#askq').value.trim(); if(!q)return;
+  $('#askbtn').disabled=true; $('#askans').className='askans'; $('#askans').textContent='looking…'; $('#askgrid').innerHTML='';
+  try{const res=await fetch('/api/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:q})});
+    const d=await res.json();
+    if(!res.ok){$('#askans').className='askans err';$('#askans').textContent=d.error||'something went wrong';return;}
+    const byId={}; (d.visits||[]).forEach(v=>byId[v.id]=v);
+    $('#askans').innerHTML=esc(d.answer).replace(/\\[#(\\d+)\\]/g,(m,id)=>byId[id]?`<a class="vref" data-id="${id}">#${id}</a>`:m)
+      .replace(/\\n/g,'<br>');
+    $('#askgrid').innerHTML=(d.visits||[]).filter(v=>v.has_thumbnail).map(tileHTML).join('');
+    $('#askgrid').querySelectorAll('.tile').forEach(t=>t.onclick=e=>{e.preventDefault();openVisit(t);});
+    $('#askans').querySelectorAll('.vref').forEach(a=>a.onclick=()=>{const t=$('#askgrid .tile[data-id="'+a.dataset.id+'"]');if(t)openVisit(t);});
+    askMeta(d.spent_today,d.cap,d.cost);
+  }catch(e){$('#askans').className='askans err';$('#askans').textContent='network error: '+e;}
+  finally{$('#askbtn').disabled=false;}});
+askInit();
 let labelEditable=true;
 function markLabel(v){$('#lblset').querySelectorAll('.lblbtn').forEach(b=>b.classList.toggle('on',b.dataset.v===v));}
 async function loadLabel(id){markLabel(null);
@@ -696,7 +766,7 @@ async function setLabel(v){if(!labelEditable||!curVisit)return;
     if(res.ok){markLabel(v); const t=tileOf(curVisit);
       if(t){const had=t.dataset.verdict; t.dataset.verdict=v;  // CSS restyles the tile from this
         if(!had)setTimeout(nextUnlabelled,350);}}}catch(e){}}  // first label on a visit: move on to the next
-function tileOf(id){return document.querySelector('#grid .tile[data-id="'+id+'"]');}
+function tileOf(id){return document.querySelector('#grid .tile[data-id="'+id+'"]')||document.querySelector('#askgrid .tile[data-id="'+id+'"]');}
 function nextUnlabelled(){const ts=[...document.querySelectorAll('#grid .tile')], i=ts.indexOf(tileOf(curVisit));
   const t=[...ts.slice(i+1),...ts.slice(0,Math.max(i,0))].find(x=>!x.dataset.verdict);
   if(t)openVisit(t); else $('#clipmeta').textContent='every visit in the grid is labelled';}

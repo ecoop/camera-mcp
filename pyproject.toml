@@ -16,6 +16,9 @@ dependencies = [
 dev = ["pytest>=8"]
 # Read-only web dashboard (camera_mcp.web). Starlette already comes in via mcp; this adds the server.
 web = ["uvicorn>=0.30"]
+# The dashboard's ask box (camera_mcp.ask): plain-English questions answered by Claude over the
+# read-only history tools. Needs ANTHROPIC_API_KEY on the host; without the extra or the key it's off.
+ask = ["anthropic>=1.15"]
 # Animal identification in the monitor. SpeciesNet supports Python < 3.14 (and pins numpy < 2
 # on Intel Macs); without it the monitor watches for motion only.
 detect = ["speciesnet>=5.0.5; python_version < '3.14'"]

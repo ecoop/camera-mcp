@@ -220,6 +220,33 @@ old reference:
 .venv/bin/camera-monitor --reset-view east_fence
 ```
 
+## Ask the dashboard
+
+The dashboard can answer plain-English questions about the visit log ("all skunks in the last 24
+hours?", "when do raccoons come?", "was every camera watched last night?"). Claude (`claude-opus-5-5`,
+low effort) answers with the same read-only history tools the MCP server offers. Visits it mentions
+show as thumbnails you can open, label or hide. **Only metadata leaves the machine** (labels, times,
+counts, camera names), never images or clips. It can't change settings or control cameras.
+
+It's off until the host has an API key. To turn it on:
+
+```bash
+.venv/bin/pip install '.[ask]'
+```
+
+then add a line to the credentials file (`~/.config/camera-mcp/credentials`, chmod 600; the
+environment overrides it), and restart the web agent:
+
+```
+ANTHROPIC_API_KEY=sk-ant-...
+ASK_DAILY_USD=1.00
+```
+
+Spend is capped per day (`ASK_DAILY_USD`, default $1.00), tracked in `data/ask_usage.json` and
+checked before every model call; the box shows each answer's cost and the day's total. A typical
+question costs a few cents (the box shows the real figure). If Claude declines a question, it's retried server-side on
+another model (`fallbacks: "default"`).
+
 ## Benchmark
 
 ```bash
