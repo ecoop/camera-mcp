@@ -563,3 +563,11 @@ def test_zone_editor_saves_min_size_and_leaves_zones_without_it_alone(tmp_path, 
     bad = client.post("/api/zones/backyard", json={**zones, "exclude": [{**zones["exclude"][0], "min_size": 2}]})
     assert bad.status_code == 400
     assert 'class="minsz"' in client.get("/zones").text
+
+
+def test_zone_outlines_stay_thin_at_any_zoom(client):
+    """The zoom scales the whole drawing layer, so outline width (and dashes) divide by the zoom
+    level the editor sets on it: 2px on screen whether at 100% or 750%."""
+    page = client.get("/zones").text
+    assert "stroke-width:calc(2px / var(--z))" in page
+    assert "$('#ov').style.setProperty('--z',zs)" in page

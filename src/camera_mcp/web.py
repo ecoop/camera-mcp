@@ -1013,13 +1013,14 @@ button:disabled{opacity:.5;cursor:default}
 .stage.noshot .msg{display:flex}
 #ov{position:absolute;inset:0;width:100%;height:100%;cursor:crosshair;overflow:visible}
 .stage.panning #ov,.stage.pan #ov{cursor:grab}
-#ov .z{stroke-width:2;vector-effect:non-scaling-stroke}
+#ov{--z:1}
+#ov .z{stroke-width:calc(2px / var(--z));vector-effect:non-scaling-stroke}  /* the zone's edge is the line's centre */
 #ov .roi{stroke:var(--accent);fill:rgba(91,107,140,.14)}
 #ov .motion_roi{stroke:var(--good);fill:rgba(79,122,82,.16)}
 #ov .motion_mask{stroke:var(--warn);fill:rgba(165,81,74,.16)}
-#ov .exclude{stroke:var(--excl);fill:rgba(154,106,18,.16);stroke-dasharray:6 4}
+#ov .exclude{stroke:var(--excl);fill:rgba(154,106,18,.16);stroke-dasharray:calc(6px / var(--z)) calc(4px / var(--z))}
 #ov .exclude.ignore{stroke-dasharray:none;fill:rgba(154,106,18,.3)}
-#ov .draft{fill:none;stroke:var(--ink);stroke-dasharray:4 3}
+#ov .draft{fill:none;stroke:var(--ink);stroke-dasharray:calc(4px / var(--z)) calc(3px / var(--z))}
 .tags,.handles{position:absolute;inset:0;pointer-events:none}
 .tag{position:absolute;font-family:var(--mono);font-size:.6rem;padding:0 .25rem;color:#fff;background:var(--accent);
   transform-origin:0 0;white-space:nowrap}
@@ -1114,6 +1115,7 @@ let zs=1, tx=0, ty=0, panMode=false, spaceDown=false, pan=null;
 function stageSize(){const r=$('#stage').getBoundingClientRect();return [r.width,r.height];}
 function applyZoom(){const [W,H]=stageSize(); tx=clamp(tx,W-W*zs,0); ty=clamp(ty,H-H*zs,0);
   $('#pz').style.transform=`translate(${tx}px,${ty}px) scale(${zs})`; $('#zlvl').textContent=Math.round(zs*100)+'%';
+  $('#ov').style.setProperty('--z',zs);  // outlines divide by this, so they stay 2px on screen at any zoom
   document.querySelectorAll('.tag').forEach(t=>t.style.transform=`scale(${1/zs})`);  // labels and handles keep their size
   document.querySelectorAll('.hd').forEach(h=>h.style.transform=`scale(${1/zs})`);}
 function zoomAt(f,cx,cy){const n=clamp(zs*f,1,10); if(cx==null){const [W,H]=stageSize();cx=W/2;cy=H/2;}
