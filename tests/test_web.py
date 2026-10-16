@@ -571,3 +571,13 @@ def test_zone_outlines_stay_thin_at_any_zoom(client):
     page = client.get("/zones").text
     assert "stroke-width:calc(2px / var(--z))" in page
     assert "$('#ov').style.setProperty('--z',zs)" in page
+
+
+def test_analytics_can_show_paused_cameras_and_hides_the_visit_filter(client):
+    """Cameras with no data in the window (e.g. paused outside their watch hours) can be shown as
+    blank tiles and heatmap rows, remembered per browser; "+ hidden" only filters the feeds grid."""
+    page = client.get("/analytics").text
+    assert 'id="showidle"' in page and "localStorage.setItem('showIdle'" in page
+    assert "CAMS.filter(n=>!names.includes(n))" in page  # grid: idle cameras appended as blank tiles
+    assert "CAMS.filter(n=>!cams.includes(n))" in page  # heatmap: idle cameras appended as blank rows
+    assert "$('#hidtoglbl').style.display=VIEW==='analytics'?'none':''" in page

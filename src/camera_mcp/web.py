@@ -535,6 +535,7 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 .cgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:.55rem}
 .cmini{border:1px solid var(--line);border-radius:8px;background:var(--chrome);padding:.3rem .4rem}
 .cmini svg{width:100%;height:52px;display:block}
+.cmini.idle{opacity:.6} .cmini.idle .cmh span{font-style:italic}
 .cmh{display:flex;justify-content:space-between;gap:.5rem;font-family:var(--mono);font-size:.63rem;color:var(--muted);margin-bottom:.15rem}
 .cmh b{color:var(--ink)}
 /* validated categorical palette for the visits timeline (dark steps swap in dark mode) */
@@ -632,7 +633,7 @@ dialog .vmeta a{color:var(--accent);cursor:pointer}
     <option value="24h" selected>24h</option><option value="3d">3 days</option><option value="7d">7 days</option></select>
   <select id="taxon"><option value="">all species</option></select>
   <select id="camera"><option value="">all cameras</option></select>
-  <label class="hidtog" title="also show unnamed visits the gate hid as likely leaves (to review and label)">
+  <label class="hidtog" id="hidtoglbl" title="also show visits hidden as likely junk (by the unrecognized-visit gate, a zone, or by hand), to review, label or un-hide">
     <input type="checkbox" id="showhidden"> + hidden</label>
 </div>
 
@@ -664,8 +665,11 @@ dialog .vmeta a{color:var(--accent);cursor:pointer}
 <section id="view-analytics" hidden>
   <div class="sect" style="margin-top:0;display:flex;justify-content:space-between;align-items:center;gap:1rem">
     <span>Throughput &amp; backlog</span>
+    <span style="display:flex;gap:.6rem;align-items:center;text-transform:none;letter-spacing:0">
+    <label class="hidtog" title="include cameras with no data in this window (e.g. paused outside their watch hours) as blank tiles and rows">
+      <input type="checkbox" id="showidle"> paused cameras</label>
     <select id="chartcam" style="font-family:var(--mono);font-size:.72rem;background:var(--frame);color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:.2rem .4rem;text-transform:none;letter-spacing:0">
-      <option value="">all cameras</option><option value="__each__">per camera (grid)</option></select>
+      <option value="">all cameras</option><option value="__each__">per camera (grid)</option></select></span>
   </div>
   <div class="chart" id="chart"></div>
   <div class="sect" style="display:flex;justify-content:space-between;align-items:center;gap:1rem">
@@ -706,10 +710,16 @@ async function loadHealth(){try{const win=$('#since').value;
   if(h.samples){const dr=h.segments_dropped; s=`<b>Analysis (${win}):</b> ${h.frames_analyzed.toLocaleString()} frames &middot; `+
     `<span class="${dr?'bad':'ok'}">${dr?dr+' dropped':'none dropped'}</span> &middot; peak lag ${Math.round(h.peak_lag_seconds)}s`;}
   else s='<b>Analysis:</b> no stats yet';
+  st.forEach(c=>CAMSTATE[c.camera]=c.state);
   s+=`<div class="cams">`+st.map(c=>`<span class="chip ${c.watching_now?'live':(c.state==='paused'?'off':'')}">`+
     `${c.camera}${c.state==='paused'?' (paused)':''}</span>`).join('')+`</div>`;
   $('#health').innerHTML=s;}catch(e){$('#health').textContent='health unavailable';}}
+let CAMS=[], CAMSTATE={};  // the enabled live cameras, and each one's monitor state (watching / paused / ...)
+const idleOn=()=>$('#showidle').checked;
+const idleLabel=n=>CAMSTATE[n]==='paused'?'paused':'no activity';
 async function loadCameras(){const cs=await (await fetch('/api/cameras')).json();
+  CAMS=cs.filter(c=>c.enabled&&c.stream).map(c=>c.name);
+  if(VIEW==='analytics'&&idleOn()){loadStats();loadHeatmap();}
   const opts=cs.filter(c=>c.enabled).map(c=>`<option value="${c.name}">${c.name}</option>`).join('');
   $('#camera').insertAdjacentHTML('beforeend',opts);
   $('#chartcam').insertAdjacentHTML('beforeend',opts);
@@ -880,7 +890,8 @@ async function loadStats(sel='#chart',forceAll=false){const el=$(sel); try{const
 }catch(e){el.innerHTML='<div class="empty" style="padding:1rem">stats unavailable</div>';}}
 async function loadStatsGrid(el){const d=await (await fetch('/api/stats/all?since='+$('#since').value)).json();
   const cams=d.cameras||{}, names=Object.keys(cams).filter(n=>cams[n].length);
-  if(!names.length){el.innerHTML='<div class="empty" style="padding:1rem">no per-camera stats yet (recorded from the latest build on)</div>';return;}
+  const idle=idleOn()?CAMS.filter(n=>!names.includes(n)):[];
+  if(!names.length&&!idle.length){el.innerHTML='<div class="empty" style="padding:1rem">no per-camera stats yet (recorded from the latest build on)</div>';return;}
   let maxLag=30; names.forEach(n=>{const p=peakLag(cams[n]); if(p>maxLag)maxLag=p;});  // shared lag scale, fit to data
   const totDrop=n=>cams[n].reduce((s,p)=>s+p.dropped,0);
   const busy=n=>totDrop(n)*1e7+sumFrames(cams[n]);  // worst first: drops, then total activity
@@ -889,6 +900,8 @@ async function loadStatsGrid(el){const d=await (await fetch('/api/stats/all?sinc
   names.forEach(n=>{const pts=cams[n], pk=Math.round(peakLag(pts)), dr=totDrop(n);
     html+=`<div class="cmini"><div class="cmh"><b>${n}</b><span>${fmtK(sumFrames(pts))}f &middot; peak ${pk}s${dr?' &middot; <span class="bad">'+dr+' drop</span>':''}</span></div>`+
       lagSVG(pts,500,52,maxLag,false)+'</div>';});
+  idle.forEach(n=>{html+=`<div class="cmini idle"><div class="cmh"><b>${n}</b><span>${idleLabel(n)} &middot; no data in window</span></div>`+
+    `<svg viewBox="0 0 500 52" preserveAspectRatio="none"></svg></div>`;});
   const capNote=maxLag>=1800?' &middot; dashed = 30-min cap':'';
   html+=`</div><div class="clabel"><span><b style="color:var(--accent)">lag</b> (area, shared scale) &middot; <b style="color:var(--good)">activity</b> (line, per-camera) &middot; <span class="bad">drops</span>${capNote}</span>`+
     `<span>${(d.from||'').slice(0,10)} &middot; ${(d.from||'').slice(11,16)}&ndash;${(d.to||'').slice(11,16)}</span></div>`;
@@ -930,12 +943,13 @@ async function loadTimeline(sel='#vtl'){const el=$(sel); try{
 // ---- hourly load heatmap (hour-of-day x camera) ----
 async function loadHeatmap(sel='#hmap',forceMode=null){const el=$(sel),mode=forceMode||($('.hmode .on')&&$('.hmode .on').dataset.m)||'dropped'; try{
   const d=await (await fetch('/api/stats/heatmap?since='+$('#since').value)).json();
-  const cams=d.cameras||[];
+  const cams=(d.cameras||[]).slice(), blank=Array.from({length:24},()=>({frames:0,dropped:0}));
+  if(idleOn())CAMS.filter(n=>!cams.includes(n)).forEach(n=>{cams.push(n);d.cells[n]=blank;});
   if(!cams.length){el.innerHTML='<div class="empty" style="padding:1rem">no per-camera stats yet (recorded from the latest build on)</div>';return;}
   const max=mode==='dropped'?d.max_dropped:d.max_frames, hue=mode==='dropped'?'--warn':'--accent';
   let html='<div class="hgrid" style="grid-template-columns:auto repeat(24,1fr)"><div></div>';
   for(let h=0;h<24;h++)html+=`<div class="hlab">${h%6===0?h:''}</div>`;
-  cams.forEach(cam=>{html+=`<div class="hlab hcamlab">${cam}</div>`;
+  cams.forEach(cam=>{html+=`<div class="hlab hcamlab">${cam}${(d.cameras||[]).includes(cam)?'':'<span class="k" style="margin-left:.3rem">('+idleLabel(cam)+')</span>'}</div>`;
     d.cells[cam].forEach((c,h)=>{const v=mode==='dropped'?c.dropped:c.frames,intl=max?v/max:0;
       const bg=v?`color-mix(in srgb, var(${hue}) ${Math.round(12+intl*88)}%, transparent)`:'var(--chrome)';
       html+=`<div class="hcell" style="background:${bg}" data-tip="<b>${cam}</b> &middot; ${h}:00&ndash;${h+1}:00<br>${c.frames.toLocaleString()} frames &middot; ${c.dropped} dropped"></div>`;});});
@@ -956,6 +970,7 @@ let VIEW='feeds';
 function renderView(){if(VIEW==='analytics'){loadStats();loadTimeline();loadHeatmap();}else{loadVisits();loadFeatured();}}
 function setView(v,push){VIEW=v==='analytics'?'analytics':'feeds';
   $('#view-feeds').hidden=VIEW!=='feeds'; $('#view-analytics').hidden=VIEW!=='analytics';
+  $('#hidtoglbl').style.display=VIEW==='analytics'?'none':'';  // it filters the visits grid, which analytics doesn't show
   document.querySelectorAll('.tabs a[data-view]').forEach(a=>a.classList.toggle('active',a.dataset.view===VIEW));
   if(push)history.pushState({v:VIEW},'',VIEW==='analytics'?'/analytics':'/');
   renderView();}
@@ -966,6 +981,8 @@ $('.hmode').querySelectorAll('button').forEach(b=>b.onclick=()=>{$('.hmode .on')
 // filters are global; a change refreshes the header and whichever view is showing
 ['since','taxon','camera','showhidden'].forEach(id=>$('#'+id).addEventListener('change',()=>{loadHealth();renderView();}));
 $('#chartcam').onchange=()=>{if(VIEW==='analytics')loadStats();};
+try{$('#showidle').checked=localStorage.getItem('showIdle')==='1';}catch(e){}
+$('#showidle').onchange=()=>{try{localStorage.setItem('showIdle',idleOn()?'1':'0');}catch(e){} if(VIEW==='analytics'){loadStats();loadHeatmap();}};
 tick();setInterval(tick,1000);loadCameras();loadSpecies();loadHealth();
 setView(location.pathname.indexOf('analytics')>=0?'analytics':'feeds',false);
 setInterval(()=>{loadHealth();renderView();},60000);
