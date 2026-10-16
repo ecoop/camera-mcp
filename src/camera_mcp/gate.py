@@ -31,7 +31,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from camera_mcp.config import default_data_dir, shape_contains
+from camera_mcp.config import default_data_dir, zone_holds, zone_parts
 from camera_mcp.history import parse_when
 from camera_mcp.store import iso
 from camera_mcp.visits import Box
@@ -85,18 +85,19 @@ def judge(key: str, boxes: list[Box], rules: GateRules) -> str | None:
 def in_zones(key: str, boxes: list[Box], zones, roi=None) -> str | None:
     """"zone" when every one of a closed visit's boxes sits in an exclusion zone that applies to it,
     else None. Boxes are fractions of the analysis frame (the camera's `roi` crop, if any); zones are
-    fractions of the full frame. A box is in a zone when its centre is. A "hide_unrecognized" zone only
+    fractions of the full frame. A box is in a zone when its centre is (and it's at least the zone's
+    min_size, if it has one: config.zone_holds). A "hide_unrecognized" zone only
     applies to visits keyed "animal" (SpeciesNet couldn't identify them); an "ignore" zone applies to any
     (normally its boxes never get this far: see monitor.zone_drop). One box outside keeps the visit."""
     if not zones or not boxes:
         return None
     rx, ry, rw, rh = roi or (0.0, 0.0, 1.0, 1.0)
-    shapes = [shape for shape, mode in zones if mode == "ignore" or key == GATED]
-    if not shapes:
+    applies = [z for z in zones if zone_parts(z)[1] == "ignore" or key == GATED]
+    if not applies:
         return None
     for b in boxes:
         cx, cy = rx + (b.x + b.w / 2) * rw, ry + (b.y + b.h / 2) * rh
-        if not any(shape_contains(shape, cx, cy) for shape in shapes):
+        if not any(zone_holds(z, cx, cy, b.w * rw, b.h * rh) for z in applies):
             return None
     return "zone"
 

@@ -197,6 +197,13 @@ switch):
   identified animal is never hidden. It can only act at the end: whether a visit is identified is
   only settled then. It doesn't reduce load.
 
+An exclusion zone can also have a **min size** (optional, per zone): only boxes whose larger side
+is at least that fraction of the frame count as in the zone. That separates a fixed object from a
+small bird passing the same spot, which position alone can't: on backyard, 99.9% of the ~70k boxes
+centred on a feeder roof were 0.052 or larger (median 0.075), while birds crossing there boxed at
+0.015–0.03. A min size around 0.04 lets a polygon be generous without dropping those birds. Zones
+without one behave as before.
+
 Any visit can be shown or hidden by hand from the viewer (**show** / **hide**), to undo a wrong call
 by the gate or a zone. Zones apply to new visits. In `zones.json` the modes are `ignore` and
 `hide_unrecognized` (the earlier `all` / `unnamed` are still read).

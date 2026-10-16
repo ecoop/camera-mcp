@@ -260,3 +260,38 @@ def test_motion_mask_polygon_is_rasterised_once_and_costs_the_same_per_frame():
     p, r = min(per_frame(MotionDetector(s, ignore=(HEDGE,))) for _ in range(3)), \
         min(per_frame(MotionDetector(s, ignore=((0.1, 0.1, 0.4, 0.4),))) for _ in range(3))
     assert p < r * 1.5 + 0.0005, (p, r)  # same work per frame: one multiply by the prebuilt mask
+
+
+# ---- min_size: tell a fixed object from a small bird at the same spot ----------------------------
+
+def test_min_size_keeps_small_boxes_out_of_a_zone():
+    from camera_mcp.gate import in_zones
+    roof = Box(0.40, 0.45, 0.07, 0.045, 0.6)  # a feeder roof: centre (0.435, 0.4725), ~0.07 wide
+    dove = Box(0.433, 0.465, 0.006, 0.017, 0.6)  # a small bird crossing the same spot
+    zone = ((0.38, 0.40, 0.12, 0.12), "ignore", 0.03)
+    assert in_zones("songbirds", [roof], (zone,)) == "zone"
+    assert in_zones("songbirds", [dove], (zone,)) is None  # below min_size: not in the zone
+    assert in_zones("songbirds", [dove], ((zone[0], "ignore"),)) == "zone"  # without min_size it would be
+    roi = (0.0, 0.25, 1.0, 0.5)  # sizes are measured on the full frame: h 0.09 in the roi is 0.045 of the frame
+    in_roi = Box(0.40, (0.4725 - 0.25) / 0.5 - 0.045, 0.02, 0.09, 0.6)
+    assert in_zones("animal", [in_roi], (((0.38, 0.40, 0.12, 0.12), "ignore", 0.05),), roi) is None
+    assert in_zones("animal", [in_roi], (((0.38, 0.40, 0.12, 0.12), "ignore", 0.04),), roi) == "zone"
+
+
+def test_min_size_parses_round_trips_and_is_optional(tmp_path):
+    import json
+
+    from camera_mcp.config import ConfigError, exclude_json, load_cameras
+    cfg = tmp_path / "cameras.yaml"
+    cfg.write_text("cameras:\n  - {name: backyard, source: b.mp4}\n")
+    zones = tmp_path / "zones.json"
+    zones.write_text(json.dumps({"cameras": {"backyard": {"exclude": [
+        {"rect": list(ROOF), "mode": "ignore", "min_size": 0.03}, {"rect": [0.1, 0.1, 0.1, 0.1], "mode": "ignore"}]}}}))
+    cam = load_cameras(cfg, require_login=False, zones=zones)["backyard"]
+    assert cam.exclude == ((ROOF, "ignore", 0.03), ((0.1, 0.1, 0.1, 0.1), "ignore"))  # no size: unchanged shape
+    assert [exclude_json(z) for z in cam.exclude] == [
+        {"rect": list(ROOF), "mode": "ignore", "min_size": 0.03}, {"rect": [0.1, 0.1, 0.1, 0.1], "mode": "ignore"}]
+    for bad in (1.5, -0.1, "big"):
+        zones.write_text(json.dumps({"cameras": {"backyard": {"exclude": [{"rect": list(ROOF), "min_size": bad}]}}}))
+        with pytest.raises(ConfigError, match="min_size"):
+            load_cameras(cfg, require_login=False, zones=zones)

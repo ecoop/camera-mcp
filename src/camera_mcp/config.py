@@ -191,13 +191,29 @@ def shape_contains(shape: Shape, x: float, y: float) -> bool:
 # its boxes in it, is hidden when it ends (reversibly). Earlier names, still accepted: "all", "unnamed".
 EXCLUDE_MODES = ("hide_unrecognized", "ignore")
 LEGACY_MODES = {"all": "ignore", "unnamed": "hide_unrecognized"}
-Exclude = tuple[Shape, str]  # an exclusion zone: (shape, mode)
+Exclude = tuple  # an exclusion zone: (shape, mode) or (shape, mode, min_size); see zone_parts
+
+
+def zone_parts(zone: Exclude) -> tuple[Shape, str, float]:
+    """(shape, mode, min_size) of an exclusion zone; min_size is 0 (any size) when it has none."""
+    shape, mode, *rest = zone
+    return shape, mode, float(rest[0]) if rest else 0.0
+
+
+def zone_holds(zone: Exclude, cx: float, cy: float, w: float, h: float) -> bool:
+    """Whether a box (centre and size, fractions of the full frame) is in the zone: its centre is
+    inside the shape and, if the zone has a minimum size, its larger side is at least that big.
+    The size test is what tells a fixed object (a feeder roof, boxed ~0.07 wide) from a small bird
+    passing the same spot (~0.006 wide); position alone can't."""
+    shape, _, min_size = zone_parts(zone)
+    return max(w, h) >= min_size and shape_contains(shape, cx, cy)
 
 
 def parse_excludes(value, where: str) -> tuple[Exclude, ...]:
     """A list of exclusion zones, each {"rect": [x, y, w, h]} or {"poly": [[x, y], ...]}, with
-    "mode": "ignore" | "hide_unrecognized" (empty if omitted). Mode defaults to "hide_unrecognized",
-    the cautious one; the earlier names "all" / "unnamed" are read as those."""
+    "mode": "ignore" | "hide_unrecognized" (empty if omitted), and optionally "min_size" (0..1: only
+    boxes whose larger side is at least that fraction of the frame count). Mode defaults to
+    "hide_unrecognized", the cautious one; the earlier names "all" / "unnamed" are read as those."""
     if value is None:
         return ()
     if not isinstance(value, list) or not all(isinstance(z, dict) for z in value):
@@ -209,13 +225,23 @@ def parse_excludes(value, where: str) -> tuple[Exclude, ...]:
         if mode not in EXCLUDE_MODES:
             raise ConfigError(f"{where}: exclude mode must be one of {', '.join(EXCLUDE_MODES)}, not {mode!r}")
         shape = parse_poly(z["poly"], where, "exclude") if "poly" in z else parse_rect(z.get("rect"), where, "exclude")
-        out.append((shape, mode))
+        min_size = z.get("min_size") or 0
+        try:
+            min_size = float(min_size)
+        except (TypeError, ValueError):
+            raise ConfigError(f"{where}: exclude min_size must be a number, not {z.get('min_size')!r}") from None
+        if not 0 <= min_size < 1:
+            raise ConfigError(f"{where}: exclude min_size must be at least 0 and below 1 (a fraction of the frame)")
+        out.append((shape, mode, min_size) if min_size else (shape, mode))
     return tuple(out)
 
 
 def exclude_json(zone: Exclude) -> dict:
-    shape, mode = zone
-    return {"poly": [list(p) for p in shape], "mode": mode} if is_poly(shape) else {"rect": list(shape), "mode": mode}
+    shape, mode, min_size = zone_parts(zone)
+    out = {"poly": [list(p) for p in shape], "mode": mode} if is_poly(shape) else {"rect": list(shape), "mode": mode}
+    if min_size:
+        out["min_size"] = min_size
+    return out
 
 
 def parse_shapes(value, where: str, key: str) -> tuple[Shape, ...]:

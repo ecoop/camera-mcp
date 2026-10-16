@@ -1033,6 +1033,9 @@ button:disabled{opacity:.5;cursor:default}
 .zoombar .lvl{font-family:var(--mono);font-size:.68rem;color:var(--muted);background:var(--frame);border:1px solid var(--line);
   border-radius:7px;padding:.15rem .4rem;min-width:3.2rem;text-align:center}
 .list button.mode{color:var(--excl);border-color:var(--excl)}
+.list input.minsz{width:4.6rem;font-family:var(--mono);font-size:.66rem;padding:.05rem .25rem;background:var(--frame);
+  color:var(--ink);border:1px solid var(--line);border-radius:5px}
+.list li.zx{flex-wrap:wrap}
 .side{font-family:var(--mono);font-size:.72rem}
 .zdesc{font-family:var(--sans);font-size:.72rem;color:var(--muted);line-height:1.4;margin:.2rem 0 .1rem}
 .list{margin:.3rem 0 0;padding:0;list-style:none}
@@ -1082,7 +1085,7 @@ button:disabled{opacity:.5;cursor:default}
       <div class="zdesc">Motion <i>inside</i> these zones is ignored. Mute known false motion &mdash; a swaying branch, a street, a neighbour&rsquo;s window &mdash; so it never wakes the detector. Add as many as you need.</div>
       <ul class="list" id="l-motion_mask"></ul></div>
     <div style="margin-top:.6rem"><b>Exclude</b> <span class="k">per-zone mode</span>
-      <div class="zdesc">For spots that only ever produce junk (a feeder roof&rsquo;s underside, a hedge). Click a zone&rsquo;s mode to switch it.<br><b>Ignore</b>: anything boxed here is dropped as soon as it&rsquo;s found, before it&rsquo;s classified &mdash; it never becomes a visit and can&rsquo;t keep the detector busy. For spots no animal can be.<br><b>Hide unrecognized</b>: a visit here that SpeciesNet couldn&rsquo;t identify is hidden when it ends (an identified bird stays) &mdash; kept, and shown again with one click in the viewer.<br>Applies to new visits.</div>
+      <div class="zdesc">For spots that only ever produce junk (a feeder roof&rsquo;s underside, a hedge). Click a zone&rsquo;s mode to switch it.<br><b>Ignore</b>: anything boxed here is dropped as soon as it&rsquo;s found, before it&rsquo;s classified &mdash; it never becomes a visit and can&rsquo;t keep the detector busy. For spots no animal can be.<br><b>Hide unrecognized</b>: a visit here that SpeciesNet couldn&rsquo;t identify is hidden when it ends (an identified bird stays) &mdash; kept, and shown again with one click in the viewer.<br><b>Min size</b> (optional): only boxes whose larger side is at least this fraction of the frame count, so a fixed object can be excluded while a small bird passing the same spot isn&rsquo;t (a feeder roof boxes ~0.05&ndash;0.08; a small bird in flight can be ~0.01). Empty: any size.<br>Applies to new visits.</div>
       <ul class="list" id="l-exclude"></ul></div>
     <div class="row" style="margin-top:1rem">
       <button id="apply" class="primary">apply &amp; reload</button>
@@ -1149,9 +1152,13 @@ function render(){
   $('#l-roi').innerHTML=zones.roi?li(zones.roi,'roi','ROI',-1):'<li class="k">none</li>';
   $('#l-motion_roi').innerHTML=zones.motion_roi?li(zones.motion_roi,'motion_roi','mROI',-1):'<li class="k">none</li>';
   $('#l-motion_mask').innerHTML=zones.motion_mask.length?zones.motion_mask.map((s,i)=>li(s,'motion_mask','m'+(i+1),i)).join(''):'<li class="k">none</li>';
-  $('#l-exclude').innerHTML=zones.exclude.length?zones.exclude.map((z,i)=>`<li><span class="k">x${i+1}</span><span>${isPoly(z.shape)?z.shape.poly.length+' pts':'rect'} `+
+  $('#l-exclude').innerHTML=zones.exclude.length?zones.exclude.map((z,i)=>`<li class="zx"><span class="k">x${i+1}</span><span>${isPoly(z.shape)?z.shape.poly.length+' pts':'rect'} `+
     `<button class="mode" data-i="${i}" title="switch what this zone hides">${MODE[z.mode]}</button> `+
-    `<button data-cls="exclude" data-i="${i}">&times;</button></span></li>`).join(''):'<li class="k">none</li>';
+    `<button data-cls="exclude" data-i="${i}">&times;</button></span>`+
+    `<span class="k" title="only boxes whose larger side is at least this fraction of the frame count; empty: any size">min size `+
+    `<input class="minsz" data-i="${i}" type="number" min="0" max="0.5" step="0.005" placeholder="any" value="${z.min_size||''}"></span></li>`).join(''):'<li class="k">none</li>';
+  document.querySelectorAll('.list input.minsz').forEach(inp=>inp.onchange=()=>{const v=parseFloat(inp.value);
+    zones.exclude[+inp.dataset.i].min_size=(v>0&&v<1)?+v.toFixed(4):0;});
   document.querySelectorAll('.list button[data-cls]').forEach(b=>b.onclick=()=>{const c=b.dataset.cls,i=+b.dataset.i;
     if(c==='motion_mask'||c==='exclude')zones[c].splice(i,1);else zones[c]=null;render();});
   document.querySelectorAll('.list button.mode').forEach(b=>b.onclick=()=>{const z=zones.exclude[+b.dataset.i];
@@ -1227,10 +1234,11 @@ function snapURL(){return '/api/snapshot/'+name+'?w=1920&t='+Date.now();}  // fu
 function loadCam(n){name=n;const c=all[n];
   zones={roi:c.roi?c.roi.slice():null,motion_roi:c.motion_roi?copy(c.motion_roi):null,
     motion_mask:(c.motion_mask||[]).map(copy),
-    exclude:(c.exclude||[]).map(z=>({shape:z.poly?{poly:z.poly.map(p=>p.slice())}:z.rect.slice(),mode:z.mode}))};
+    exclude:(c.exclude||[]).map(z=>({shape:z.poly?{poly:z.poly.map(p=>p.slice())}:z.rect.slice(),mode:z.mode,min_size:z.min_size||0}))};
   draft=null;drag=null;$('#shot').src=snapURL();zs=1;tx=0;ty=0;render();status('');}
 function payload(){return {roi:zones.roi,motion_roi:zones.motion_roi,motion_mask:zones.motion_mask,
-  exclude:zones.exclude.map(z=>isPoly(z.shape)?{poly:z.shape.poly,mode:z.mode}:{rect:z.shape,mode:z.mode})};}
+  exclude:zones.exclude.map(z=>Object.assign(isPoly(z.shape)?{poly:z.shape.poly,mode:z.mode}:{rect:z.shape,mode:z.mode},
+    z.min_size?{min_size:z.min_size}:{}))};}
 $('#shot').onerror=()=>$('#stage').classList.add('noshot');
 $('#shot').onload=()=>$('#stage').classList.remove('noshot');
 $('#camera').onchange=()=>loadCam($('#camera').value);

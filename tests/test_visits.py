@@ -545,3 +545,19 @@ def test_speciesnet_drops_zoned_boxes_before_classifying(monkeypatch):
     assert [round(d.box.x, 2) for d in found] == [0.10]
     classified.clear()
     assert len(det.analyze(np.zeros((90, 160, 3), np.uint8))) == 2 and len(classified) == 2  # no zone: both
+
+
+@needs_ffmpeg
+def test_an_ignore_zone_with_min_size_drops_big_boxes_and_keeps_small_ones(tmp_path, box_crosses):
+    # the white square is 60x60 px of 640x360: its larger side is 60/360 = 0.167 of the frame
+    assert _zoned_run(tmp_path / "a", box_crosses, ((PATH, "ignore", 0.1),)) == []  # big enough: dropped
+    assert len(_zoned_run(tmp_path / "b", box_crosses, ((PATH, "ignore", 0.2),))) == 1  # smaller than 0.2: kept
+
+
+def test_zone_drop_measures_size_on_the_full_frame():
+    from camera_mcp.monitor import zone_drop
+    roi = (0.0, 0.25, 1.0, 0.5)
+    drop = zone_drop(Camera("c", "x", roi=roi, exclude=((PATH, "ignore", 0.05),)))
+    centre_y = (0.5 - 0.25) / 0.5
+    assert drop(Box(0.45, centre_y - 0.06, 0.02, 0.12, 0.9))  # 0.12 of the roi band = 0.06 of the frame
+    assert not drop(Box(0.45, centre_y - 0.04, 0.02, 0.08, 0.9))  # 0.04 of the frame: below min_size

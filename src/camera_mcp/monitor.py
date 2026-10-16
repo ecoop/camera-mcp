@@ -45,7 +45,7 @@ from camera_mcp import ringbuffer
 from camera_mcp.capture import FFMPEG
 from camera_mcp.config import (
     Camera, ConfigError, default_config_path, default_data_dir, find_camera, load_cameras, load_site, redact,
-    shape_contains,
+    zone_holds, zone_parts,
 )
 from camera_mcp.detect import Detector, SpeciesNetDetector, available
 from camera_mcp.gate import GateRules, in_zones, judge
@@ -85,16 +85,18 @@ SHUTDOWN_SECONDS = 120.0  # at most this long, after stopping, to save open visi
 def zone_drop(camera: Camera):
     """A test for the detector: True for a box (fractions of the analysis frame, i.e. the camera's
     roi crop) whose centre lies in one of the camera's "ignore" exclusion zones (fractions of the
-    full frame). None when the camera has none. Such a box is dropped before it's classified, so it
-    can't open or extend a visit: a phantom on a feeder roof can't keep the GPU busy all night."""
-    shapes = [shape for shape, mode in camera.exclude if mode == "ignore"]
-    if not shapes:
+    full frame), and that's at least the zone's min_size if it has one (config.zone_holds). None when
+    the camera has none. Such a box is dropped before it's classified, so it can't open or extend a
+    visit: a phantom on a feeder roof can't keep the GPU busy all night, while a small bird passing
+    the same spot (below the zone's min_size) is kept."""
+    zones = [z for z in camera.exclude if zone_parts(z)[1] == "ignore"]
+    if not zones:
         return None
     rx, ry, rw, rh = camera.roi or (0.0, 0.0, 1.0, 1.0)
 
     def drop(b) -> bool:
         cx, cy = rx + (b.x + b.w / 2) * rw, ry + (b.y + b.h / 2) * rh
-        return any(shape_contains(shape, cx, cy) for shape in shapes)
+        return any(zone_holds(z, cx, cy, b.w * rw, b.h * rh) for z in zones)
     return drop
 
 

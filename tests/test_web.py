@@ -549,3 +549,17 @@ def test_reload_says_what_to_do_when_there_is_no_monitor_service(monkeypatch):
         returncode=0, stdout="PID\tStatus\tLabel\n-\t0\tcom.apple.something\n", stderr=""))
     ok, detail = web._reload_monitor()
     assert not ok and "CAMERA_MCP_LABEL" in detail and "restart the monitor by hand" in detail
+
+
+def test_zone_editor_saves_min_size_and_leaves_zones_without_it_alone(tmp_path, client, no_reload):
+    import json
+    zones = {"roi": None, "motion_roi": None, "motion_mask": [],
+             "exclude": [{"poly": [[0.39, 0.15], [0.43, 0.15], [0.43, 0.18]], "mode": "ignore", "min_size": 0.03},
+                         {"rect": [0.1, 0.1, 0.1, 0.1], "mode": "hide_unrecognized"}]}
+    r = client.post("/api/zones/backyard", json=zones)
+    assert r.status_code == 200 and r.json()["zones"]["exclude"] == zones["exclude"]
+    saved = json.loads((tmp_path / "zones.json").read_text())["cameras"]["backyard"]["exclude"]
+    assert saved == zones["exclude"] and "min_size" not in saved[1]
+    bad = client.post("/api/zones/backyard", json={**zones, "exclude": [{**zones["exclude"][0], "min_size": 2}]})
+    assert bad.status_code == 400
+    assert 'class="minsz"' in client.get("/zones").text
