@@ -590,3 +590,11 @@ def test_the_map_view_and_its_api(client):
     assert client.get("/api/labels/map").status_code == 400  # a camera is required
     r = client.get("/api/labels/map?camera=backyard")
     assert r.status_code in (200, 503)  # 503: no visit log yet in this fixture
+
+
+def test_the_map_zooms_with_dots_that_keep_their_size(client):
+    page = client.get("/map").text
+    assert 'id="mpz"' in page and "function mapZoomAt" in page and 'id="mzfit"' in page
+    assert "transform:scale(var(--iz))" in page  # dots counter-scaled: tight clusters spread apart when zoomed
+    assert "if(mJustPanned){ev.stopPropagation()" in page  # a drag to pan isn't a click on a dot
+    assert "?w=2560" in page  # the full-resolution picture, so zooming stays sharp

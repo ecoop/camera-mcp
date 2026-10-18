@@ -616,12 +616,20 @@ dialog .vmeta a{color:var(--accent);cursor:pointer}
 .mapctl{display:inline-flex;gap:.7rem;flex-wrap:wrap;text-transform:none;letter-spacing:0;font-family:var(--mono);font-size:.72rem}
 .mapctl label{display:inline-flex;align-items:center;gap:.25rem;cursor:pointer}
 .sw{display:inline-block;width:10px;height:10px;border-radius:50%;border:2px solid transparent}
-.mapstage{position:relative;border:1px solid var(--line);border-radius:11px;overflow:hidden;background:var(--chrome);min-height:120px}
-.mapstage img{width:100%;height:auto;display:block}
-#mapdots{position:absolute;inset:0}
+.mapstage{position:relative;border:1px solid var(--line);border-radius:11px;overflow:hidden;background:var(--chrome);
+  min-height:120px;touch-action:none;user-select:none}
+.mapstage.zoomed{cursor:grab} .mapstage.panning{cursor:grabbing}
+.mpz{position:relative;transform-origin:0 0}  /* the picture and its dots, zoomed and panned together */
+.mapstage img{width:100%;height:auto;display:block;pointer-events:none}
+#mapdots{position:absolute;inset:0;--iz:1}
 .mdot{position:absolute;width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:50%;cursor:pointer;
-  border:2px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.45);opacity:.9}
-.mdot:hover{transform:scale(1.6);opacity:1;z-index:2}
+  border:2px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.45);opacity:.9;transform:scale(var(--iz))}
+.mdot:hover{transform:scale(calc(var(--iz) * 1.6));opacity:1;z-index:2}
+.mapstage .zoombar{position:absolute;right:.5rem;bottom:.5rem;display:flex;gap:.25rem;z-index:3}
+.mapstage .zoombar button{font-family:var(--mono);font-size:.8rem;background:var(--frame);color:var(--ink);
+  border:1px solid var(--line);border-radius:7px;padding:.15rem .5rem;cursor:pointer;opacity:.92}
+.mapstage .zoombar .lvl{font-family:var(--mono);font-size:.68rem;color:var(--muted);background:var(--frame);
+  border:1px solid var(--line);border-radius:7px;padding:.15rem .4rem;min-width:3.2rem;text-align:center}
 .v-false{background:#d6453d} .v-real{background:#3da35a} .v-wrong_species{background:#e0a020}
 .v-none{background:rgba(160,160,160,.55);border-color:rgba(255,255,255,.6)}
 .mdot.v-none{width:8px;height:8px;margin:-4px 0 0 -4px}
@@ -697,8 +705,10 @@ dialog .vmeta a{color:var(--accent);cursor:pointer}
       <label><input type="checkbox" class="mv" value="wrong_species" checked><i class="sw v-wrong_species"></i>wrong sp.</label>
       <label><input type="checkbox" class="mv" value="none"><i class="sw v-none"></i>unlabelled</label></span>
   </div>
-  <div class="hint" id="maphint">Each dot is one visit, at its most confident box (the one its viewer shows), coloured by your label. Hover for details; click to open the visit and re-check or re-label it. Uses the camera picked in the filter above and the time window; after a camera is re-aimed, older visits plot against the new view, so narrow the window to after the change.</div>
-  <div class="mapstage" id="mapstage"><img id="mapimg" alt="camera picture"><div id="mapdots"></div></div>
+  <div class="hint" id="maphint">Each dot is one visit, at its most confident box (the one its viewer shows), coloured by your label. Hover for details; click to open the visit and re-check or re-label it. Scroll (or pinch) to zoom into a cluster, drag to pan; dots stay the same size, so tight clusters spread apart. Uses the camera picked in the filter above and the time window; after a camera is re-aimed, older visits plot against the new view, so narrow the window to after the change.</div>
+  <div class="mapstage" id="mapstage"><div class="mpz" id="mpz"><img id="mapimg" alt="camera picture"><div id="mapdots"></div></div>
+    <div class="zoombar"><button id="mzout" title="zoom out">&minus;</button><span class="lvl" id="mzlvl">100%</span>
+      <button id="mzin" title="zoom in">+</button><button id="mzfit" title="fit the whole picture">fit</button></div></div>
   <div class="clabel" id="maplegend"></div>
   <div id="mapgrid" hidden></div>
 </section>
@@ -797,7 +807,8 @@ async function loadMap(){const cam=$('#camera').value, dots=$('#mapdots');
   // the live picture, else the saved frame of a recent visit (up to 10 tried: some may have aged out)
   const img=$('#mapimg'), fallbacks=(d.visits||[]).filter(v=>v.clip).slice(0,10).map(v=>'/media/visit/'+v.id+'/frame');
   img.onerror=()=>{const next=fallbacks.shift(); if(next)img.src=next;};
-  img.src='/api/snapshot/'+encodeURIComponent(cam)+'?w=1600&t='+Date.now();
+  img.src='/api/snapshot/'+encodeURIComponent(cam)+'?w=2560&t='+Date.now();  // full detail for zooming in
+  mapZoomReset();
   MAPV={}; const counts={};
   vs.slice().reverse().forEach(v=>{MAPV[v.id]=v; const k=v.verdict||'none'; counts[k]=(counts[k]||0)+1;  // newest on top
     const el=document.createElement('div'); el.className='mdot v-'+k; el.dataset.id=v.id;
@@ -809,6 +820,30 @@ async function loadMap(){const cam=$('#camera').value, dots=$('#mapdots');
   $('#maplegend').innerHTML=`<span>${Object.entries(counts).map(([k,n])=>`${n} ${VLABEL[k]}`).join(' &middot; ')||'no visits match'} &middot; ${esc(cam)}</span>`+
     `<span>${(d.from||'').slice(0,10)} &rarr; ${(d.to||'').slice(0,10)}</span>`;}
 document.querySelectorAll('.mv').forEach(c=>c.onchange=()=>{if(VIEW==='map')loadMap();});
+// zoom & pan the map: the picture and dots scale together; dots are counter-scaled (--iz) to keep their size
+let mz=1, mtx=0, mty=0, mpan=null, mJustPanned=false;
+const mclamp=(v,a,b)=>Math.min(b,Math.max(a,v));
+function mapZoomApply(){const r=$('#mapstage').getBoundingClientRect(), W=r.width, H=$('#mpz').offsetHeight;
+  mtx=mclamp(mtx,W-W*mz,0); mty=mclamp(mty,H-H*mz,0);
+  $('#mpz').style.transform=`translate(${mtx}px,${mty}px) scale(${mz})`; $('#mapdots').style.setProperty('--iz',1/mz);
+  $('#mzlvl').textContent=Math.round(mz*100)+'%'; $('#mapstage').classList.toggle('zoomed',mz>1);}
+function mapZoomAt(f,cx,cy){const n=mclamp(mz*f,1,12); const r=$('#mapstage').getBoundingClientRect();
+  if(cx==null){cx=r.width/2;cy=r.height/2;} mtx=cx-(cx-mtx)*n/mz; mty=cy-(cy-mty)*n/mz; mz=n; mapZoomApply();}
+function mapZoomReset(){mz=1;mtx=0;mty=0;mapZoomApply();}
+$('#mapstage').addEventListener('wheel',ev=>{ev.preventDefault();const r=$('#mapstage').getBoundingClientRect();
+  mapZoomAt(Math.exp(-ev.deltaY*(ev.ctrlKey?0.01:0.0015)),ev.clientX-r.left,ev.clientY-r.top);},{passive:false});
+$('#mzin').onclick=()=>mapZoomAt(1.5); $('#mzout').onclick=()=>mapZoomAt(1/1.5); $('#mzfit').onclick=mapZoomReset;
+// drag to pan; a press that doesn't move is still a click on a dot
+$('#mapstage').addEventListener('pointerdown',ev=>{if(ev.button!==0||ev.target.closest('.zoombar'))return;
+  mpan={x:ev.clientX,y:ev.clientY,tx:mtx,ty:mty,id:ev.pointerId,moved:false};});
+$('#mapstage').addEventListener('pointermove',ev=>{if(!mpan)return; const dx=ev.clientX-mpan.x, dy=ev.clientY-mpan.y;
+  if(!mpan.moved&&Math.hypot(dx,dy)<5)return;
+  if(!mpan.moved){mpan.moved=true;$('#mapstage').setPointerCapture(mpan.id);$('#mapstage').classList.add('panning');hideTip();}
+  mtx=mpan.tx+dx; mty=mpan.ty+dy; mapZoomApply();});
+$('#mapstage').addEventListener('pointerup',()=>{if(mpan&&mpan.moved){mJustPanned=true;setTimeout(()=>mJustPanned=false,0);}
+  mpan=null;$('#mapstage').classList.remove('panning');});
+$('#mapstage').addEventListener('click',ev=>{if(mJustPanned){ev.stopPropagation();ev.preventDefault();}},true);  // a drag isn't a click
+addEventListener('resize',()=>{if(VIEW==='map')mapZoomApply();});
 // ---- the ask box ----
 // The answer is escaped first (nothing in it can inject markup), then gets a small, safe subset:
 // [#1234] -> a visit link, **bold** -> bold, "- " lines -> bullets, other newlines -> line breaks.
