@@ -580,4 +580,13 @@ def test_analytics_can_show_paused_cameras_and_hides_the_visit_filter(client):
     assert 'id="showidle"' in page and "localStorage.setItem('showIdle'" in page
     assert "CAMS.filter(n=>!names.includes(n))" in page  # grid: idle cameras appended as blank tiles
     assert "CAMS.filter(n=>!cams.includes(n))" in page  # heatmap: idle cameras appended as blank rows
-    assert "$('#hidtoglbl').style.display=VIEW==='analytics'?'none':''" in page
+    assert "$('#hidtoglbl').style.display=VIEW==='feeds'?'':'none'" in page  # only the feeds grid uses it
+
+
+def test_the_map_view_and_its_api(client):
+    assert client.get("/map").status_code == 200  # the same single page, opened on the map view
+    page = client.get("/").text
+    assert 'data-view="map"' in page and 'id="view-map"' in page and "async function loadMap" in page
+    assert client.get("/api/labels/map").status_code == 400  # a camera is required
+    r = client.get("/api/labels/map?camera=backyard")
+    assert r.status_code in (200, 503)  # 503: no visit log yet in this fixture

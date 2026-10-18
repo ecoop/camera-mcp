@@ -405,6 +405,49 @@ class History:
                 "max_frames": max((c["frames"] for c in allc), default=0),
                 "max_dropped": max((c["dropped"] for c in allc), default=0)}
 
+    def label_map(self, camera: str, since: str = "30d", until: str | None = None, taxon: str | None = None,
+                  unlabelled: bool = False, limit: int = 3000) -> dict:
+        """One entry per visit on a camera, placed where its boxes were: the mean box centre and size,
+        as fractions of the FULL frame (boxes are stored as fractions of the camera's roi crop and
+        mapped back here, using its current roi). With each visit's label, time and human verdict, so
+        the dashboard can plot past labels over the camera's picture and open any one of them.
+        Labelled visits only, unless `unlabelled`. Raises HistoryError for an unknown camera."""
+        now = time.time()
+        t0, t1 = parse_when(since, now, self.tz), parse_when(until, now, self.tz)
+        cam = find_camera(self.cameras, camera)
+        if cam is None:
+            raise HistoryError(f"unknown camera {camera!r}; known: {', '.join(sorted(self.cameras))}")
+        rx, ry, rw, rh = cam.roi or (0.0, 0.0, 1.0, 1.0)
+        with closing(self._db()) as db:
+            has_labels = "visit_labels" in _tables(db)
+            if not has_labels and not unlabelled:
+                return {"camera": cam.name, "from": self._local(self._iso(t0)), "to": self._local(self._iso(t1)), "visits": []}
+            where, params = self._where(t0, t1, [cam.name], taxon, 0.0, col="v.")
+            verdict = "l.verdict" if has_labels else "NULL"
+            join = "LEFT JOIN visit_labels l ON l.visit_id = v.id" if has_labels else ""
+            if not unlabelled:
+                where += " AND l.verdict IS NOT NULL"
+            sup = "v.suppressed" if _gated(db) else "NULL"
+            rows = db.execute(f"""
+                SELECT v.id, v.label, v.grp, v.started_at, v.frames, v.max_count, v.clip, v.thumbnail,
+                       {sup} AS suppressed, {verdict} AS verdict,
+                       avg(json_extract(je.value, '$.bbox[0]') + json_extract(je.value, '$.bbox[2]') / 2) AS cx,
+                       avg(json_extract(je.value, '$.bbox[1]') + json_extract(je.value, '$.bbox[3]') / 2) AS cy,
+                       avg(json_extract(je.value, '$.bbox[2]')) AS bw, avg(json_extract(je.value, '$.bbox[3]')) AS bh
+                FROM visits v {join} JOIN visit_frames f ON f.visit_id = v.id, json_each(f.boxes) je
+                WHERE {where} GROUP BY v.id ORDER BY v.started_at DESC LIMIT ?""", (*params, max(1, min(limit, 5000)))).fetchall()
+        return {
+            "camera": cam.name, "from": self._local(self._iso(t0)), "to": self._local(self._iso(t1)),
+            "visits": [{
+                "id": r["id"], "camera": cam.name, "label": r["label"], "group": r["grp"],
+                "started": self._local(r["started_at"]), "frames": r["frames"], "max_at_once": r["max_count"],
+                "clip": r["clip"], "has_thumbnail": r["thumbnail"] is not None,
+                "suppressed": r["suppressed"], "verdict": r["verdict"],
+                "x": round(rx + r["cx"] * rw, 4), "y": round(ry + r["cy"] * rh, 4),
+                "size": round(max(r["bw"] * rw, r["bh"] * rh), 4),
+            } for r in rows if r["cx"] is not None],
+        }
+
     def visits_timeline(self, since: str = "24h", until: str | None = None,
                         cameras: list[str] | None = None, taxon: str | None = None, bins: int = 48) -> dict:
         """Visit counts over the window, binned into `bins` time buckets and split by group (grp),

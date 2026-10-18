@@ -227,6 +227,16 @@ old reference:
 .venv/bin/camera-monitor --reset-view east_fence
 ```
 
+## Labels map
+
+The dashboard's **map** view plots past visits for one camera over its picture: one dot per visit,
+at the average centre of its boxes, coloured by your label (false, real, wrong species, and
+optionally unlabelled). Hover for the label, time and frame count; click a dot to open the visit in
+the usual viewer and re-check or re-label it (the dot recolours). It uses the dashboard's camera,
+species and time filters. Clusters of "false" dots are where an exclusion zone may belong; a "real"
+dot inside one is where a zone would cost you. After a camera is re-aimed, older visits plot against
+the new view, so narrow the time window to after the change.
+
 ## Ask the dashboard
 
 The dashboard can answer plain-English questions about the visit log ("all skunks in the last 24

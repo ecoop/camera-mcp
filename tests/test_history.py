@@ -336,3 +336,29 @@ def test_visits_timeline_bins_by_group(log):
     # the known fixture visits (songbirds, cat, jays, bird, raccoon, rat) show up in the group totals
     assert "songbirds" in d["total"] or "cat" in d["total"]
     assert sum(sum(b["grps"].values()) for b in d["bins"]) == d["visits"]
+
+
+def test_label_map_places_each_visit_where_it_was_boxed(tmp_path):
+    """One entry per visit at its mean box centre, mapped from the camera's roi crop to the full
+    frame, with its verdict; labelled visits only unless asked."""
+    from camera_mcp.taxa import Label
+    from camera_mcp.visits import Box, Detection
+    store = Store(tmp_path / "monitor.db")
+    ids = []
+    for x in (0.1, 0.6):  # two visits, boxes centred at x+0.05 in the roi crop
+        v = Visit("backyard", "animal", start=NOW - 600, last_seen=NOW - 590, frames=2)
+        v.votes[("animal", "")] = 1.0
+        v.log = [(NOW - 600 + i, [Detection(Box(x, 0.5, 0.1, 0.2, 0.6), Label("animal", "", 0.5), "animal")]) for i in range(2)]
+        ids.append(store.add_visit(v, model="m", thumbnail="t.jpg", clip="c.mp4"))
+    store.set_visit_label(ids[0], "false")
+    store.close()
+    roi = (0.2, 0.0, 0.5, 1.0)  # analysis crop: x 0.2-0.7 of the full frame
+    h = History(tmp_path / "monitor.db", {"backyard": Camera("backyard", "x", roi=roi)}, Site(timezone="UTC"))
+    (only,) = h.label_map("backyard", since="1h")["visits"]  # unlabelled left out by default
+    assert only["id"] == ids[0] and only["verdict"] == "false"
+    assert only["x"] == pytest.approx(0.2 + 0.15 * 0.5) and only["y"] == pytest.approx(0.6)
+    assert only["size"] == pytest.approx(0.2)  # larger side on the full frame: h 0.2 vs w 0.1*0.5
+    both = h.label_map("backyard", since="1h", unlabelled=True)["visits"]
+    assert {v["id"]: v["verdict"] for v in both} == {ids[0]: "false", ids[1]: None}
+    with pytest.raises(HistoryError):
+        h.label_map("garage", since="1h")

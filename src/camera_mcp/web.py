@@ -114,6 +114,16 @@ def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
                  include_suppressed=q.get("suppressed") == "1")  # ?suppressed=1: the gate's hidden visits too
         return r if isinstance(r, Response) else JSONResponse(r)
 
+    async def api_label_map(request: Request):
+        """Past visits on one camera, placed where they were boxed, with their labels (see
+        History.label_map): the dashboard's map view plots them over the camera's picture."""
+        q = request.query_params
+        if not q.get("camera"):
+            return JSONResponse({"error": "pick a camera"}, status_code=400)
+        r = _ask(history.label_map, q["camera"], since=q.get("since", "30d"), taxon=q.get("taxon") or None,
+                 unlabelled=q.get("unlabelled") == "1")
+        return r if isinstance(r, Response) else JSONResponse(r)
+
     async def api_species(request: Request) -> JSONResponse:
         # The filter menu, derived from what's been seen (or the site's pinned menu_species).
         # Degrades to an empty list when there's no visit log yet, so the page still loads.
@@ -425,11 +435,13 @@ def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
     return Starlette(routes=[
         Route("/", index),
         Route("/analytics", index),  # same single-page doc; the client shows the analytics view
+        Route("/map", index),  # ...or the labels map
         Route("/zones", zones_page),
         Route("/api/cameras", api_cameras),
         Route("/api/status", api_status),
         Route("/api/health", api_health),
         Route("/api/visits", api_visits),
+        Route("/api/labels/map", api_label_map),
         Route("/api/ask", api_ask_status, methods=["GET"]),
         Route("/api/ask", api_ask, methods=["POST"]),
         Route("/api/visits/timeline", api_visits_timeline),
@@ -600,6 +612,19 @@ dialog .vmeta a{color:var(--accent);cursor:pointer}
 .tile[data-verdict=false] .vpill,.tile[data-verdict=wrong_species] .vpill{display:block;color:var(--warn)}
 .tile[data-verdict=false] .vpill::after{content:"\\2717  false"} .tile[data-verdict=wrong_species] .vpill::after{content:"\\2717  wrong sp."}
 #hidnote{text-transform:none;letter-spacing:0}
+/* the labels map: one dot per visit over the camera's picture */
+.mapctl{display:inline-flex;gap:.7rem;flex-wrap:wrap;text-transform:none;letter-spacing:0;font-family:var(--mono);font-size:.72rem}
+.mapctl label{display:inline-flex;align-items:center;gap:.25rem;cursor:pointer}
+.sw{display:inline-block;width:10px;height:10px;border-radius:50%;border:2px solid transparent}
+.mapstage{position:relative;border:1px solid var(--line);border-radius:11px;overflow:hidden;background:var(--chrome);min-height:120px}
+.mapstage img{width:100%;height:auto;display:block}
+#mapdots{position:absolute;inset:0}
+.mdot{position:absolute;width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:50%;cursor:pointer;
+  border:2px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.45);opacity:.9}
+.mdot:hover{transform:scale(1.6);opacity:1;z-index:2}
+.v-false{background:#d6453d} .v-real{background:#3da35a} .v-wrong_species{background:#e0a020}
+.v-none{background:rgba(160,160,160,.55);border-color:rgba(255,255,255,.6)}
+.mdot.v-none{width:8px;height:8px;margin:-4px 0 0 -4px}
 /* the ask box: a question about the visit log, answered with linked visits */
 .ask{margin:0 0 1rem}
 .ask form{display:flex;gap:.5rem}
@@ -625,13 +650,13 @@ dialog .vmeta a{color:var(--accent);cursor:pointer}
 .boxbtn.on{color:var(--warn);border-color:var(--warn)}
 </style></head><body><div class="wrap">
 <div class="bar"><div class="brand">&#129437; Yard Sentry</div>
-  <nav class="tabs"><a href="/" data-view="feeds">feeds</a><a href="/analytics" data-view="analytics">analytics</a>
+  <nav class="tabs"><a href="/" data-view="feeds">feeds</a><a href="/analytics" data-view="analytics">analytics</a><a href="/map" data-view="map">map</a>
     <a href="/zones">zones &rarr;</a></nav>
   <div class="who"><span id="clock"></span></div></div>
 <div class="health" id="health">loading&hellip;</div>
 <div class="filters">
   <select id="since"><option value="2h">last 2h</option><option value="12h">12h</option>
-    <option value="24h" selected>24h</option><option value="3d">3 days</option><option value="7d">7 days</option></select>
+    <option value="24h" selected>24h</option><option value="3d">3 days</option><option value="7d">7 days</option><option value="30d">30 days</option></select>
   <select id="taxon"><option value="">all species</option></select>
   <select id="camera"><option value="">all cameras</option></select>
   <label class="hidtog" id="hidtoglbl" title="also show visits hidden as likely junk (by the unrecognized-visit gate, a zone, or by hand), to review, label or un-hide">
@@ -663,6 +688,20 @@ dialog .vmeta a{color:var(--accent);cursor:pointer}
   <div class="chart" id="feat"></div>
 </section>
 
+<section id="view-map" hidden>
+  <div class="sect" style="margin-top:0;display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap">
+    <span>Labels map</span>
+    <span class="mapctl">
+      <label><input type="checkbox" class="mv" value="false" checked><i class="sw v-false"></i>false</label>
+      <label><input type="checkbox" class="mv" value="real" checked><i class="sw v-real"></i>real</label>
+      <label><input type="checkbox" class="mv" value="wrong_species" checked><i class="sw v-wrong_species"></i>wrong sp.</label>
+      <label><input type="checkbox" class="mv" value="none"><i class="sw v-none"></i>unlabelled</label></span>
+  </div>
+  <div class="hint" id="maphint">Each dot is one visit, where its boxes were (their average centre), coloured by your label. Hover for details; click to open the visit and re-check or re-label it. Uses the camera picked in the filter above and the time window; after a camera is re-aimed, older visits plot against the new view, so narrow the window to after the change.</div>
+  <div class="mapstage" id="mapstage"><img id="mapimg" alt="camera picture"><div id="mapdots"></div></div>
+  <div class="clabel" id="maplegend"></div>
+  <div id="mapgrid" hidden></div>
+</section>
 <section id="view-analytics" hidden>
   <div class="sect" style="margin-top:0;display:flex;justify-content:space-between;align-items:center;gap:1rem">
     <span>Throughput &amp; backlog</span>
@@ -743,6 +782,33 @@ function tileHTML(x){return `<a class="tile${x.suppressed?' sup':''}" href="#" d
     `</div>`+
     `<div class="sub">${x.camera} &middot; ${(x.started||'').slice(5,16).replace('T',' ')}</div></div></a>`;}
 const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+// ---- the labels map: past visits plotted where they were boxed; click one to open it ----
+let MAPV={};  // id -> visit, for the tooltip and the viewer
+const VLABEL={false:'false',real:'real',wrong_species:'wrong sp.',none:'unlabelled'};
+async function loadMap(){const cam=$('#camera').value, dots=$('#mapdots');
+  dots.innerHTML=''; $('#maplegend').textContent='';
+  if(!cam){$('#mapimg').removeAttribute('src');$('#maplegend').textContent='pick a camera in the filter above';return;}
+  const want=[...document.querySelectorAll('.mv:checked')].map(c=>c.value);
+  const p=new URLSearchParams({camera:cam,since:$('#since').value}); if($('#taxon').value)p.set('taxon',$('#taxon').value);
+  if(want.includes('none'))p.set('unlabelled','1');
+  let d; try{d=await (await fetch('/api/labels/map?'+p)).json();}catch(e){$('#maplegend').textContent='map unavailable';return;}
+  if(d.error){$('#maplegend').textContent=d.error;return;}
+  const vs=(d.visits||[]).filter(v=>want.includes(v.verdict||'none'));
+  // the live picture, else the saved frame of a recent visit (up to 10 tried: some may have aged out)
+  const img=$('#mapimg'), fallbacks=(d.visits||[]).filter(v=>v.clip).slice(0,10).map(v=>'/media/visit/'+v.id+'/frame');
+  img.onerror=()=>{const next=fallbacks.shift(); if(next)img.src=next;};
+  img.src='/api/snapshot/'+encodeURIComponent(cam)+'?w=1600&t='+Date.now();
+  MAPV={}; const counts={};
+  vs.slice().reverse().forEach(v=>{MAPV[v.id]=v; const k=v.verdict||'none'; counts[k]=(counts[k]||0)+1;  // newest on top
+    const el=document.createElement('div'); el.className='mdot v-'+k; el.dataset.id=v.id;
+    el.style.left=(v.x*100)+'%'; el.style.top=(v.y*100)+'%';
+    el.addEventListener('mousemove',e=>{const w=MAPV[v.id];showTip(e,`<b>${esc(w.label)}</b> &middot; #${w.id}<br>${(w.started||'').slice(5,16).replace('T',' ')} &middot; ${w.frames} frames<br>your label: ${VLABEL[w.verdict||'none']}${w.suppressed?'<br>hidden: '+w.suppressed:''}`);});
+    el.addEventListener('mouseleave',hideTip);
+    el.onclick=()=>{hideTip(); const box=$('#mapgrid'); box.innerHTML=tileHTML(MAPV[v.id]); openVisit(box.querySelector('.tile'));};
+    dots.appendChild(el);});
+  $('#maplegend').innerHTML=`<span>${Object.entries(counts).map(([k,n])=>`${n} ${VLABEL[k]}`).join(' &middot; ')||'no visits match'} &middot; ${esc(cam)}</span>`+
+    `<span>${(d.from||'').slice(0,10)} &rarr; ${(d.to||'').slice(0,10)}</span>`;}
+document.querySelectorAll('.mv').forEach(c=>c.onchange=()=>{if(VIEW==='map')loadMap();});
 // ---- the ask box ----
 // The answer is escaped first (nothing in it can inject markup), then gets a small, safe subset:
 // [#1234] -> a visit link, **bold** -> bold, "- " lines -> bullets, other newlines -> line breaks.
@@ -785,9 +851,12 @@ async function setLabel(v){if(!labelEditable||!curVisit)return;
   try{const res=await fetch('/api/visit/'+curVisit+'/label',{method:'POST',
     headers:{'Content-Type':'application/json'},body:JSON.stringify({verdict:v})});
     if(res.ok){markLabel(v); const t=tileOf(curVisit);
-      if(t){const had=t.dataset.verdict; t.dataset.verdict=v;  // CSS restyles the tile from this
+      const md=document.querySelector('.mdot[data-id="'+curVisit+'"]'); if(md){md.className='mdot v-'+v; MAPV[curVisit]&&(MAPV[curVisit].verdict=v);}
+      if(VIEW==='map'){if(t)t.dataset.verdict=v;}  // map view: recolour only; never auto-advance through another view's grid
+      else if(t){const had=t.dataset.verdict; t.dataset.verdict=v;  // CSS restyles the tile from this
         if(!had)setTimeout(nextUnlabelled,350);}}}catch(e){}}  // first label on a visit: move on to the next
-function tileOf(id){return document.querySelector('#grid .tile[data-id="'+id+'"]')||document.querySelector('#askgrid .tile[data-id="'+id+'"]');}
+function tileOf(id){return document.querySelector('#grid .tile[data-id="'+id+'"]')||document.querySelector('#askgrid .tile[data-id="'+id+'"]')
+  ||document.querySelector('#mapgrid .tile[data-id="'+id+'"]');}
 function nextUnlabelled(){const ts=[...document.querySelectorAll('#grid .tile')], i=ts.indexOf(tileOf(curVisit));
   const t=[...ts.slice(i+1),...ts.slice(0,Math.max(i,0))].find(x=>!x.dataset.verdict);
   if(t)openVisit(t); else $('#clipmeta').textContent='every visit in the grid is labelled';}
@@ -978,15 +1047,16 @@ $('#featsel').onchange=()=>{try{localStorage.setItem('feat',$('#featsel').value)
 
 // ---- two views (feeds / analytics), bookmarkable at / and /analytics ----
 let VIEW='feeds';
-function renderView(){if(VIEW==='analytics'){loadStats();loadTimeline();loadHeatmap();}else{loadVisits();loadFeatured();}}
-function setView(v,push){VIEW=v==='analytics'?'analytics':'feeds';
-  $('#view-feeds').hidden=VIEW!=='feeds'; $('#view-analytics').hidden=VIEW!=='analytics';
-  $('#hidtoglbl').style.display=VIEW==='analytics'?'none':'';  // it filters the visits grid, which analytics doesn't show
+function renderView(){if(VIEW==='analytics'){loadStats();loadTimeline();loadHeatmap();}else if(VIEW==='map'){loadMap();}else{loadVisits();loadFeatured();}}
+const viewOf=path=>path.indexOf('analytics')>=0?'analytics':path.indexOf('/map')>=0?'map':'feeds';
+function setView(v,push){VIEW=['analytics','map'].includes(v)?v:'feeds';
+  $('#view-feeds').hidden=VIEW!=='feeds'; $('#view-analytics').hidden=VIEW!=='analytics'; $('#view-map').hidden=VIEW!=='map';
+  $('#hidtoglbl').style.display=VIEW==='feeds'?'':'none';  // it filters the visits grid, which only feeds shows
   document.querySelectorAll('.tabs a[data-view]').forEach(a=>a.classList.toggle('active',a.dataset.view===VIEW));
-  if(push)history.pushState({v:VIEW},'',VIEW==='analytics'?'/analytics':'/');
+  if(push)history.pushState({v:VIEW},'',VIEW==='feeds'?'/':'/'+VIEW);
   renderView();}
 document.querySelectorAll('a[data-view]').forEach(a=>a.addEventListener('click',e=>{e.preventDefault();setView(a.dataset.view,true);}));
-addEventListener('popstate',()=>setView(location.pathname.indexOf('analytics')>=0?'analytics':'feeds',false));
+addEventListener('popstate',()=>setView(viewOf(location.pathname),false));
 
 $('.hmode').querySelectorAll('button').forEach(b=>b.onclick=()=>{$('.hmode .on').classList.remove('on');b.classList.add('on');loadHeatmap();});
 // filters are global; a change refreshes the header and whichever view is showing
@@ -995,7 +1065,7 @@ $('#chartcam').onchange=()=>{if(VIEW==='analytics')loadStats();};
 try{$('#showidle').checked=localStorage.getItem('showIdle')==='1';}catch(e){}
 $('#showidle').onchange=()=>{try{localStorage.setItem('showIdle',idleOn()?'1':'0');}catch(e){} if(VIEW==='analytics'){loadStats();loadHeatmap();}};
 tick();setInterval(tick,1000);loadCameras();loadSpecies();loadHealth();
-setView(location.pathname.indexOf('analytics')>=0?'analytics':'feeds',false);
+setView(viewOf(location.pathname),false);
 setInterval(()=>{loadHealth();renderView();},60000);
 </script></div></body></html>"""
 
