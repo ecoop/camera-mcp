@@ -1167,7 +1167,7 @@ button:disabled{opacity:.5;cursor:default}
 .zoombar .lvl{font-family:var(--mono);font-size:.68rem;color:var(--muted);background:var(--frame);border:1px solid var(--line);
   border-radius:7px;padding:.15rem .4rem;min-width:3.2rem;text-align:center}
 .list button.mode{color:var(--excl);border-color:var(--excl)}
-.list input.minsz{width:4.6rem;font-family:var(--mono);font-size:.66rem;padding:.05rem .25rem;background:var(--frame);
+.list input.minsz,.list input.maxsz{width:4.6rem;font-family:var(--mono);font-size:.66rem;padding:.05rem .25rem;background:var(--frame);
   color:var(--ink);border:1px solid var(--line);border-radius:5px}
 .list li.zx{flex-wrap:wrap}
 .side{font-family:var(--mono);font-size:.72rem}
@@ -1290,10 +1290,12 @@ function render(){
   $('#l-exclude').innerHTML=zones.exclude.length?zones.exclude.map((z,i)=>`<li class="zx"><span class="k">x${i+1}</span><span>${isPoly(z.shape)?z.shape.poly.length+' pts':'rect'} `+
     `<button class="mode" data-i="${i}" title="switch what this zone hides">${MODE[z.mode]}</button> `+
     `<button data-cls="exclude" data-i="${i}">&times;</button></span>`+
-    `<span class="k" title="only boxes whose larger side is at least this fraction of the frame count; empty: any size">min size `+
-    `<input class="minsz" data-i="${i}" type="number" min="0" max="0.5" step="0.005" placeholder="any" value="${z.min_size||''}"></span></li>`).join(''):'<li class="k">none</li>';
-  document.querySelectorAll('.list input.minsz').forEach(inp=>inp.onchange=()=>{const v=parseFloat(inp.value);
-    zones.exclude[+inp.dataset.i].min_size=(v>0&&v<1)?+v.toFixed(4):0;});
+    `<span class="k" title="optional: only boxes whose larger side (a fraction of the frame width) is in this range count. `+
+    `A 'from' keeps small birds out of a zone around a big fixed object; a 'below' keeps a rat out of a zone around a small one. Empty: any size.">box size `+
+    `<input class="minsz" data-i="${i}" type="number" min="0" max="0.5" step="0.005" placeholder="from any" value="${z.min_size||''}"> `+
+    `<input class="maxsz" data-i="${i}" type="number" min="0" max="0.5" step="0.005" placeholder="below any" value="${z.max_size||''}"></span></li>`).join(''):'<li class="k">none</li>';
+  document.querySelectorAll('.list input.minsz,.list input.maxsz').forEach(inp=>inp.onchange=()=>{const v=parseFloat(inp.value);
+    zones.exclude[+inp.dataset.i][inp.classList.contains('maxsz')?'max_size':'min_size']=(v>0&&v<1)?+v.toFixed(4):0;});
   document.querySelectorAll('.list button[data-cls]').forEach(b=>b.onclick=()=>{const c=b.dataset.cls,i=+b.dataset.i;
     if(c==='motion_mask'||c==='exclude')zones[c].splice(i,1);else zones[c]=null;render();});
   document.querySelectorAll('.list button.mode').forEach(b=>b.onclick=()=>{const z=zones.exclude[+b.dataset.i];
@@ -1369,11 +1371,11 @@ function snapURL(){return '/api/snapshot/'+name+'?w=1920&t='+Date.now();}  // fu
 function loadCam(n){name=n;const c=all[n];
   zones={roi:c.roi?c.roi.slice():null,motion_roi:c.motion_roi?copy(c.motion_roi):null,
     motion_mask:(c.motion_mask||[]).map(copy),
-    exclude:(c.exclude||[]).map(z=>({shape:z.poly?{poly:z.poly.map(p=>p.slice())}:z.rect.slice(),mode:z.mode,min_size:z.min_size||0}))};
+    exclude:(c.exclude||[]).map(z=>({shape:z.poly?{poly:z.poly.map(p=>p.slice())}:z.rect.slice(),mode:z.mode,min_size:z.min_size||0,max_size:z.max_size||0}))};
   draft=null;drag=null;$('#shot').src=snapURL();zs=1;tx=0;ty=0;render();status('');}
 function payload(){return {roi:zones.roi,motion_roi:zones.motion_roi,motion_mask:zones.motion_mask,
   exclude:zones.exclude.map(z=>Object.assign(isPoly(z.shape)?{poly:z.shape.poly,mode:z.mode}:{rect:z.shape,mode:z.mode},
-    z.min_size?{min_size:z.min_size}:{}))};}
+    z.min_size?{min_size:z.min_size}:{},z.max_size?{max_size:z.max_size}:{}))};}
 $('#shot').onerror=()=>$('#stage').classList.add('noshot');
 $('#shot').onload=()=>$('#stage').classList.remove('noshot');
 $('#camera').onchange=()=>loadCam($('#camera').value);

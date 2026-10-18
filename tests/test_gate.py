@@ -295,3 +295,37 @@ def test_min_size_parses_round_trips_and_is_optional(tmp_path):
         zones.write_text(json.dumps({"cameras": {"backyard": {"exclude": [{"rect": list(ROOF), "min_size": bad}]}}}))
         with pytest.raises(ConfigError, match="min_size"):
             load_cameras(cfg, require_login=False, zones=zones)
+
+
+# ---- max_size: tell a small fixed thing from a bigger animal at the same spot ---------------------
+
+def test_max_size_keeps_big_boxes_out_of_a_zone():
+    from camera_mcp.gate import in_zones
+    bolt = Box(0.400, 0.145, 0.012, 0.028, 0.25)  # a bolt-loop on a squirrel shield, ~0.03 tall
+    rat = Box(0.380, 0.130, 0.05, 0.035, 0.53)  # a rat on the shield, centred on the bolt, 0.05 wide
+    zone = ((0.396, 0.145, 0.011, 0.019), "ignore", 0.0, 0.04)
+    assert in_zones("animal", [bolt], (zone,)) == "zone"
+    assert in_zones("animal", [rat], (zone,)) is None  # not below max_size: not in the zone
+    assert in_zones("animal", [rat], ((zone[0], "ignore"),)) == "zone"  # without max_size it would be
+    ranged = ((0.396, 0.145, 0.011, 0.019), "ignore", 0.02, 0.04)  # both ends: 0.02 <= size < 0.04
+    assert in_zones("animal", [bolt], (ranged,)) == "zone"
+    assert in_zones("animal", [Box(0.4, 0.15, 0.01, 0.01, 0.3)], (ranged,)) is None  # 0.01: below the range
+
+
+def test_max_size_parses_round_trips_and_must_be_above_min_size(tmp_path):
+    import json
+
+    from camera_mcp.config import ConfigError, exclude_json, load_cameras
+    cfg = tmp_path / "cameras.yaml"
+    cfg.write_text("cameras:\n  - {name: west_alley, source: w.mp4}\n")
+    zones = tmp_path / "zones.json"
+    bolt, ranged = {"rect": [0.396, 0.145, 0.011, 0.019], "mode": "ignore", "max_size": 0.04}, \
+        {"rect": [0.1, 0.1, 0.1, 0.1], "mode": "ignore", "min_size": 0.01, "max_size": 0.04}
+    zones.write_text(json.dumps({"cameras": {"west_alley": {"exclude": [bolt, ranged]}}}))
+    cam = load_cameras(cfg, require_login=False, zones=zones)["west_alley"]
+    assert cam.exclude == (((0.396, 0.145, 0.011, 0.019), "ignore", 0.0, 0.04), ((0.1, 0.1, 0.1, 0.1), "ignore", 0.01, 0.04))
+    assert [exclude_json(z) for z in cam.exclude] == [bolt, ranged]  # no min_size written when it has none
+    for bad in ({"max_size": 1.5}, {"max_size": "small"}, {"min_size": 0.04, "max_size": 0.04}, {"min_size": 0.05, "max_size": 0.03}):
+        zones.write_text(json.dumps({"cameras": {"west_alley": {"exclude": [{"rect": [0.1, 0.1, 0.1, 0.1], **bad}]}}}))
+        with pytest.raises(ConfigError, match="max_size"):
+            load_cameras(cfg, require_login=False, zones=zones)

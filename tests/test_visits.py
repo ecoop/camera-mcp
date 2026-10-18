@@ -561,3 +561,6 @@ def test_zone_drop_measures_size_on_the_full_frame():
     centre_y = (0.5 - 0.25) / 0.5
     assert drop(Box(0.45, centre_y - 0.06, 0.02, 0.12, 0.9))  # 0.12 of the roi band = 0.06 of the frame
     assert not drop(Box(0.45, centre_y - 0.04, 0.02, 0.08, 0.9))  # 0.04 of the frame: below min_size
+    capped = zone_drop(Camera("c", "x", roi=roi, exclude=((PATH, "ignore", 0.0, 0.05),)))
+    assert capped(Box(0.45, centre_y - 0.04, 0.02, 0.08, 0.9))  # 0.04 of the frame: below max_size, dropped
+    assert not capped(Box(0.45, centre_y - 0.06, 0.02, 0.12, 0.9))  # 0.06: too big for the zone, kept

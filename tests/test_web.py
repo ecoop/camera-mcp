@@ -562,7 +562,14 @@ def test_zone_editor_saves_min_size_and_leaves_zones_without_it_alone(tmp_path, 
     assert saved == zones["exclude"] and "min_size" not in saved[1]
     bad = client.post("/api/zones/backyard", json={**zones, "exclude": [{**zones["exclude"][0], "min_size": 2}]})
     assert bad.status_code == 400
-    assert 'class="minsz"' in client.get("/zones").text
+    page = client.get("/zones").text
+    assert 'class="minsz"' in page and 'class="maxsz"' in page and "max_size" in page
+    capped = {**zones, "exclude": [{"rect": [0.396, 0.145, 0.011, 0.019], "mode": "ignore", "max_size": 0.04}]}
+    r = client.post("/api/zones/backyard", json=capped)
+    assert r.status_code == 200 and r.json()["zones"]["exclude"] == capped["exclude"]
+    assert json.loads((tmp_path / "zones.json").read_text())["cameras"]["backyard"]["exclude"] == capped["exclude"]
+    inverted = {**zones, "exclude": [{"rect": [0.1, 0.1, 0.1, 0.1], "mode": "ignore", "min_size": 0.05, "max_size": 0.03}]}
+    assert client.post("/api/zones/backyard", json=inverted).status_code == 400
 
 
 def test_zone_outlines_stay_thin_at_any_zoom(client):

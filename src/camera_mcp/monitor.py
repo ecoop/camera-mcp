@@ -85,9 +85,9 @@ SHUTDOWN_SECONDS = 120.0  # at most this long, after stopping, to save open visi
 def zone_drop(camera: Camera):
     """A test for the detector: True for a box (fractions of the analysis frame, i.e. the camera's
     roi crop) whose centre lies in one of the camera's "ignore" exclusion zones (fractions of the
-    full frame), and that's at least the zone's min_size if it has one (config.zone_holds). None when
-    the camera has none. Such a box is dropped before it's classified, so it can't open or extend a
-    visit: a phantom on a feeder roof can't keep the GPU busy all night, while a small bird passing
+    full frame), and whose size is in the zone's size range if it has one (config.zone_holds). None
+    when the camera has none. Such a box is dropped before it's classified, so it can't open or extend
+    a visit: a phantom on a feeder roof can't keep the GPU busy all night, while a small bird passing
     the same spot (below the zone's min_size) is kept."""
     zones = [z for z in camera.exclude if zone_parts(z)[1] == "ignore"]
     if not zones:
