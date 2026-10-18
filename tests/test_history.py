@@ -362,3 +362,22 @@ def test_label_map_places_each_visit_where_it_was_boxed(tmp_path):
     assert {v["id"]: v["verdict"] for v in both} == {ids[0]: "false", ids[1]: None}
     with pytest.raises(HistoryError):
         h.label_map("garage", since="1h")
+
+
+def test_label_map_places_a_scattered_visit_at_its_most_confident_box(tmp_path):
+    """An unnamed visit can collect boxes on different things; the dot goes where the viewer's box
+    is (the most confident one), never at an average of places where nothing was."""
+    from camera_mcp.taxa import Label
+    from camera_mcp.visits import Box, Detection
+    store = Store(tmp_path / "monitor.db")
+    v = Visit("west_alley", "animal", start=NOW - 600, last_seen=NOW - 590, frames=3)
+    v.votes[("animal", "")] = 1.0
+    boxes = [Box(0.40, 0.40, 0.08, 0.10, 0.34), Box(0.10, 0.10, 0.10, 0.10, 0.44), Box(0.40, 0.40, 0.08, 0.10, 0.28)]
+    v.log = [(NOW - 600 + i, [Detection(b, Label("animal", "", 0.5), "animal")]) for i, b in enumerate(boxes)]
+    vid = store.add_visit(v, model="m", thumbnail="t.jpg", clip="c.mp4")
+    store.set_visit_label(vid, "false")
+    store.close()
+    h = History(tmp_path / "monitor.db", {"west_alley": Camera("west_alley", "x")}, Site(timezone="UTC"))
+    (dot,) = h.label_map("west_alley", since="1h")["visits"]
+    assert (dot["x"], dot["y"]) == (pytest.approx(0.15), pytest.approx(0.15))  # the 0.44 box, not the mean
+    assert dot["spread"] == pytest.approx(0.30)  # centres ranged x 0.15-0.44, y 0.15-0.45: the larger range

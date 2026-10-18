@@ -697,7 +697,7 @@ dialog .vmeta a{color:var(--accent);cursor:pointer}
       <label><input type="checkbox" class="mv" value="wrong_species" checked><i class="sw v-wrong_species"></i>wrong sp.</label>
       <label><input type="checkbox" class="mv" value="none"><i class="sw v-none"></i>unlabelled</label></span>
   </div>
-  <div class="hint" id="maphint">Each dot is one visit, where its boxes were (their average centre), coloured by your label. Hover for details; click to open the visit and re-check or re-label it. Uses the camera picked in the filter above and the time window; after a camera is re-aimed, older visits plot against the new view, so narrow the window to after the change.</div>
+  <div class="hint" id="maphint">Each dot is one visit, at its most confident box (the one its viewer shows), coloured by your label. Hover for details; click to open the visit and re-check or re-label it. Uses the camera picked in the filter above and the time window; after a camera is re-aimed, older visits plot against the new view, so narrow the window to after the change.</div>
   <div class="mapstage" id="mapstage"><img id="mapimg" alt="camera picture"><div id="mapdots"></div></div>
   <div class="clabel" id="maplegend"></div>
   <div id="mapgrid" hidden></div>
@@ -802,7 +802,7 @@ async function loadMap(){const cam=$('#camera').value, dots=$('#mapdots');
   vs.slice().reverse().forEach(v=>{MAPV[v.id]=v; const k=v.verdict||'none'; counts[k]=(counts[k]||0)+1;  // newest on top
     const el=document.createElement('div'); el.className='mdot v-'+k; el.dataset.id=v.id;
     el.style.left=(v.x*100)+'%'; el.style.top=(v.y*100)+'%';
-    el.addEventListener('mousemove',e=>{const w=MAPV[v.id];showTip(e,`<b>${esc(w.label)}</b> &middot; #${w.id}<br>${(w.started||'').slice(5,16).replace('T',' ')} &middot; ${w.frames} frames<br>your label: ${VLABEL[w.verdict||'none']}${w.suppressed?'<br>hidden: '+w.suppressed:''}`);});
+    el.addEventListener('mousemove',e=>{const w=MAPV[v.id];showTip(e,`<b>${esc(w.label)}</b> &middot; #${w.id}<br>${(w.started||'').slice(5,16).replace('T',' ')} &middot; ${w.frames} frames<br>your label: ${VLABEL[w.verdict||'none']}${w.suppressed?'<br>hidden: '+w.suppressed:''}${w.spread>0.05?'<br><i>boxes in more than one place; the dot is its most confident box</i>':''}`);});
     el.addEventListener('mouseleave',hideTip);
     el.onclick=()=>{hideTip(); const box=$('#mapgrid'); box.innerHTML=tileHTML(MAPV[v.id]); openVisit(box.querySelector('.tile'));};
     dots.appendChild(el);});

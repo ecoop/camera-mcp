@@ -407,9 +407,11 @@ class History:
 
     def label_map(self, camera: str, since: str = "30d", until: str | None = None, taxon: str | None = None,
                   unlabelled: bool = False, limit: int = 3000) -> dict:
-        """One entry per visit on a camera, placed where its boxes were: the mean box centre and size,
-        as fractions of the FULL frame (boxes are stored as fractions of the camera's roi crop and
-        mapped back here, using its current roi). With each visit's label, time and human verdict, so
+        """One entry per visit on a camera, placed at its most confident box (the box the visit viewer
+        and thumbnail show), as fractions of the FULL frame (boxes are stored as fractions of the
+        camera's roi crop and mapped back here, using its current roi). An unnamed visit can collect
+        boxes on different things, so `spread` says how far its box centres ranged; averaging them
+        would place the dot where nothing was. With each visit's label, time and human verdict, so
         the dashboard can plot past labels over the camera's picture and open any one of them.
         Labelled visits only, unless `unlabelled`. Raises HistoryError for an unknown camera."""
         now = time.time()
@@ -429,13 +431,20 @@ class History:
                 where += " AND l.verdict IS NOT NULL"
             sup = "v.suppressed" if _gated(db) else "NULL"
             rows = db.execute(f"""
+                WITH vs AS (SELECT v.id FROM visits v {join} WHERE {where} ORDER BY v.started_at DESC LIMIT ?),
+                b AS (SELECT f.visit_id AS vid, json_extract(je.value, '$.conf') AS c,
+                             json_extract(je.value, '$.bbox[0]') AS x, json_extract(je.value, '$.bbox[1]') AS y,
+                             json_extract(je.value, '$.bbox[2]') AS w, json_extract(je.value, '$.bbox[3]') AS h
+                      FROM visit_frames f JOIN vs ON vs.id = f.visit_id, json_each(f.boxes) je),
+                best AS (SELECT vid, x, y, w, h, max(c) AS c FROM b GROUP BY vid),  -- bare columns: the max(c) row
+                spread AS (SELECT vid, max(x + w / 2) - min(x + w / 2) AS sx, max(y + h / 2) - min(y + h / 2) AS sy
+                           FROM b GROUP BY vid)
                 SELECT v.id, v.label, v.grp, v.started_at, v.frames, v.max_count, v.clip, v.thumbnail,
                        {sup} AS suppressed, {verdict} AS verdict,
-                       avg(json_extract(je.value, '$.bbox[0]') + json_extract(je.value, '$.bbox[2]') / 2) AS cx,
-                       avg(json_extract(je.value, '$.bbox[1]') + json_extract(je.value, '$.bbox[3]') / 2) AS cy,
-                       avg(json_extract(je.value, '$.bbox[2]')) AS bw, avg(json_extract(je.value, '$.bbox[3]')) AS bh
-                FROM visits v {join} JOIN visit_frames f ON f.visit_id = v.id, json_each(f.boxes) je
-                WHERE {where} GROUP BY v.id ORDER BY v.started_at DESC LIMIT ?""", (*params, max(1, min(limit, 5000)))).fetchall()
+                       best.x + best.w / 2 AS cx, best.y + best.h / 2 AS cy, best.w AS bw, best.h AS bh,
+                       spread.sx, spread.sy
+                FROM vs JOIN visits v ON v.id = vs.id {join} JOIN best ON best.vid = v.id JOIN spread ON spread.vid = v.id
+                ORDER BY v.started_at DESC""", (*params, max(1, min(limit, 5000)))).fetchall()
         return {
             "camera": cam.name, "from": self._local(self._iso(t0)), "to": self._local(self._iso(t1)),
             "visits": [{
@@ -445,6 +454,7 @@ class History:
                 "suppressed": r["suppressed"], "verdict": r["verdict"],
                 "x": round(rx + r["cx"] * rw, 4), "y": round(ry + r["cy"] * rh, 4),
                 "size": round(max(r["bw"] * rw, r["bh"] * rh), 4),
+                "spread": round(max(r["sx"] * rw, r["sy"] * rh), 4),
             } for r in rows if r["cx"] is not None],
         }
 
