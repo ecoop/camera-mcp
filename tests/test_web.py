@@ -348,7 +348,7 @@ def test_visits_come_before_live_on_the_feeds_view(client):
 def test_viewer_links_the_full_res_still_not_the_clip(client):
     page = client.get("/").text
     assert ">full-res image</a>" in page and "open raw" not in page
-    assert "$('#cliplink').href=(curClip?'/media/visit/'+id+'/frame/boxed'" in page
+    assert "$('#cliplink').href='/visit/'+id+'/image'" in page  # a zoomable page over /frame/boxed, not the clip
 
 
 def test_draw_boxes_outlines_each_box_in_red_at_full_resolution():
@@ -617,3 +617,18 @@ def test_the_map_shows_dots_only_with_their_cameras_picture(client):
     assert "if(seq!==mapSeq)return;" in page  # a newer camera or filter has taken over
     assert "if(mapPic!==cam){mapPic=cam;" in page  # the picture is fetched once per camera, not per filter change
     assert "stage.classList.remove('loading'); mapZoomReset();" in page  # shown once the picture is in
+
+
+def test_the_full_res_image_opens_in_its_own_zoomable_page(client):
+    """"full-res image" opens a page that fills the window with the visit's boxed still and zooms on
+    scroll at the pointer, pans on drag, fits on double click (the browser's own image view only has a
+    click-to-100% magnifier); the boxes switch off, and the JPEG itself is a link away."""
+    page = client.get("/").text
+    assert "$('#cliplink').href='/visit/'+id+'/image'" in page and 'id="cliplink" target="_blank"' in page
+    r = client.get("/visit/42/image")
+    assert r.status_code == 200 and "text/html" in r.headers["content-type"]
+    img = r.text
+    assert "stage.addEventListener('wheel'" in img and "function zoomAt" in img and "fitAll();" in img
+    assert "'/frame/boxed':'/frame'" in img and "/thumb'" in img  # boxes switchable; thumbnail-only visits still show
+    assert 'id="raw"' in img and "$('#raw').href=img.src" in img
+    assert client.get("/visit/x/image").status_code == 404

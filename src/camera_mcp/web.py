@@ -365,6 +365,9 @@ def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
     async def zones_page(request: Request) -> HTMLResponse:
         return HTMLResponse(ZONES_PAGE)
 
+    async def image_page(request: Request) -> HTMLResponse:
+        return HTMLResponse(IMAGE_PAGE)  # the page reads the visit id from its own path
+
     async def api_zones(request: Request) -> JSONResponse:
         return JSONResponse({"editable": editable,
                              "cameras": [_zone_state(c) for c in cameras.values() if c.enabled]})
@@ -437,6 +440,7 @@ def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
         Route("/analytics", index),  # same single-page doc; the client shows the analytics view
         Route("/map", index),  # ...or the labels map
         Route("/zones", zones_page),
+        Route("/visit/{vid:int}/image", image_page),
         Route("/api/cameras", api_cameras),
         Route("/api/status", api_status),
         Route("/api/health", api_health),
@@ -748,7 +752,7 @@ dialog .vmeta a{color:var(--accent);cursor:pointer}
       <button class="lblbtn" data-v="wrong_species">&times; wrong sp.</button></span>
     <button class="boxbtn" id="nextbtn" title="the next visit in the grid you haven't labelled">next unlabelled &rsaquo;</button>
     <button class="boxbtn" id="hidebtn" title="hide this visit, or show one the gate or a zone hid (undo a mistake)">hide</button>
-    <button class="boxbtn on" id="boxbtn">hide boxes</button> &middot; <a id="cliplink" title="the full-resolution still with the detector's boxes, on its own (pinch or zoom to inspect)">full-res image</a>
+    <button class="boxbtn on" id="boxbtn">hide boxes</button> &middot; <a id="cliplink" target="_blank" rel="noopener" title="the full-resolution still in its own tab: scroll to zoom, drag to pan">full-res image</a>
   </span></div></dialog>
 <script>
 const $=s=>document.querySelector(s), params=()=>{const p=new URLSearchParams();
@@ -934,7 +938,7 @@ function openVisit(t){const id=t.dataset.id; curVisit=id; curClip=t.dataset.clip
   $('#boxbtn').classList.toggle('on',boxesOn); $('#boxbtn').textContent=boxesOn?'hide boxes':'show boxes';
   $('#clipmeta').textContent=t.querySelector('.sp').firstChild.textContent+' — '+t.querySelector('.sub').textContent+
     (t.dataset.sup?' · hidden: '+t.dataset.sup.replace('_',' '):'');
-  $('#cliplink').href=(curClip?'/media/visit/'+id+'/frame/boxed':'/media/visit/'+id+'/thumb');  // the clip has "watch clip"
+  $('#cliplink').href='/visit/'+id+'/image';  // full window, scroll-zoom (the clip has "watch clip")
   loadLabel(id); if(!$('#clip').open)$('#clip').showModal();
   if(curClip) loadBoxData().then(drawBoxes);}
 async function loadBoxData(){if(boxData)return; try{boxData=await (await fetch('/api/visit/'+curVisit+'/boxes')).json();}catch(e){boxData={frames:[]};}}
@@ -1432,3 +1436,65 @@ def main(argv: list[str] | None = None) -> None:
 
 if __name__ == "__main__":
     main()
+
+
+# The full-res still of one visit on its own, filling the window: scroll (or pinch) to zoom at the
+# pointer, drag to pan, double-click to fit. The browser's own image view only offers a click-to-100%
+# magnifier. The detector's boxes are drawn in (the /frame/boxed render), switchable off.
+IMAGE_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Visit image &middot; Yard Sentry</title>
+<style>
+:root{--bg:#0e0f12;--bar:#191c22;--ink:#d6d9e0;--muted:#868b95;--line:#353a45;--accent:#8fa6cf;
+  --mono:"IBM Plex Mono",ui-monospace,Menlo,monospace}
+*{box-sizing:border-box} html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);overflow:hidden}
+#stage{position:fixed;inset:0;cursor:grab;touch-action:none} #stage.panning{cursor:grabbing}
+#img{position:absolute;left:0;top:0;transform-origin:0 0;user-select:none;-webkit-user-drag:none;max-width:none}
+#img.px{image-rendering:pixelated}
+.bar{position:fixed;left:50%;bottom:14px;transform:translateX(-50%);display:flex;gap:.35rem;align-items:center;
+  background:var(--bar);border:1px solid var(--line);border-radius:10px;padding:.3rem .45rem;font-family:var(--mono);
+  font-size:.75rem;z-index:2;white-space:nowrap;max-width:calc(100vw - 16px);overflow-x:auto}
+.bar button,.bar a{font:inherit;color:var(--ink);background:transparent;border:1px solid var(--line);border-radius:7px;
+  padding:.15rem .5rem;cursor:pointer;text-decoration:none} .bar button.on{background:var(--ink);color:var(--bg)}
+.bar .lvl{color:var(--muted);min-width:3.4rem;text-align:center} .bar .cap{color:var(--muted);padding:0 .3rem}
+#msg{position:fixed;inset:0;display:grid;place-items:center;font-family:var(--mono);font-size:.8rem;color:var(--muted)}
+</style></head><body>
+<div id="msg">loading image&hellip;</div>
+<div id="stage"><img id="img" alt="visit still"></div>
+<div class="bar"><span class="cap" id="cap"></span>
+  <button id="zout" title="zoom out">&minus;</button><span class="lvl" id="lvl"></span><button id="zin" title="zoom in">+</button>
+  <button id="fit" title="fit the whole picture (or double-click)">fit</button>
+  <button id="boxes" class="on" title="the detector's boxes and confidences">boxes</button>
+  <a id="raw" target="_blank" rel="noopener" title="the JPEG itself, e.g. to save it">jpeg &nearr;</a></div>
+<script>
+const $=s=>document.querySelector(s), id=(location.pathname.match(/\\/visit\\/(\\d+)/)||[])[1];
+const img=$('#img'), stage=$('#stage');
+let s=1, fit=1, tx=0, ty=0, boxes=true, triedThumb=false, pan=null;
+const clamp=(v,a,b)=>Math.min(b,Math.max(a,v));
+function src(){return '/media/visit/'+id+(boxes?'/frame/boxed':'/frame');}
+function place(){const W=innerWidth,H=innerHeight,w=img.naturalWidth*s,h=img.naturalHeight*s;
+  tx=w<=W?(W-w)/2:clamp(tx,W-w,0); ty=h<=H?(H-h)/2:clamp(ty,H-h,0);
+  img.style.transform='translate('+tx+'px,'+ty+'px) scale('+s+')'; img.classList.toggle('px',s>2);
+  $('#lvl').textContent=Math.round(s/fit*100)+'%';}
+function fitAll(){if(!img.naturalWidth)return; fit=Math.min(innerWidth/img.naturalWidth,innerHeight/img.naturalHeight); s=fit; place();}
+function zoomAt(f,cx,cy){if(!img.naturalWidth)return; const n=clamp(s*f,fit,Math.max(fit*20,4));
+  if(cx==null){cx=innerWidth/2;cy=innerHeight/2;} tx=cx-(cx-tx)*n/s; ty=cy-(cy-ty)*n/s; s=n; place();}
+img.onload=()=>{$('#msg').style.display='none'; const keep=fit!==1&&s!==fit; if(!keep)fitAll(); else place();
+  $('#cap').textContent='#'+id+' \u00b7 '+img.naturalWidth+'\u00d7'+img.naturalHeight; $('#raw').href=img.src;};
+img.onerror=()=>{if(!triedThumb){triedThumb=true; boxes=false; $('#boxes').style.display='none';
+  img.src='/media/visit/'+id+'/thumb'; return;} $('#msg').textContent='no image for this visit';};
+stage.addEventListener('wheel',e=>{e.preventDefault(); zoomAt(Math.exp(-e.deltaY*(e.ctrlKey?0.01:0.0015)),e.clientX,e.clientY);},{passive:false});
+stage.addEventListener('pointerdown',e=>{pan={x:e.clientX,y:e.clientY}; stage.classList.add('panning');
+  try{stage.setPointerCapture(e.pointerId);}catch(_){}});
+stage.addEventListener('pointermove',e=>{if(!pan)return; tx+=e.clientX-pan.x; ty+=e.clientY-pan.y; pan={x:e.clientX,y:e.clientY}; place();});
+let lastUp=0, downAt=null;  // a double click/tap fits (counted here: pointer capture can eat dblclick)
+stage.addEventListener('pointerdown',e=>{downAt={x:e.clientX,y:e.clientY};});
+stage.addEventListener('pointerup',e=>{pan=null; stage.classList.remove('panning');
+  const still=downAt&&Math.abs(e.clientX-downAt.x)+Math.abs(e.clientY-downAt.y)<6, now=Date.now();
+  if(still&&now-lastUp<350){fitAll(); lastUp=0;} else lastUp=still?now:0;});
+addEventListener('resize',()=>{const was=s===fit; fit=Math.min(innerWidth/img.naturalWidth,innerHeight/img.naturalHeight); if(was)s=fit; s=Math.max(s,fit); place();});
+addEventListener('keydown',e=>{if(e.key==='+'||e.key==='=')zoomAt(1.5); else if(e.key==='-')zoomAt(1/1.5); else if(e.key==='0')fitAll();});
+$('#zin').onclick=()=>zoomAt(1.5); $('#zout').onclick=()=>zoomAt(1/1.5); $('#fit').onclick=fitAll;
+$('#boxes').onclick=()=>{boxes=!boxes; $('#boxes').classList.toggle('on',boxes); img.src=src();};  // same size: the view is kept
+if(id){document.title='#'+id+' \u00b7 Yard Sentry'; img.src=src();} else $('#msg').textContent='no visit given';
+</script></body></html>
+"""

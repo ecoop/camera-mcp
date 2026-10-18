@@ -180,7 +180,12 @@ against the camera's own history first (read-only):
 To check the gate by eye, pick species "animal" and tick **+ hidden** on the dashboard: hidden
 visits show a badge with the reason. Open one and mark it real or false; the viewer moves on to
 the next unlabelled visit (or press **next unlabelled ›**). The backtest's `lbl_real` column then
-counts real animals the rules would hide.
+counts real animals the rules would hide. A label is per visit, not per box: a visit you mark real
+can still have a junk box or two (a bird on the feeder plus a box on the clothesline).
+
+In the viewer, scroll to zoom and drag to pan. **full-res image** opens the still in its own tab,
+filling the window, with the same scroll-zoom and drag-pan (double-click fits; **boxes** turns the
+detector's boxes off; **jpeg ↗** is the file itself).
 
 **Exclusion zones.** In the zones editor (`/zones`), the **exclude** tool marks spots that only
 ever produce junk: a feeder roof's underside, a patch of hedge. Each zone has a mode (click it to
