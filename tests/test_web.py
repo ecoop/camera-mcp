@@ -605,3 +605,15 @@ def test_the_map_zooms_with_dots_that_keep_their_size(client):
     assert "transform:scale(var(--iz))" in page  # dots counter-scaled: tight clusters spread apart when zoomed
     assert "if(mJustPanned){ev.stopPropagation()" in page  # a drag to pan isn't a click on a dot
     assert "?w=2560" in page  # the full-resolution picture, so zooming stays sharp
+
+
+def test_the_map_shows_dots_only_with_their_cameras_picture(client):
+    """Dots appear with the picture they belong to: while a new camera's picture loads, the stage keeps
+    the picture's shape and shows neither (no squashed dots, no dots over the previous camera); a
+    filter change keeps the picture; a slower, superseded request is dropped."""
+    page = client.get("/map").text
+    assert ".mapstage.loading img,.mapstage.loading #mapdots{visibility:hidden}" in page
+    assert "aspect-ratio:var(--ar,16/9)" in page and "loading picture\\2026" in page
+    assert "if(seq!==mapSeq)return;" in page  # a newer camera or filter has taken over
+    assert "if(mapPic!==cam){mapPic=cam;" in page  # the picture is fetched once per camera, not per filter change
+    assert "stage.classList.remove('loading'); mapZoomReset();" in page  # shown once the picture is in

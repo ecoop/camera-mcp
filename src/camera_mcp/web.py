@@ -622,6 +622,10 @@ dialog .vmeta a{color:var(--accent);cursor:pointer}
 .mpz{position:relative;transform-origin:0 0}  /* the picture and its dots, zoomed and panned together */
 .mapstage img{width:100%;height:auto;display:block;pointer-events:none}
 #mapdots{position:absolute;inset:0;--iz:1}
+/* while a camera's picture loads: hold the stage at the picture's shape, show neither it nor dots */
+.mapstage.loading .mpz{aspect-ratio:var(--ar,16/9)} .mapstage.loading img,.mapstage.loading #mapdots{visibility:hidden}
+.mapstage.loading::after{content:'loading picture\\2026';position:absolute;inset:0;display:grid;place-items:center;
+  font-family:var(--mono);font-size:.75rem;color:var(--muted)}
 .mdot{position:absolute;width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:50%;cursor:pointer;
   border:2px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.45);opacity:.9;transform:scale(var(--iz))}
 .mdot:hover{transform:scale(calc(var(--iz) * 1.6));opacity:1;z-index:2}
@@ -795,21 +799,27 @@ const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;'
 // ---- the labels map: past visits plotted where they were boxed; click one to open it ----
 let MAPV={};  // id -> visit, for the tooltip and the viewer
 const VLABEL={false:'false',real:'real',wrong_species:'wrong sp.',none:'unlabelled'};
-async function loadMap(){const cam=$('#camera').value, dots=$('#mapdots');
-  dots.innerHTML=''; $('#maplegend').textContent='';
-  if(!cam){$('#mapimg').removeAttribute('src');$('#maplegend').textContent='pick a camera in the filter above';return;}
+let mapSeq=0, mapCam=null, mapPic=null;  // the latest request (a slower one is dropped); the camera shown; the one whose picture was asked for
+async function loadMap(){const cam=$('#camera').value, dots=$('#mapdots'), stage=$('#mapstage'), seq=++mapSeq;
+  if(!cam){mapCam=mapPic=null;dots.innerHTML='';stage.classList.remove('loading');$('#mapimg').removeAttribute('src');
+    $('#maplegend').textContent='pick a camera in the filter above';return;}
+  const newCam=cam!==mapCam; if(newCam){mapCam=cam;dots.innerHTML='';$('#maplegend').textContent='';stage.classList.add('loading');}
   const want=[...document.querySelectorAll('.mv:checked')].map(c=>c.value);
   const p=new URLSearchParams({camera:cam,since:$('#since').value}); if($('#taxon').value)p.set('taxon',$('#taxon').value);
   if(want.includes('none'))p.set('unlabelled','1');
-  let d; try{d=await (await fetch('/api/labels/map?'+p)).json();}catch(e){$('#maplegend').textContent='map unavailable';return;}
-  if(d.error){$('#maplegend').textContent=d.error;return;}
+  let d; try{d=await (await fetch('/api/labels/map?'+p)).json();}catch(e){d={error:'map unavailable'};}
+  if(seq!==mapSeq)return;  // a newer request (another camera or filter) has taken over
+  if(d.error){stage.classList.remove('loading');$('#maplegend').textContent=d.error;return;}
   const vs=(d.visits||[]).filter(v=>want.includes(v.verdict||'none'));
-  // the live picture, else the saved frame of a recent visit (up to 10 tried: some may have aged out)
-  const img=$('#mapimg'), fallbacks=(d.visits||[]).filter(v=>v.clip).slice(0,10).map(v=>'/media/visit/'+v.id+'/frame');
-  img.onerror=()=>{const next=fallbacks.shift(); if(next)img.src=next;};
-  img.src='/api/snapshot/'+encodeURIComponent(cam)+'?w=2560&t='+Date.now();  // full detail for zooming in
-  mapZoomReset();
-  MAPV={}; const counts={};
+  // a new camera's picture: the live one, else the saved frame of a recent visit (up to 10 tried: some
+  // may have aged out). Picture and dots show together once it's in; a filter change keeps the picture.
+  if(mapPic!==cam){mapPic=cam; const img=$('#mapimg'), fallbacks=(d.visits||[]).filter(v=>v.clip).slice(0,10).map(v=>'/media/visit/'+v.id+'/frame');
+    img.onload=()=>{if(mapCam!==cam)return; stage.style.setProperty('--ar',img.naturalWidth+'/'+img.naturalHeight);
+      stage.classList.remove('loading'); mapZoomReset();};
+    img.onerror=()=>{const next=fallbacks.shift(); if(next)img.src=next; else stage.classList.remove('loading');};
+    img.src='/api/snapshot/'+encodeURIComponent(cam)+'?w=2560&t='+Date.now();  // full detail for zooming in
+    mapZoomReset();}
+  dots.innerHTML=''; MAPV={}; const counts={};
   vs.slice().reverse().forEach(v=>{MAPV[v.id]=v; const k=v.verdict||'none'; counts[k]=(counts[k]||0)+1;  // newest on top
     const el=document.createElement('div'); el.className='mdot v-'+k; el.dataset.id=v.id;
     el.style.left=(v.x*100)+'%'; el.style.top=(v.y*100)+'%';
