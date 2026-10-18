@@ -615,7 +615,7 @@ def test_the_map_shows_dots_only_with_their_cameras_picture(client):
     assert ".mapstage.loading img,.mapstage.loading #mapdots{visibility:hidden}" in page
     assert "aspect-ratio:var(--ar,16/9)" in page and "loading picture\\2026" in page
     assert "if(seq!==mapSeq)return;" in page  # a newer camera or filter has taken over
-    assert "if(mapPic!==cam){mapPic=cam;" in page  # the picture is fetched once per camera, not per filter change
+    assert "if(mapPic!==pic){mapPic=pic;" in page  # fetched once per camera (and day/night still), not per filter change
     assert "stage.classList.remove('loading'); mapZoomReset();" in page  # shown once the picture is in
 
 
@@ -644,3 +644,13 @@ def test_nothing_is_defined_after_the_main_guard():
     body = ast.parse(inspect.getsource(web)).body
     last = body[-1]
     assert isinstance(last, ast.If) and "__main__" in ast.unparse(last.test)
+
+
+def test_the_map_shows_day_or_night_apart(client):
+    """Day / night (IR) checkboxes beside the label ones; with only one ticked, unknown visits drop out
+    and the picture is a recent still in that light (the live view may be the other one)."""
+    page = client.get("/map").text
+    assert 'class="mdn" value="day" checked' in page and 'class="mdn" value="night" checked' in page
+    assert "dn.length===2||dn.includes(lit(v))" in page
+    assert "only?[...stills.map(" in page and "'a '+only+' still, #'+v.id" in page
+    assert "document.querySelectorAll('.mv,.mdn')" in page

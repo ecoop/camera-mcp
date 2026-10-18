@@ -51,6 +51,17 @@ def is_colour(u: np.ndarray, v: np.ndarray, threshold: float = 3.0) -> bool:
     return float(np.abs(u.astype(np.int16) - 128).mean() + np.abs(v.astype(np.int16) - 128).mean()) > threshold
 
 
+def is_infrared(image: np.ndarray) -> bool:
+    """Whether a picture (RGB or BGR, any size: a whole frame or a visit's thumbnail) was taken under
+    the camera's infrared light. The camera sends pure grey then: chroma exactly neutral. A daylight
+    crop, however dull (grey bark, shade), keeps at least ~1; on 4,794 thumbnails every infrared one
+    measured 0 and every daylight one 1 or more, so 0.5 splits them with nothing in between."""
+    if image is None or image.size == 0 or image.ndim != 3:
+        return False
+    yuv = cv2.cvtColor(np.ascontiguousarray(image[..., :3]), cv2.COLOR_RGB2YUV)
+    return not is_colour(yuv[..., 1], yuv[..., 2], threshold=0.5)
+
+
 @dataclass(frozen=True)
 class ViewResult:
     score: float | None  # None: this was the first look in this light (the reference was just taken)

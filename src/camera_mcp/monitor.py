@@ -53,7 +53,7 @@ from camera_mcp.motion import MotionDetector, MotionWindows, Window
 from camera_mcp.probe import ProbeError, probe_stream
 from camera_mcp.scenery import Scenery
 from camera_mcp.store import Store
-from camera_mcp.view import ViewCheck, is_colour
+from camera_mcp.view import ViewCheck, is_colour, is_infrared
 from camera_mcp.visits import Visit, VisitTracker
 
 log = logging.getLogger("camera_mcp.monitor")
@@ -505,8 +505,9 @@ class CameraWorker:
                                             visit.start, f"{name}.mp4")
                 except Exception:  # keep the visit even if its media can't be written
                     log.exception("%s: couldn't save media for the %s visit", self.camera.name, visit.key)
+            night = is_infrared(visit.thumbnail) if visit.thumbnail is not None and visit.thumbnail.size else None
             self.store.add_visit(visit, model=self.analyzer.model if self.analyzer else "",
-                                 thumbnail=thumbnail, clip=clip, still=still, suppressed=visit.suppressed)
+                                 thumbnail=thumbnail, clip=clip, still=still, suppressed=visit.suppressed, night=night)
             with self.lock:
                 self.pending_visits.remove(visit)
 
@@ -884,6 +885,25 @@ class Alerter:
             log.exception("alert error for %s", body)
 
 
+def backfill_night(store: Store, data_dir: Path, stop: threading.Event | None = None) -> int:
+    """Record day/night for visits logged before it was, from their saved thumbnails (view.is_infrared):
+    a few milliseconds each, newest first, in batches. Returns how many were filled in."""
+    done = 0
+    while not (stop and stop.is_set()):
+        todo = store.visits_without_night()
+        if not todo:
+            break
+        flags = []
+        for vid, thumb in todo:
+            img = cv2.imread(str(data_dir / thumb))
+            flags.append((vid, None if img is None else is_infrared(img)))
+        store.set_night(flags)
+        done += len(flags)
+    if done:
+        log.info("recorded day/night for %d earlier visits", done)
+    return done
+
+
 class Monitor:
     def __init__(self, cameras: list[Camera], data_dir: Path, detector: Detector | None = None,
                  tz: tzinfo | None = None):
@@ -901,6 +921,8 @@ class Monitor:
             self.analyzer.start()
         for w in self.workers:
             w.start()
+        threading.Thread(target=backfill_night, args=(self.store, self.data_dir, self.stop), name="night-backfill",
+                         daemon=True).start()
         deadline = time.monotonic() + duration if duration else None
         while not all(w.done for w in self.workers):
             if self.stop.wait(0.5) or deadline and time.monotonic() >= deadline:

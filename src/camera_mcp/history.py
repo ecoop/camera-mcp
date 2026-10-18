@@ -63,6 +63,10 @@ def _tables(db: sqlite3.Connection) -> set[str]:
     return {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
 
 
+def _has_column(db: sqlite3.Connection, name: str) -> bool:
+    return name in {r[1] for r in db.execute("PRAGMA table_info(visits)")}
+
+
 def _gated(db: sqlite3.Connection) -> bool:
     """Whether the log records the unnamed-visit gate's verdicts (an older monitor's doesn't)."""
     return "suppressed" in {r[1] for r in db.execute("PRAGMA table_info(visits)")}
@@ -412,7 +416,8 @@ class History:
         camera's roi crop and mapped back here, using its current roi). An unnamed visit can collect
         boxes on different things, so `spread` says how far its box centres ranged; averaging them
         would place the dot where nothing was. With each visit's label, time and human verdict, so
-        the dashboard can plot past labels over the camera's picture and open any one of them.
+        the dashboard can plot past labels over the camera's picture and open any one of them; `night`
+        says whether it was seen under infrared (None: unknown), for showing day or night apart.
         Labelled visits only, unless `unlabelled`. Raises HistoryError for an unknown camera."""
         now = time.time()
         t0, t1 = parse_when(since, now, self.tz), parse_when(until, now, self.tz)
@@ -430,6 +435,7 @@ class History:
             if not unlabelled:
                 where += " AND l.verdict IS NOT NULL"
             sup = "v.suppressed" if _gated(db) else "NULL"
+            night = "v.night" if _has_column(db, "night") else "NULL"
             rows = db.execute(f"""
                 WITH vs AS (SELECT v.id FROM visits v {join} WHERE {where} ORDER BY v.started_at DESC LIMIT ?),
                 b AS (SELECT f.visit_id AS vid, json_extract(je.value, '$.conf') AS c,
@@ -440,7 +446,7 @@ class History:
                 spread AS (SELECT vid, max(x + w / 2) - min(x + w / 2) AS sx, max(y + h / 2) - min(y + h / 2) AS sy
                            FROM b GROUP BY vid)
                 SELECT v.id, v.label, v.grp, v.started_at, v.frames, v.max_count, v.clip, v.thumbnail,
-                       {sup} AS suppressed, {verdict} AS verdict,
+                       {sup} AS suppressed, {verdict} AS verdict, {night} AS night,
                        best.x + best.w / 2 AS cx, best.y + best.h / 2 AS cy, best.w AS bw, best.h AS bh,
                        spread.sx, spread.sy
                 FROM vs JOIN visits v ON v.id = vs.id {join} JOIN best ON best.vid = v.id JOIN spread ON spread.vid = v.id
@@ -452,6 +458,7 @@ class History:
                 "started": self._local(r["started_at"]), "frames": r["frames"], "max_at_once": r["max_count"],
                 "clip": r["clip"], "has_thumbnail": r["thumbnail"] is not None,
                 "suppressed": r["suppressed"], "verdict": r["verdict"],
+                "night": None if r["night"] in (None, -1) else bool(r["night"]),  # under infrared; None: unknown
                 "x": round(rx + r["cx"] * rw, 4), "y": round(ry + r["cy"] * rh, 4),
                 "size": round(max(r["bw"] * rw, r["bh"] * rh), 4),
                 "spread": round(max(r["sx"] * rw, r["sy"] * rh), 4),

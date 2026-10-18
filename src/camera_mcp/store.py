@@ -115,6 +115,7 @@ ADDED_COLUMNS = {
         "open": "INTEGER NOT NULL DEFAULT 0",  # 1 while the animal is still there (ended_at = last seen so far)
         "still": "TEXT",  # full-res frame aligned to the detection (path); the viewer's default image
         "suppressed": "TEXT",  # why the unnamed-visit gate hid it ('low_conf', 'stationary'); NULL: shown
+        "night": "INTEGER",  # 1: seen under the camera's infrared light, 0: in colour (daylight); NULL: unknown
     },
     "camera_status": {
         "view_score": "REAL",  # last moved-camera check: how well the view matched its reference, 0-1
@@ -218,24 +219,26 @@ class Store:
             self._db.executemany("INSERT OR REPLACE INTO analysis_camera_stats VALUES (?, ?, ?, ?, ?, ?, ?)", values)
 
     def add_visit(self, visit, *, model: str, thumbnail: str | None, clip: str | None,
-                  still: str | None = None, suppressed: str | None = None) -> int:
+                  still: str | None = None, suppressed: str | None = None, night: bool | None = None) -> int:
         """Store a closed visits.Visit and its per-frame detections (completing its open row, if any).
-        `suppressed`: the gate's reason for hiding it (see gate.py); None shows it."""
+        `suppressed`: the gate's reason for hiding it (see gate.py); None shows it. `night`: whether it
+        was seen under infrared (view.is_infrared of its thumbnail); None when unknown."""
         label = visit.label
         values = (visit.camera, iso(visit.start), iso(visit.last_seen), label.name, label.taxonomy, visit.key,
-                  round(label.score, 3), visit.frames, visit.max_count, thumbnail, clip, still, model, suppressed)
+                  round(label.score, 3), visit.frames, visit.max_count, thumbnail, clip, still, model, suppressed,
+                  None if night is None else int(bool(night)))
         with self._lock:
             if getattr(visit, "db_id", None):
                 self._db.execute(
                     "UPDATE visits SET camera = ?, started_at = ?, ended_at = ?, label = ?, taxonomy = ?, grp = ?,"
                     " score = ?, frames = ?, max_count = ?, thumbnail = ?, clip = ?, still = ?, model = ?,"
-                    " suppressed = ?, open = 0 WHERE id = ?", (*values, visit.db_id))
+                    " suppressed = ?, night = ?, open = 0 WHERE id = ?", (*values, visit.db_id))
                 visit_id = visit.db_id
             else:
                 cur = self._db.execute(
                     "INSERT INTO visits (camera, started_at, ended_at, label, taxonomy, grp, score, frames,"
-                    " max_count, thumbnail, clip, still, model, suppressed)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", values)
+                    " max_count, thumbnail, clip, still, model, suppressed, night)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", values)
                 visit_id = int(cur.lastrowid)
             rows = []
             for t, dets in visit.log:
@@ -261,6 +264,19 @@ class Store:
                 " verdict = excluded.verdict, note = excluded.note, at = excluded.at",
                 (visit_id, verdict, note, iso(time.time())),
             )
+
+    def visits_without_night(self, limit: int = 500) -> list[tuple[int, str]]:
+        """(id, thumbnail) of saved visits whose day/night isn't recorded yet (logged before it was)."""
+        with self._lock:
+            return self._db.execute("SELECT id, thumbnail FROM visits WHERE night IS NULL AND thumbnail IS NOT NULL"
+                                    " AND open = 0 ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+
+    def set_night(self, flags: list[tuple[int, bool | None]]) -> None:
+        """Record day (False) / night (True) for visits; None marks one that can't be told (e.g. its
+        thumbnail is gone) as -1, so it isn't looked at again."""
+        with self._lock:
+            self._db.executemany("UPDATE visits SET night = ? WHERE id = ?",
+                                 [(-1 if n is None else int(bool(n)), vid) for vid, n in flags])
 
     def set_visit_suppressed(self, visit_id: int, reason: str | None) -> None:
         """A human's override of whether a visit is hidden: a reason ("manual") hides it, None shows

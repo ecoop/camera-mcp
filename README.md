@@ -244,12 +244,18 @@ old reference:
 ## Labels map
 
 The dashboard's **map** view plots past visits for one camera over its picture: one dot per visit,
-at the average centre of its boxes, coloured by your label (false, real, wrong species, and
-optionally unlabelled). Hover for the label, time and frame count; click a dot to open the visit in
-the usual viewer and re-check or re-label it (the dot recolours). It uses the dashboard's camera,
-species and time filters. Clusters of "false" dots are where an exclusion zone may belong; a "real"
-dot inside one is where a zone would cost you. After a camera is re-aimed, older visits plot against
-the new view, so narrow the time window to after the change.
+at its most confident box (the one its viewer shows), coloured by your label (false, real, wrong
+species, and optionally unlabelled). Hover for the label, time and frame count; click a dot to open
+the visit in the usual viewer and re-check or re-label it (the dot recolours). Scroll to zoom, drag
+to pan. It uses the dashboard's camera, species and time filters. Clusters of "false" dots are where
+an exclusion zone may belong; a "real" dot inside one is where a zone would cost you. After a camera
+is re-aimed, older visits plot against the new view, so narrow the time window to after the change.
+
+**day** / **night (IR)** show visits seen in colour or under the camera's infrared light apart
+(junk behaves differently in each). With only one ticked, the picture is the newest still of that
+kind in the window, so night dots sit on a night view. Each visit's light is read from its
+thumbnail when it's saved: an infrared picture has no colour at all. Visits logged before this are
+filled in when the monitor next starts.
 
 ## Ask the dashboard
 

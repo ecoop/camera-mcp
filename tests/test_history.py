@@ -381,3 +381,35 @@ def test_label_map_places_a_scattered_visit_at_its_most_confident_box(tmp_path):
     (dot,) = h.label_map("west_alley", since="1h")["visits"]
     assert (dot["x"], dot["y"]) == (pytest.approx(0.15), pytest.approx(0.15))  # the 0.44 box, not the mean
     assert dot["spread"] == pytest.approx(0.30)  # centres ranged x 0.15-0.44, y 0.15-0.45: the larger range
+
+
+def test_day_and_night_are_recorded_per_visit_backfilled_and_on_the_map(tmp_path):
+    """Whether a visit was seen under infrared: set for new visits from their thumbnail, filled in for
+    earlier ones from the saved thumbnail (once: one that can't be read isn't retried), and returned by
+    the labels map so the dashboard can show day or night apart."""
+    import cv2
+    import numpy as np
+
+    from camera_mcp.monitor import backfill_night
+    from camera_mcp.taxa import Label
+    from camera_mcp.view import is_infrared
+    from camera_mcp.visits import Box, Detection
+    grey = np.full((90, 90, 3), 120, np.uint8)
+    dull = grey.copy(); dull[..., 0] += 3  # a faint warm cast, as on grey bark in daylight: still colour
+    assert is_infrared(grey) and not is_infrared(dull) and not is_infrared(np.zeros((0, 0, 3), np.uint8))
+    (tmp_path / "media").mkdir()
+    cv2.imwrite(str(tmp_path / "media" / "night.jpg"), grey)
+    cv2.imwrite(str(tmp_path / "media" / "day.jpg"), cv2.cvtColor(dull, cv2.COLOR_RGB2BGR))
+    store = Store(tmp_path / "monitor.db")
+    ids = []
+    for i, (thumb, night) in enumerate((("media/night.jpg", None), ("media/day.jpg", None), ("media/gone.jpg", None),
+                                         ("media/day.jpg", True))):  # the last one was flagged when it was saved
+        v = Visit("backyard", "animal", start=NOW - 600 + i, last_seen=NOW - 590 + i, frames=1)
+        v.votes[("animal", "")] = 1.0
+        v.log = [(NOW - 600 + i, [Detection(Box(0.1 * i, 0.5, 0.1, 0.1, 0.6), Label("animal", "", 0.5), "animal")])]
+        ids.append(store.add_visit(v, model="m", thumbnail=thumb, clip=None, night=night))
+    assert backfill_night(store, tmp_path) == 3 and backfill_night(store, tmp_path) == 0  # once; the flagged one untouched
+    store.close()
+    h = History(tmp_path / "monitor.db", {"backyard": Camera("backyard", "x")}, Site(timezone="UTC"))
+    night = {v["id"]: v["night"] for v in h.label_map("backyard", since="1h", unlabelled=True)["visits"]}
+    assert night == {ids[0]: True, ids[1]: False, ids[2]: None, ids[3]: True}

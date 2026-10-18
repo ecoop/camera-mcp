@@ -619,6 +619,7 @@ dialog .vmeta a{color:var(--accent);cursor:pointer}
 /* the labels map: one dot per visit over the camera's picture */
 .mapctl{display:inline-flex;gap:.7rem;flex-wrap:wrap;text-transform:none;letter-spacing:0;font-family:var(--mono);font-size:.72rem}
 .mapctl label{display:inline-flex;align-items:center;gap:.25rem;cursor:pointer}
+.mapsep{color:var(--line);margin:0 .15rem}
 .sw{display:inline-block;width:10px;height:10px;border-radius:50%;border:2px solid transparent}
 .mapstage{position:relative;border:1px solid var(--line);border-radius:11px;overflow:hidden;background:var(--chrome);
   min-height:120px;touch-action:none;user-select:none}
@@ -711,7 +712,10 @@ dialog .vmeta a{color:var(--accent);cursor:pointer}
       <label><input type="checkbox" class="mv" value="false" checked><i class="sw v-false"></i>false</label>
       <label><input type="checkbox" class="mv" value="real" checked><i class="sw v-real"></i>real</label>
       <label><input type="checkbox" class="mv" value="wrong_species" checked><i class="sw v-wrong_species"></i>wrong sp.</label>
-      <label><input type="checkbox" class="mv" value="none"><i class="sw v-none"></i>unlabelled</label></span>
+      <label><input type="checkbox" class="mv" value="none"><i class="sw v-none"></i>unlabelled</label>
+      <span class="mapsep" aria-hidden="true">|</span>
+      <label title="visits seen in colour (daylight)"><input type="checkbox" class="mdn" value="day" checked>day</label>
+      <label title="visits seen under the camera's infrared light; with only this ticked, the picture is a recent night still"><input type="checkbox" class="mdn" value="night" checked>night (IR)</label></span>
   </div>
   <div class="hint" id="maphint">Each dot is one visit, at its most confident box (the one its viewer shows), coloured by your label. Hover for details; click to open the visit and re-check or re-label it. Scroll (or pinch) to zoom into a cluster, drag to pan; dots stay the same size, so tight clusters spread apart. Uses the camera picked in the filter above and the time window; after a camera is re-aimed, older visits plot against the new view, so narrow the window to after the change.</div>
   <div class="mapstage" id="mapstage"><div class="mpz" id="mpz"><img id="mapimg" alt="camera picture"><div id="mapdots"></div></div>
@@ -803,26 +807,34 @@ const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;'
 // ---- the labels map: past visits plotted where they were boxed; click one to open it ----
 let MAPV={};  // id -> visit, for the tooltip and the viewer
 const VLABEL={false:'false',real:'real',wrong_species:'wrong sp.',none:'unlabelled'};
-let mapSeq=0, mapCam=null, mapPic=null;  // the latest request (a slower one is dropped); the camera shown; the one whose picture was asked for
+// the picture shown: a camera's live view, or (day or night only) a recent still of that kind
+let mapSeq=0, mapCam=null, mapPic=null, mapPicNote='';  // latest request (a slower one is dropped); picture shown; picture asked for
 async function loadMap(){const cam=$('#camera').value, dots=$('#mapdots'), stage=$('#mapstage'), seq=++mapSeq;
   if(!cam){mapCam=mapPic=null;dots.innerHTML='';stage.classList.remove('loading');$('#mapimg').removeAttribute('src');
     $('#maplegend').textContent='pick a camera in the filter above';return;}
-  const newCam=cam!==mapCam; if(newCam){mapCam=cam;dots.innerHTML='';$('#maplegend').textContent='';stage.classList.add('loading');}
+  const dn=[...document.querySelectorAll('.mdn:checked')].map(c=>c.value), only=dn.length===1?dn[0]:'';
+  const key=cam+'|'+only, newPic=key!==mapCam;
+  if(newPic){mapCam=key;dots.innerHTML='';$('#maplegend').textContent='';stage.classList.add('loading');}
   const want=[...document.querySelectorAll('.mv:checked')].map(c=>c.value);
   const p=new URLSearchParams({camera:cam,since:$('#since').value}); if($('#taxon').value)p.set('taxon',$('#taxon').value);
   if(want.includes('none'))p.set('unlabelled','1');
   let d; try{d=await (await fetch('/api/labels/map?'+p)).json();}catch(e){d={error:'map unavailable'};}
   if(seq!==mapSeq)return;  // a newer request (another camera or filter) has taken over
   if(d.error){stage.classList.remove('loading');$('#maplegend').textContent=d.error;return;}
-  const vs=(d.visits||[]).filter(v=>want.includes(v.verdict||'none'));
+  const lit=v=>v.night===true?'night':v.night===false?'day':'';  // '' unknown: shown only when both are
+  const vs=(d.visits||[]).filter(v=>want.includes(v.verdict||'none')&&(dn.length===2||dn.includes(lit(v))));
   // a new camera's picture: the live one, else the saved frame of a recent visit (up to 10 tried: some
   // may have aged out). Picture and dots show together once it's in; a filter change keeps the picture.
-  if(mapPic!==cam){mapPic=cam; const img=$('#mapimg'), fallbacks=(d.visits||[]).filter(v=>v.clip).slice(0,10).map(v=>'/media/visit/'+v.id+'/frame');
-    img.onload=()=>{if(mapCam!==cam)return; stage.style.setProperty('--ar',img.naturalWidth+'/'+img.naturalHeight);
-      stage.classList.remove('loading'); mapZoomReset();};
-    img.onerror=()=>{const next=fallbacks.shift(); if(next)img.src=next; else stage.classList.remove('loading');};
-    img.src='/api/snapshot/'+encodeURIComponent(cam)+'?w=2560&t='+Date.now();  // full detail for zooming in
-    mapZoomReset();}
+  const stills=(d.visits||[]).filter(v=>v.clip&&(!only||lit(v)===only)).slice(0,10);
+  const pic=key+'|'+(only&&stills.length?stills[0].id:'live');  // day/night only: follows the newest still in the window
+  if(mapPic!==pic){mapPic=pic; stage.classList.add('loading'); const img=$('#mapimg'), live='/api/snapshot/'+encodeURIComponent(cam)+'?w=2560&t='+Date.now();
+    // day or night only: the newest still of that kind first (the live view may be the other light)
+    const tries=only?[...stills.map(v=>['/media/visit/'+v.id+'/frame','a '+only+' still, #'+v.id]),[live,'live view']]
+                    :[[live,'live view'],...stills.map(v=>['/media/visit/'+v.id+'/frame','still #'+v.id])];
+    const next=()=>{const t=tries.shift(); if(!t){stage.classList.remove('loading');return;} mapPicNote=t[1]; img.src=t[0];};
+    img.onload=()=>{if(mapCam!==key||mapPic!==pic)return; stage.style.setProperty('--ar',img.naturalWidth+'/'+img.naturalHeight);
+      stage.classList.remove('loading'); mapZoomReset(); const n=$('#mappic'); if(n)n.textContent='picture: '+mapPicNote;};
+    img.onerror=next; next(); mapZoomReset();}
   dots.innerHTML=''; MAPV={}; const counts={};
   vs.slice().reverse().forEach(v=>{MAPV[v.id]=v; const k=v.verdict||'none'; counts[k]=(counts[k]||0)+1;  // newest on top
     const el=document.createElement('div'); el.className='mdot v-'+k; el.dataset.id=v.id;
@@ -832,8 +844,9 @@ async function loadMap(){const cam=$('#camera').value, dots=$('#mapdots'), stage
     el.onclick=()=>{hideTip(); const box=$('#mapgrid'); box.innerHTML=tileHTML(MAPV[v.id]); openVisit(box.querySelector('.tile'));};
     dots.appendChild(el);});
   $('#maplegend').innerHTML=`<span>${Object.entries(counts).map(([k,n])=>`${n} ${VLABEL[k]}`).join(' &middot; ')||'no visits match'} &middot; ${esc(cam)}</span>`+
+    `<span id="mappic">${mapPicNote&&!stage.classList.contains('loading')?'picture: '+esc(mapPicNote):''}</span>`+
     `<span>${(d.from||'').slice(0,10)} &rarr; ${(d.to||'').slice(0,10)}</span>`;}
-document.querySelectorAll('.mv').forEach(c=>c.onchange=()=>{if(VIEW==='map')loadMap();});
+document.querySelectorAll('.mv,.mdn').forEach(c=>c.onchange=()=>{if(VIEW==='map')loadMap();});
 // zoom & pan the map: the picture and dots scale together; dots are counter-scaled (--iz) to keep their size
 let mz=1, mtx=0, mty=0, mpan=null, mJustPanned=false;
 const mclamp=(v,a,b)=>Math.min(b,Math.max(a,v));
