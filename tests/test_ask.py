@@ -55,7 +55,8 @@ def log(tmp_path):
         v.votes[label] = 1.0
         ids.append(store.add_visit(v, model="m", thumbnail=f"media/{cam}/x.jpg", clip=f"media/{cam}/x.mp4"))
     store.close()
-    cams = {n: Camera(n, "x", tags=t) for n, t in (("east_deck", ("under_deck",)), ("west_deck", ()), ("backyard", ("feeder",)))}
+    cams = {n: Camera(n, "x", tags=t, active=w) for n, t, w in (("east_deck", ("under_deck",), "19:00-07:00"),
+                                                                 ("west_deck", (), "19:00-07:00"), ("backyard", ("feeder",), ""))}
     return History(tmp_path / "monitor.db", cams, Site(timezone="UTC")), ids, tmp_path
 
 
@@ -75,7 +76,10 @@ def test_a_question_is_answered_with_the_history_tools_and_its_visits_linked(log
     assert first["model"] == MODEL and first["output_config"] == {"effort": "low"}
     assert first["fallbacks"] == "default" and first["betas"] == [FALLBACK_BETA]
     assert {t["name"] for t in first["tools"]} == {"find_visits", "activity_summary", "monitor_status", "analysis_health"}
-    assert "east_deck (tags: under_deck)" in first["system"][0]["text"]  # the cameras are in the cached prompt
+    system = first["system"][0]["text"]  # the cameras, with their watch hours, are in the cached prompt
+    assert "- east_deck: watched 19:00-07:00 local, paused otherwise; tags: under_deck" in system
+    assert "- backyard: watched around the clock; tags: feeder" in system
+    assert "isn't offline" in system and "weak hint" in system  # paused-by-design and the moved flag
     result = second["messages"][-1]["content"][0]
     assert result["type"] == "tool_result" and not result["is_error"]
     payload = json.loads(result["content"])
@@ -137,3 +141,11 @@ def test_the_dashboard_ask_endpoint(log, monkeypatch):
     assert c.post("/api/ask", json={"question": ""}).status_code == 400
     page = c.get("/").text
     assert 'id="askbox"' in page and "function tileHTML" in page
+
+
+def test_the_box_renders_a_safe_subset_of_markdown(log, monkeypatch):
+    starlette_testclient = pytest.importorskip("starlette.testclient")
+    from camera_mcp.web import build_app
+    history, _, tmp = log
+    page = starlette_testclient.TestClient(build_app(history.cameras, tmp, Site(timezone="UTC"))).get("/").text
+    assert "function renderAnswer" in page and "esc(text)" in page  # escaped first, then bold/bullets/links

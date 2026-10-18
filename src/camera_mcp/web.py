@@ -613,6 +613,7 @@ dialog .vmeta a{color:var(--accent);cursor:pointer}
 .askans .vref{font-family:var(--mono);font-size:.8rem;color:var(--accent);cursor:pointer;text-decoration:none;
   border-bottom:1px dotted var(--accent)}
 .askans.err{color:var(--warn)}
+.askans ul{margin:.25rem 0 .25rem 1.1rem;padding:0} .askans li{margin:.1rem 0}
 .askmeta{font-family:var(--mono);font-size:.66rem;color:var(--muted);margin-top:.35rem}
 .askgrid{margin-top:.6rem}
 .askgrid:empty{display:none}
@@ -743,6 +744,17 @@ function tileHTML(x){return `<a class="tile${x.suppressed?' sup':''}" href="#" d
     `<div class="sub">${x.camera} &middot; ${(x.started||'').slice(5,16).replace('T',' ')}</div></div></a>`;}
 const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 // ---- the ask box ----
+// The answer is escaped first (nothing in it can inject markup), then gets a small, safe subset:
+// [#1234] -> a visit link, **bold** -> bold, "- " lines -> bullets, other newlines -> line breaks.
+function renderAnswer(text,byId){
+  const lines=esc(text).replace(/\\[#(\\d+)\\]/g,(m,id)=>byId[id]?`<a class="vref" data-id="${id}">#${id}</a>`:m)
+    .replace(/\\*\\*([^*\\n]+)\\*\\*/g,'<b>$1</b>').split('\\n');
+  let html='',inList=false;
+  for(const l of lines){const b=l.match(/^\\s*[-•]\\s+(.*)$/);
+    if(b){if(!inList){html+='<ul>';inList=true;} html+=`<li>${b[1]}</li>`;continue;}
+    if(inList){html+='</ul>';inList=false;}
+    html+=l.trim()?l+'<br>':'';}
+  return html+(inList?'</ul>':'');}
 async function askInit(){try{const d=await (await fetch('/api/ask')).json(); if(!d.enabled)return;
   $('#askbox').hidden=false; askMeta(d.spent_today,d.cap);}catch(e){}}
 function askMeta(spent,cap,cost){$('#askmeta').textContent=(cost!=null?`this answer ≈ $${cost.toFixed(3)} · `:'')+
@@ -753,8 +765,7 @@ $('#askform').addEventListener('submit',async ev=>{ev.preventDefault(); const q=
     const d=await res.json();
     if(!res.ok){$('#askans').className='askans err';$('#askans').textContent=d.error||'something went wrong';return;}
     const byId={}; (d.visits||[]).forEach(v=>byId[v.id]=v);
-    $('#askans').innerHTML=esc(d.answer).replace(/\\[#(\\d+)\\]/g,(m,id)=>byId[id]?`<a class="vref" data-id="${id}">#${id}</a>`:m)
-      .replace(/\\n/g,'<br>');
+    $('#askans').innerHTML=renderAnswer(d.answer,byId);
     $('#askgrid').innerHTML=(d.visits||[]).filter(v=>v.has_thumbnail).map(tileHTML).join('');
     $('#askgrid').querySelectorAll('.tile').forEach(t=>t.onclick=e=>{e.preventDefault();openVisit(t);});
     $('#askans').querySelectorAll('.vref').forEach(a=>a.onclick=()=>{const t=$('#askgrid .tile[data-id="'+a.dataset.id+'"]');if(t)openVisit(t);});

@@ -97,11 +97,19 @@ STYLE = """
 You answer questions about this visit log for its owner, from a box on their camera dashboard.
 
 - Use the tools; never guess at what the log holds. Times you receive are local.
-- Answer briefly in plain text (no markdown tables). Lead with the answer: a count, a time, a yes/no.
+- Be short: lead with the answer (a count, a time, a yes/no), then at most three short sentences
+  or "- " bullets. Plain text; **bold** sparingly; no headings or tables. More only if asked.
 - When you mention specific visits, write each one's id as [#1234] (the dashboard turns these into
   thumbnails). Mention at most 12.
-- Be honest about absence, as the tool notes say: if coverage was low or motion went unanalysed,
-  say which camera wasn't fully watched.
+- Watch hours: some cameras are only watched during the hours listed below and are paused
+  otherwise, by design. A paused camera isn't offline or broken: say it wasn't watching then, and
+  only when that matters to the answer (e.g. an absence during its paused hours).
+- Coverage: if a camera was only partly watched in its watch hours, or motion went unanalysed, say
+  which, in one clause.
+- The "looks moved" flag is a sensitive check that also trips on changing light, often on several
+  cameras at once. Treat it as a weak hint: don't let it cast doubt on a count by itself, and
+  mention it at most in one short clause, only if the question is about a camera being moved or
+  a surprising absence.
 - You can only read the log. You can't see images or clips, change settings, or control cameras;
   say so if asked.
 """
@@ -206,8 +214,10 @@ class Asker:
     def system(self) -> list[dict]:
         """The stable part of the prompt (cached): the MCP server's own guidance and the cameras."""
         from camera_mcp.server import INSTRUCTIONS
-        cams = "\n".join(f"- {c.name}" + (f" (tags: {', '.join(c.tags)})" if c.tags else "")
-                         for c in self.history.cameras.values() if c.enabled)
+        def line(c) -> str:
+            hours = f"watched {c.active} local, paused otherwise" if c.active else "watched around the clock"
+            return f"- {c.name}: {hours}" + (f"; tags: {', '.join(c.tags)}" if c.tags else "")
+        cams = "\n".join(line(c) for c in self.history.cameras.values() if c.enabled)
         return [{"type": "text", "text": INSTRUCTIONS + "\nCameras:\n" + cams + "\n" + STYLE}]
 
     def run_tool(self, name: str, args: dict, seen: dict) -> str:
