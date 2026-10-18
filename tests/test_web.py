@@ -632,3 +632,15 @@ def test_the_full_res_image_opens_in_its_own_zoomable_page(client):
     assert "'/frame/boxed':'/frame'" in img and "/thumb'" in img  # boxes switchable; thumbnail-only visits still show
     assert 'id="raw"' in img and "$('#raw').href=img.src" in img
     assert client.get("/visit/x/image").status_code == 404
+
+
+def test_nothing_is_defined_after_the_main_guard():
+    """The web agent runs `python -m camera_mcp.web`, which enters main() at the guard: anything defined
+    below it doesn't exist yet when requests arrive (imports, as in these tests, never notice)."""
+    import ast
+    import inspect
+
+    import camera_mcp.web as web
+    body = ast.parse(inspect.getsource(web)).body
+    last = body[-1]
+    assert isinstance(last, ast.If) and "__main__" in ast.unparse(last.test)

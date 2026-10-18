@@ -1414,30 +1414,6 @@ init();
 </script></div></body></html>"""
 
 
-def main(argv: list[str] | None = None) -> None:
-    import uvicorn
-
-    parser = argparse.ArgumentParser(prog="python -m camera_mcp.web", description=__doc__,
-                                     formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--config", default=default_config_path())
-    parser.add_argument("--data-dir", type=Path, default=None)
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8080)
-    args = parser.parse_args(argv)
-    data_dir = args.data_dir or default_data_dir()
-    try:
-        cameras = load_cameras(args.config, require_login=False, zones=data_dir / "zones.json")
-        site = load_site(args.config)
-    except ConfigError as e:
-        raise SystemExit(f"web: {e}")
-    app = build_app(cameras, data_dir, site)
-    uvicorn.run(app, host=args.host, port=args.port, log_level="info")
-
-
-if __name__ == "__main__":
-    main()
-
-
 # The full-res still of one visit on its own, filling the window: scroll (or pinch) to zoom at the
 # pointer, drag to pan, double-click to fit. The browser's own image view only offers a click-to-100%
 # magnifier. The detector's boxes are drawn in (the /frame/boxed render), switchable off.
@@ -1498,3 +1474,27 @@ $('#boxes').onclick=()=>{boxes=!boxes; $('#boxes').classList.toggle('on',boxes);
 if(id){document.title='#'+id+' \u00b7 Yard Sentry'; img.src=src();} else $('#msg').textContent='no visit given';
 </script></body></html>
 """
+
+
+def main(argv: list[str] | None = None) -> None:
+    import uvicorn
+
+    parser = argparse.ArgumentParser(prog="python -m camera_mcp.web", description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--config", default=default_config_path())
+    parser.add_argument("--data-dir", type=Path, default=None)
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=8080)
+    args = parser.parse_args(argv)
+    data_dir = args.data_dir or default_data_dir()
+    try:
+        cameras = load_cameras(args.config, require_login=False, zones=data_dir / "zones.json")
+        site = load_site(args.config)
+    except ConfigError as e:
+        raise SystemExit(f"web: {e}")
+    app = build_app(cameras, data_dir, site)
+    uvicorn.run(app, host=args.host, port=args.port, log_level="info")
+
+
+if __name__ == "__main__":
+    main()
