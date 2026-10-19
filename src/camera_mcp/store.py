@@ -65,6 +65,16 @@ CREATE TABLE IF NOT EXISTS visit_labels (  -- a human's correctness label on a v
   at        TEXT NOT NULL        -- when the label was set (UTC ISO)
 );
 
+CREATE TABLE IF NOT EXISTS box_labels (  -- a human's verdict on one detector box (finer than visit_labels)
+  visit_id  INTEGER NOT NULL REFERENCES visits(id),
+  frame_ts  TEXT NOT NULL,       -- the box's frame: visit_frames.ts
+  box       INTEGER NOT NULL,    -- its index in that frame's stored boxes list
+  verdict   TEXT NOT NULL,       -- 'real' | 'false' | 'wrong_species', as for a visit
+  species   TEXT,                -- what it actually was, if the human said (not for 'false')
+  at        TEXT NOT NULL,       -- when it was set (UTC ISO)
+  PRIMARY KEY (visit_id, frame_ts, box)
+);
+
 CREATE TABLE IF NOT EXISTS camera_uptime (
   camera      TEXT NOT NULL,
   started_at  TEXT NOT NULL,       -- a stretch of time the monitor was receiving this camera's frames
@@ -117,11 +127,25 @@ ADDED_COLUMNS = {
         "suppressed": "TEXT",  # why the unnamed-visit gate hid it ('low_conf', 'stationary'); NULL: shown
         "night": "INTEGER",  # 1: seen under the camera's infrared light, 0: in colour (daylight); NULL: unknown
     },
+    "visit_labels": {
+        "species": "TEXT",  # what it actually was, if the human said: the right name for 'wrong_species',
+        # or a name for an unnamed 'real' visit (an "animal" that was a rat); never for 'false'
+    },
     "camera_status": {
         "view_score": "REAL",  # last moved-camera check: how well the view matched its reference, 0-1
         "view_moved_since": "TEXT",  # set while the camera looks moved; NULL otherwise
     },
 }
+
+
+def _species(verdict: str, species: str | None) -> str | None:
+    """A checked verdict's species: trimmed, None if blank; not allowed with 'false' (nothing was there)."""
+    if verdict not in VERDICTS:
+        raise ValueError(f"verdict must be one of {', '.join(VERDICTS)}")
+    species = (species or "").strip()[:80] or None
+    if species and verdict == "false":
+        raise ValueError("a 'false' verdict can't name a species: nothing real was there")
+    return species
 
 
 def iso(t: float) -> str:
@@ -250,19 +274,44 @@ class Store:
             self._db.executemany("INSERT INTO visit_frames VALUES (?, ?, ?, ?, ?, ?)", rows)
             return visit_id
 
-    def set_visit_label(self, visit_id: int, verdict: str, note: str | None = None) -> None:
+    def set_visit_label(self, visit_id: int, verdict: str, note: str | None = None,
+                        species: str | None = None) -> None:
         """Record a human's correctness verdict on a visit, upserting on visit_id so a re-label
-        replaces the old one. Raises ValueError for an unknown verdict or a visit that isn't there."""
-        if verdict not in VERDICTS:
-            raise ValueError(f"verdict must be one of {', '.join(VERDICTS)}")
+        replaces the old one; `species` is what it actually was, if they said. Raises ValueError for
+        an unknown verdict, a species on a 'false' verdict, or a visit that isn't there."""
+        species = _species(verdict, species)
         with self._lock:
             if self._db.execute("SELECT 1 FROM visits WHERE id = ?", (visit_id,)).fetchone() is None:
                 raise ValueError(f"no visit {visit_id}")
             self._db.execute(
-                "INSERT INTO visit_labels (visit_id, verdict, note, at) VALUES (?, ?, ?, ?)"
+                "INSERT INTO visit_labels (visit_id, verdict, note, at, species) VALUES (?, ?, ?, ?, ?)"
                 " ON CONFLICT(visit_id) DO UPDATE SET"
-                " verdict = excluded.verdict, note = excluded.note, at = excluded.at",
-                (visit_id, verdict, note, iso(time.time())),
+                " verdict = excluded.verdict, note = excluded.note, at = excluded.at, species = excluded.species",
+                (visit_id, verdict, note, iso(time.time()), species),
+            )
+
+    def set_box_label(self, visit_id: int, frame_ts: str, box: int, verdict: str | None,
+                      species: str | None = None) -> None:
+        """Record a human's verdict on one box: the `box`-th of the visit's frame at `frame_ts`
+        (visit_frames.ts), replacing any earlier one; verdict None removes it. Raises ValueError for
+        an unknown verdict, a species on 'false', or a frame or box the visit doesn't have."""
+        species = _species(verdict, species) if verdict is not None else None
+        with self._lock:
+            row = self._db.execute("SELECT boxes FROM visit_frames WHERE visit_id = ? AND ts = ?",
+                                   (visit_id, frame_ts)).fetchone()
+            if row is None:
+                raise ValueError(f"visit {visit_id} has no frame at {frame_ts}")
+            if not 0 <= box < len(json.loads(row[0])):
+                raise ValueError(f"that frame of visit {visit_id} has no box {box}")
+            if verdict is None:
+                self._db.execute("DELETE FROM box_labels WHERE visit_id = ? AND frame_ts = ? AND box = ?",
+                                 (visit_id, frame_ts, box))
+                return
+            self._db.execute(
+                "INSERT INTO box_labels (visit_id, frame_ts, box, verdict, species, at) VALUES (?, ?, ?, ?, ?, ?)"
+                " ON CONFLICT(visit_id, frame_ts, box) DO UPDATE SET"
+                " verdict = excluded.verdict, species = excluded.species, at = excluded.at",
+                (visit_id, frame_ts, box, verdict, species, iso(time.time())),
             )
 
     def visits_without_night(self, limit: int = 500) -> list[tuple[int, str]]:

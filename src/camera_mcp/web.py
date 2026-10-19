@@ -156,7 +156,8 @@ def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
 
     def mapped_boxes(vid: int) -> dict:
         """A visit's per-frame boxes as fractions of the FULL frame (roi-mapped), each frame's clip
-        offset, and `best`: the frame with the most confident box. Raises HistoryError."""
+        offset and time (`ts`, which with a box's stored index `i` names it for tagging), each box's
+        `tag` (history.box_tags), and `best`: the frame with the most confident box. Raises HistoryError."""
         d = history.visit_boxes(vid)
         cam = find_camera(cameras, d["camera"])
         roi = cam.roi if cam else None  # boxes are fractions of the roi crop; map to the full frame
@@ -166,7 +167,7 @@ def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
         except (ValueError, TypeError):
             start = None
 
-        def mapbox(b):
+        def mapbox(b, i, tag):
             try:
                 x, y, w, h = b["bbox"]
             except (KeyError, ValueError, TypeError):
@@ -174,23 +175,21 @@ def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
             if roi:
                 rx, ry, rw, rh = roi
                 x, y, w, h = rx + x * rw, ry + y * rh, w * rw, h * rh
-            return {"conf": b.get("conf"), "x": round(x, 4), "y": round(y, 4),
-                    "w": round(w, 4), "h": round(h, 4)}
+            return {"i": i, "conf": b.get("conf"), "x": round(x, 4), "y": round(y, 4),
+                    "w": round(w, 4), "h": round(h, 4), "tag": tag}
 
-        frames, best_i, best_conf = [], 0, -1.0
-        for i, f in enumerate(d["frames"]):
-            boxes = [m for m in (mapbox(b) for b in f["boxes"]) if m]
+        frames = []
+        for f in d["frames"]:
+            boxes = [m for m in (mapbox(b, i, t) for i, (b, t) in enumerate(zip(f["boxes"], f["tags"]))) if m]
             try:
                 offset = datetime.fromisoformat(f["ts"]).timestamp() - start + pre if start else 0.0
             except (ValueError, TypeError):
                 offset = 0.0
-            fc = max((b["conf"] or 0 for b in boxes), default=0.0)
-            if fc > best_conf:
-                best_conf, best_i = fc, i
-            frames.append({"offset": round(max(0.0, offset), 2), "label": f["label"],
+            frames.append({"ts": f["ts"], "offset": round(max(0.0, offset), 2), "label": f["label"],
                            "taxonomy": f["taxonomy"], "score": f["score"], "boxes": boxes})
         return {"camera": d["camera"], "has_clip": d["has_clip"], "roi": list(roi) if roi else None,
-                "label": d["label"], "taxonomy": d["taxonomy"], "best": best_i, "frames": frames}
+                "label": d["label"], "taxonomy": d["taxonomy"], "best": d["best"], "frames": frames,
+                "visit_tag": d["visit_tag"]}
 
     async def api_visit_boxes(request: Request):
         try:
@@ -218,16 +217,54 @@ def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
             return JSONResponse({"error": f"verdict must be one of {', '.join(VERDICTS)}"}, status_code=400)
         note = body.get("note")
         note = str(note).strip() or None if note is not None else None
+        species = (str(body.get("species") or "").strip() or None)
+        if species and verdict == "false":
+            return JSONResponse({"error": "a 'false' verdict can't name a species"}, status_code=400)
         if not db_path.exists():
             return JSONResponse({"error": "there's no visit log yet: the monitor hasn't run"}, status_code=503)
         store = Store(db_path)
         try:
-            store.set_visit_label(vid, verdict, note)
+            store.set_visit_label(vid, verdict, note, species)
         except ValueError as e:
             return JSONResponse({"error": str(e)}, status_code=404)
         finally:
             store.close()
-        return JSONResponse({"ok": True, "label": {"verdict": verdict, "note": note}})
+        return JSONResponse({"ok": True, "label": {"verdict": verdict, "note": note, "species": species}})
+
+    async def api_box_label_set(request: Request):
+        """Tag one box: {"ts": its frame's time, "box": its index (both from /api/visit/{id}/boxes),
+        "verdict": real | false | wrong_species | null to clear, "species": optional}."""
+        if not editable:
+            return JSONResponse({"error": "labeling is disabled (CAMERA_MCP_WEB_READONLY)"}, status_code=403)
+        vid = int(request.path_params["vid"])
+        try:
+            body = await request.json()
+            ts, box = str(body["ts"]), int(body["box"])
+        except (ValueError, KeyError, TypeError, json.JSONDecodeError):
+            return JSONResponse({"error": "send {ts, box, verdict}"}, status_code=400)
+        verdict = body.get("verdict") or None
+        species = (str(body.get("species") or "").strip() or None)
+        if verdict is not None and verdict not in VERDICTS:
+            return JSONResponse({"error": f"verdict must be one of {', '.join(VERDICTS)}, or null"}, status_code=400)
+        if species and verdict in (None, "false"):
+            return JSONResponse({"error": "only a real or wrong_species box can name a species"}, status_code=400)
+        if not db_path.exists():
+            return JSONResponse({"error": "there's no visit log yet: the monitor hasn't run"}, status_code=503)
+        store = Store(db_path)
+        try:
+            store.set_box_label(vid, ts, box, verdict, species)
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=404)
+        finally:
+            store.close()
+        return JSONResponse({"ok": True, "box": {"ts": ts, "i": box, "verdict": verdict, "species": species}})
+
+    async def api_needs_box_tags(request: Request):
+        """Visits tagged real whose still has a box with no tag yet (history.needs_box_tags)."""
+        r = _ask(history.needs_box_tags, request.query_params.get("camera") or None)
+        if isinstance(r, Response):
+            return r
+        return JSONResponse({"visits": r, "count": len(r)})
 
     async def api_ask_status(request: Request) -> JSONResponse:
         """Whether asking is on here, and today's spend against the cap (the dashboard shows the box)."""
@@ -461,6 +498,8 @@ def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
         Route("/api/visit/{vid:int}/label", api_visit_label_get, methods=["GET"]),
         Route("/api/visit/{vid:int}/label", api_visit_label_set, methods=["POST"]),
         Route("/api/visit/{vid:int}/hidden", api_visit_hidden_set, methods=["POST"]),
+        Route("/api/visit/{vid:int}/box-label", api_box_label_set, methods=["POST"]),
+        Route("/api/labels/needs-box-tags", api_needs_box_tags),
         Route("/media/visit/{vid:int}/thumb", media_thumb),
         Route("/media/visit/{vid:int}/frame", media_frame),
         Route("/media/visit/{vid:int}/frame/boxed", media_frame_boxed),

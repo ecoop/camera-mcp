@@ -413,3 +413,61 @@ def test_day_and_night_are_recorded_per_visit_backfilled_and_on_the_map(tmp_path
     h = History(tmp_path / "monitor.db", {"backyard": Camera("backyard", "x")}, Site(timezone="UTC"))
     night = {v["id"]: v["night"] for v in h.label_map("backyard", since="1h", unlabelled=True)["visits"]}
     assert night == {ids[0]: True, ids[1]: False, ids[2]: None, ids[3]: True}
+
+
+# ---- tags per box, and species on tags ---------------------------------------------------------
+
+def _tagged_visit(store, cam, boxes_per_frame, start):
+    """A stored visit whose frames hold the given boxes (Box tuples); returns its id."""
+    from camera_mcp.taxa import Label
+    from camera_mcp.visits import Box, Detection
+    v = Visit(cam, "animal", start=start, last_seen=start + len(boxes_per_frame), frames=len(boxes_per_frame))
+    v.votes[("animal", "")] = 1.0
+    v.log = [(start + i, [Detection(Box(*b), Label("animal", "", 0.5), "animal") for b in boxes])
+             for i, boxes in enumerate(boxes_per_frame)]
+    return store.add_visit(v, model="m", thumbnail=None, clip=None)
+
+
+def test_box_tags_inherit_the_visit_tag_only_where_it_must_hold(tmp_path):
+    """A 'false' or 'wrong_species' visit's tag holds for every box, and so does a 'real' one whose
+    boxes stayed in one place; a 'real' visit whose boxes were in several places may hold junk boxes
+    too, so they stay untagged until a human tags them. A box's own tag always wins."""
+    store = Store(tmp_path / "monitor.db")
+    still_bird = _tagged_visit(store, "backyard", [[(0.40, 0.40, 0.05, 0.05, 0.7)]] * 3, NOW - 900)
+    roaming = _tagged_visit(store, "backyard", [[(0.10, 0.10, 0.05, 0.05, 0.4)],  # a box on fruit...
+                                                [(0.60, 0.50, 0.05, 0.05, 0.8), (0.30, 0.70, 0.04, 0.04, 0.3)]],
+                            NOW - 800)  # ...then the bird elsewhere, plus another box, on the still
+    junk = _tagged_visit(store, "backyard", [[(0.10, 0.10, 0.05, 0.05, 0.3)], [(0.70, 0.70, 0.05, 0.05, 0.3)]], NOW - 700)
+    store.set_visit_label(still_bird, "real", species="house finch")
+    store.set_visit_label(roaming, "real")
+    store.set_visit_label(junk, "false")
+    with pytest.raises(ValueError, match="species"):
+        store.set_visit_label(junk, "false", species="rat")  # nothing real was there
+    store.close()
+    h = History(tmp_path / "monitor.db", {"backyard": Camera("backyard", "x")}, Site(timezone="UTC"))
+    bird = h.visit_boxes(still_bird)
+    assert {t["verdict"] for f in bird["frames"] for t in f["tags"]} == {"real"}
+    assert bird["frames"][0]["tags"][0] == {"verdict": "real", "species": "house finch", "source": "visit"}
+    assert h.visit_label(still_bird)["species"] == "house finch"
+    assert all(t["verdict"] == "false" for f in h.visit_boxes(junk)["frames"] for t in f["tags"])
+    roam = h.visit_boxes(roaming)
+    assert roam["best"] == 1 and roam["frames"][1]["tags"] == [None, None]  # several places: unknown
+    assert h.needs_box_tags() == [roaming] and h.needs_box_tags("backyard") == [roaming]
+
+    store = Store(tmp_path / "monitor.db")
+    ts = roam["frames"][1]["ts"]
+    store.set_box_label(roaming, ts, 0, "real", species="dark-eyed junco")
+    assert h.needs_box_tags() == [roaming]  # one box on the still is still unknown
+    store.set_box_label(roaming, ts, 1, "false")
+    assert h.needs_box_tags() == []  # every box on the still is known now
+    tags = h.visit_boxes(roaming)["frames"][1]["tags"]
+    assert tags == [{"verdict": "real", "species": "dark-eyed junco", "source": "box"},
+                    {"verdict": "false", "species": None, "source": "box"}]
+    store.set_box_label(roaming, ts, 1, None)  # cleared: unknown again
+    assert h.needs_box_tags() == [roaming]
+    for bad in ((ts, 5, "real"), ("1999-01-01T00:00:00Z", 0, "real"), (ts, 0, "maybe")):
+        with pytest.raises(ValueError):
+            store.set_box_label(roaming, *bad)
+    with pytest.raises(ValueError, match="species"):
+        store.set_box_label(roaming, ts, 0, "false", species="rat")
+    store.close()

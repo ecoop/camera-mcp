@@ -662,3 +662,29 @@ def test_map_dots_grow_a_little_when_zoomed_and_are_easy_to_hit(client):
     page = client.get("/map").text
     assert "setProperty('--iz',Math.pow(mz,-0.65))" in page
     assert ".mdot::after{content:'';position:absolute;inset:-6px" in page
+
+
+def test_tags_carry_a_species_and_boxes_can_be_tagged(tmp_path):
+    """The tag API takes a species (not on 'false'); a box is named by its frame time and stored index,
+    both in /api/visit/{id}/boxes, and its tag shows there; the revisit list is served."""
+    from camera_mcp.config import Camera
+    from camera_mcp.web import build_app
+    _one_visit(tmp_path)
+    c = starlette_testclient.TestClient(build_app({"fence": Camera("fence", "f.mp4")}, tmp_path, None))
+    r = c.post("/api/visit/1/label", json={"verdict": "wrong_species", "species": "norway rat"})
+    assert r.status_code == 200 and c.get("/api/visit/1/label").json()["label"]["species"] == "norway rat"
+    assert c.post("/api/visit/1/label", json={"verdict": "false", "species": "rat"}).status_code == 400
+    b = c.get("/api/visit/1/boxes").json()
+    frame = b["frames"][b["best"]]
+    box = frame["boxes"][0]
+    assert box["i"] == 0 and box["tag"]["source"] == "visit" and b["visit_tag"]["verdict"] == "wrong_species"
+    r = c.post("/api/visit/1/box-label", json={"ts": frame["ts"], "box": 0, "verdict": "real", "species": "norway rat"})
+    assert r.status_code == 200
+    assert c.get("/api/visit/1/boxes").json()["frames"][0]["boxes"][0]["tag"] == \
+        {"verdict": "real", "species": "norway rat", "source": "box"}
+    assert c.post("/api/visit/1/box-label", json={"ts": frame["ts"], "box": 3, "verdict": "real"}).status_code == 404
+    assert c.post("/api/visit/1/box-label", json={"ts": frame["ts"], "box": 0, "verdict": "false",
+                                                  "species": "rat"}).status_code == 400
+    assert c.post("/api/visit/1/box-label", json={"box": 0}).status_code == 400
+    assert c.post("/api/visit/1/box-label", json={"ts": frame["ts"], "box": 0, "verdict": None}).status_code == 200
+    assert c.get("/api/labels/needs-box-tags").json() == {"visits": [], "count": 0}

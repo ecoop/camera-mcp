@@ -4,7 +4,7 @@
 ![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-blue)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
-_Last updated: 2026-10-18_
+_Last updated: 2026-10-19_
 
 An MCP server over the home IP cameras. A model can list the cameras and look at a current frame
 from any of them; detections, activity and recording come in later phases. Combines the camera
@@ -180,8 +180,14 @@ against the camera's own history first (read-only):
 To check the gate by eye, pick species "animal" and tick **+ hidden** on the dashboard: hidden
 visits show a badge with the reason. Open one and mark it real or false; the viewer moves on to
 the next unlabelled visit (or press **next unlabelled ›**). The backtest's `lbl_real` column then
-counts real animals the rules would hide. A label is per visit, not per box: a visit you mark real
-can still have a junk box or two (a bird on the feeder plus a box on the clothesline).
+counts real animals the rules would hide. A label is per visit, but a visit you mark real
+can still have a junk box or two (a bird on the feeder plus a box on the clothesline), so single
+boxes can be tagged too, and any tag can say what the animal actually was (a species: the right
+name for a wrong-species visit, or a name for an unnamed one; never on a false one). A box with no
+tag of its own takes its visit's where that must hold: every box of a false or wrong-species visit,
+and of a real visit whose boxes all stayed in one place. A real visit whose boxes moved around
+leaves them untagged; `/api/labels/needs-box-tags` lists the ones whose still still has such a box
+(the ones to revisit before using the stills as training data).
 
 In the viewer, scroll to zoom and drag to pan. **full-res image** opens the still in its own tab,
 filling the window, with the same scroll-zoom and drag-pan (double-click fits; **boxes** turns the

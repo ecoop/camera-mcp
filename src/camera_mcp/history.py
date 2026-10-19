@@ -63,6 +63,37 @@ def _tables(db: sqlite3.Connection) -> set[str]:
     return {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
 
 
+ONE_PLACE = 0.05  # a visit whose box centres all fall within this (fraction of the frame) stayed in one place
+
+
+def box_tags(frames: list[dict], label: dict | None, explicit: dict) -> list[list[dict | None]]:
+    """Each box's tag, frame by frame: the human's tag on that box if there is one (source "box"),
+    else the visit's tag where it must hold for every box (source "visit"): a 'false' or
+    'wrong_species' visit, or a 'real' one whose boxes all stayed in one place. A 'real' visit whose
+    boxes were in several places may hold junk boxes too (a bird on the feeder, a box on the
+    clothesline), so its boxes stay untagged (None) until a human tags them. `explicit` maps
+    (frame ts, box index) to {"verdict", "species"}; `label` is the visit's {"verdict", "species"}."""
+    centres = [(b["bbox"][0] + b["bbox"][2] / 2, b["bbox"][1] + b["bbox"][3] / 2)
+               for f in frames for b in f["boxes"] if len(b.get("bbox") or ()) == 4]
+    one_place = bool(centres) and max(max(c[0] for c in centres) - min(c[0] for c in centres),
+                                      max(c[1] for c in centres) - min(c[1] for c in centres)) <= ONE_PLACE
+    inherited = None
+    if label and (label["verdict"] != "real" or one_place):
+        inherited = {"verdict": label["verdict"], "species": label.get("species"), "source": "visit"}
+    return [[{**explicit[(f["ts"], i)], "source": "box"} if (f["ts"], i) in explicit else inherited
+             for i in range(len(f["boxes"]))] for f in frames]
+
+
+def best_frame(frames: list[dict]) -> int:
+    """The frame with the most confident box: the one the visit's still, viewer and map dot show."""
+    best, conf = 0, -1.0
+    for i, f in enumerate(frames):
+        c = max((b.get("conf") or 0 for b in f["boxes"]), default=0.0)
+        if c > conf:
+            best, conf = i, c
+    return best
+
+
 def _has_column(db: sqlite3.Connection, name: str) -> bool:
     return name in {r[1] for r in db.execute("PRAGMA table_info(visits)")}
 
@@ -499,7 +530,8 @@ class History:
     def visit_boxes(self, visit_id: int) -> dict:
         """A visit's per-frame detector boxes (the visit_frames table), with its camera, start time
         and whether a clip was kept. Each frame's `boxes` are fractions of the analysis frame — i.e.
-        the camera's roi crop if it has one; the web layer maps them to the full frame. Raises
+        the camera's roi crop if it has one; the web layer maps them to the full frame. Each frame
+        also has `tags`, one per box (see box_tags), and `best` is the frame the still shows. Raises
         HistoryError if the visit is unknown."""
         import json
         with closing(self._db()) as db:
@@ -509,6 +541,10 @@ class History:
                 raise HistoryError(f"no visit {visit_id}")
             rows = db.execute("SELECT ts, label, taxonomy, score, boxes FROM visit_frames"
                               " WHERE visit_id = ? ORDER BY ts", (visit_id,)).fetchall()
+            label = self._label(db, visit_id)
+            explicit = {(r["frame_ts"], r["box"]): {"verdict": r["verdict"], "species": r["species"]}
+                        for r in db.execute("SELECT frame_ts, box, verdict, species FROM box_labels WHERE visit_id = ?",
+                                            (visit_id,))} if "box_labels" in _tables(db) else {}
         frames = []
         for r in rows:
             try:
@@ -517,20 +553,61 @@ class History:
                 boxes = []
             frames.append({"ts": r["ts"], "label": r["label"], "taxonomy": r["taxonomy"],
                            "score": r["score"], "boxes": boxes})
+        for f, tags in zip(frames, box_tags(frames, label, explicit)):
+            f["tags"] = tags
         return {"camera": v["camera"], "started_at": v["started_at"], "has_clip": bool(v["clip"]),
-                "label": v["label"], "taxonomy": v["taxonomy"], "frames": frames}
+                "label": v["label"], "taxonomy": v["taxonomy"], "frames": frames, "best": best_frame(frames),
+                "visit_tag": label}
 
-    def visit_label(self, visit_id: int) -> dict | None:
-        """The human correctness label on a visit, or None if it hasn't been labelled (or the log
-        is from an older monitor with no visit_labels table)."""
-        with closing(self._db()) as db:
-            if "visit_labels" not in _tables(db):
-                return None
-            r = db.execute("SELECT verdict, note, at FROM visit_labels WHERE visit_id = ?",
-                           (visit_id,)).fetchone()
+    def _label(self, db, visit_id: int) -> dict | None:
+        if "visit_labels" not in _tables(db):
+            return None
+        species = "species" if "species" in {r[1] for r in db.execute("PRAGMA table_info(visit_labels)")} else "NULL"
+        r = db.execute(f"SELECT verdict, note, at, {species} AS species FROM visit_labels WHERE visit_id = ?",
+                       (visit_id,)).fetchone()
         if r is None:
             return None
-        return {"verdict": r["verdict"], "note": r["note"], "at": self._local(r["at"])}
+        return {"verdict": r["verdict"], "species": r["species"], "note": r["note"], "at": self._local(r["at"])}
+
+    def visit_label(self, visit_id: int) -> dict | None:
+        """The human correctness label on a visit (with the species they gave, if any), or None if it
+        hasn't been labelled (or the log is from an older monitor with no visit_labels table)."""
+        with closing(self._db()) as db:
+            return self._label(db, visit_id)
+
+    def needs_box_tags(self, camera: str | None = None, limit: int = 500) -> list[int]:
+        """Visits tagged real whose still (best frame) shows a box with no tag of its own or
+        inherited (see box_tags): the ones to revisit so every box on a training still is known.
+        Newest first."""
+        import json
+        with closing(self._db()) as db:
+            if "visit_labels" not in _tables(db):
+                return []
+            q = "SELECT v.id FROM visits v JOIN visit_labels l ON l.visit_id = v.id WHERE l.verdict = 'real'"
+            params: list = []
+            if camera:
+                cam = find_camera(self.cameras, camera)
+                if cam is None:
+                    raise HistoryError(f"unknown camera {camera!r}; known: {', '.join(sorted(self.cameras))}")
+                q += " AND v.camera = ?"
+                params.append(cam.name)
+            ids = [r["id"] for r in db.execute(q + " ORDER BY v.started_at DESC", params)]
+            has_box = "box_labels" in _tables(db)
+            out = []
+            for vid in ids:
+                frames = [{"ts": r["ts"], "boxes": json.loads(r["boxes"] or "[]")}
+                          for r in db.execute("SELECT ts, boxes FROM visit_frames WHERE visit_id = ? ORDER BY ts", (vid,))]
+                if not frames:
+                    continue
+                explicit = {(r["frame_ts"], r["box"]): {"verdict": r["verdict"], "species": r["species"]}
+                            for r in db.execute("SELECT frame_ts, box, verdict, species FROM box_labels WHERE visit_id = ?",
+                                                (vid,))} if has_box else {}
+                tags = box_tags(frames, self._label(db, vid), explicit)[best_frame(frames)]
+                if any(t is None for t in tags):
+                    out.append(vid)
+                    if len(out) >= limit:
+                        break
+        return out
 
     def label_counts(self) -> dict:
         """How many visits carry each verdict, and the total labelled. Zeros (and an empty
