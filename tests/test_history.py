@@ -471,3 +471,21 @@ def test_box_tags_inherit_the_visit_tag_only_where_it_must_hold(tmp_path):
     with pytest.raises(ValueError, match="species"):
         store.set_box_label(roaming, ts, 0, "false", species="rat")
     store.close()
+
+
+def test_tag_species_and_visits_by_id(tmp_path):
+    """The picker's suggestions are the species named in tags, most used first; visits_by_id returns
+    visits in the order asked, shaped as find_visits returns them (the revisit list opens them)."""
+    store = Store(tmp_path / "monitor.db")
+    a = _tagged_visit(store, "backyard", [[(0.4, 0.4, 0.05, 0.05, 0.7)]], NOW - 900)
+    b = _tagged_visit(store, "backyard", [[(0.4, 0.4, 0.05, 0.05, 0.7)], [(0.8, 0.8, 0.05, 0.05, 0.9)]], NOW - 800)
+    store.set_visit_label(a, "wrong_species", species="norway rat")
+    store.set_visit_label(b, "real", species="house finch")
+    frames = History(tmp_path / "monitor.db", {"backyard": Camera("backyard", "x")}, Site(timezone="UTC")).visit_boxes(b)["frames"]
+    store.set_box_label(b, frames[1]["ts"], 0, "real", species="norway rat")
+    store.close()
+    h = History(tmp_path / "monitor.db", {"backyard": Camera("backyard", "x")}, Site(timezone="UTC"))
+    assert h.tagged_species() == ["norway rat", "house finch"]
+    got = h.visits_by_id([b, 999, a])
+    assert [v["id"] for v in got] == [b, a] and got[0]["verdict"] == "real" and "clip" in got[0]
+    assert set(got[0]) == set(h.find_visits(since="1h")["visits"][0])

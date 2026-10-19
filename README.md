@@ -186,8 +186,15 @@ boxes can be tagged too, and any tag can say what the animal actually was (a spe
 name for a wrong-species visit, or a name for an unnamed one; never on a false one). A box with no
 tag of its own takes its visit's where that must hold: every box of a false or wrong-species visit,
 and of a real visit whose boxes all stayed in one place. A real visit whose boxes moved around
-leaves them untagged; `/api/labels/needs-box-tags` lists the ones whose still still has such a box
-(the ones to revisit before using the stills as training data).
+leaves them untagged.
+
+In the viewer, click a box on the still (a click, not a drag) and tag it in the row below; boxes
+are outlined by their tag (green real, grey false, amber wrong species, red none yet; dashed when
+the tag comes from the visit's), with a ✓ / ✗ / ≠ mark. Tagging a box real makes an untagged visit
+real. A real or wrong-species tag has a **what was it?** field, suggesting names you've used and
+groups seen here; a wrong-species tag waits for it instead of moving on. **next box to tag ›**
+walks the real visits whose still still has an untagged box (narrowed to the camera filter): the
+ones to revisit before the stills are used as training data.
 
 In the viewer, scroll to zoom and drag to pan. **full-res image** opens the still in its own tab,
 filling the window, with the same scroll-zoom and drag-pan (double-click fits; **boxes** turns the

@@ -260,11 +260,20 @@ def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
         return JSONResponse({"ok": True, "box": {"ts": ts, "i": box, "verdict": verdict, "species": species}})
 
     async def api_needs_box_tags(request: Request):
-        """Visits tagged real whose still has a box with no tag yet (history.needs_box_tags)."""
-        r = _ask(history.needs_box_tags, request.query_params.get("camera") or None)
-        if isinstance(r, Response):
-            return r
-        return JSONResponse({"visits": r, "count": len(r)})
+        """Visits tagged real whose still has a box with no tag yet (history.needs_box_tags), newest
+        first, as /api/visits returns them, so the viewer can open them in turn."""
+        ids = _ask(history.needs_box_tags, request.query_params.get("camera") or None)
+        if isinstance(ids, Response):
+            return ids
+        return JSONResponse({"visits": history.visits_by_id(ids), "count": len(ids)})
+
+    async def api_tag_species(request: Request):
+        """Suggestions for the tag species picker: names used in tags so far (most used first), then
+        the groups seen on this site (rat, raccoon, songbirds, ...). Any other name can be typed."""
+        used = _ask(history.tagged_species)
+        used = [] if isinstance(used, Response) else used
+        seen = [t for t in history.observed_taxa() if t not in used]
+        return JSONResponse({"species": used + seen})
 
     async def api_ask_status(request: Request) -> JSONResponse:
         """Whether asking is on here, and today's spend against the cap (the dashboard shows the box)."""
@@ -500,6 +509,7 @@ def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
         Route("/api/visit/{vid:int}/hidden", api_visit_hidden_set, methods=["POST"]),
         Route("/api/visit/{vid:int}/box-label", api_box_label_set, methods=["POST"]),
         Route("/api/labels/needs-box-tags", api_needs_box_tags),
+        Route("/api/labels/species", api_tag_species),
         Route("/media/visit/{vid:int}/thumb", media_thumb),
         Route("/media/visit/{vid:int}/frame", media_frame),
         Route("/media/visit/{vid:int}/frame/boxed", media_frame_boxed),
@@ -704,6 +714,15 @@ dialog .vmeta a{color:var(--accent);cursor:pointer}
 .boxov text{fill:#ff3b30;font-family:var(--mono);font-size:3.2px;paint-order:stroke;
   stroke:rgba(0,0,0,.55);stroke-width:.6px;dominant-baseline:text-after-edge}
 .boxbtn{border:1px solid var(--line);border-radius:6px;padding:.15rem .5rem;color:var(--muted);background:none;font-family:var(--mono);font-size:.72rem;cursor:pointer}
+.boxbtn:disabled{opacity:.45;cursor:default}
+/* tags on single boxes: colour = the box's tag; dashed = taken from the visit's tag; thick = selected */
+.boxov rect.t-real{stroke:#34c759} .boxov rect.t-false{stroke:#9a9aa0} .boxov rect.t-wrong_species{stroke:#ff9f0a}
+.boxov text.t-real{fill:#34c759} .boxov text.t-false{fill:#c7c7cc} .boxov text.t-wrong_species{fill:#ff9f0a}
+.boxov rect.inh{stroke-dasharray:6 4} .boxov rect.sel{stroke-width:4}
+dialog .boxtag{font-family:var(--mono);font-size:.72rem;color:var(--muted);padding:0 .8rem .6rem;display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
+dialog .boxtag[hidden],.spin[hidden],.lblset[hidden],.boxbtn[hidden]{display:none}
+.spin{font-family:var(--mono);font-size:.72rem;width:11rem;padding:.12rem .4rem;border:1px solid var(--line);border-radius:6px;
+  background:var(--frame);color:var(--ink)}
 .boxbtn.on{color:var(--warn);border-color:var(--warn)}
 </style></head><body><div class="wrap">
 <div class="bar"><div class="brand">&#129437; Yard Sentry</div>
@@ -794,10 +813,20 @@ dialog .vmeta a{color:var(--accent);cursor:pointer}
       <button class="lblbtn" data-v="real">&check; real</button>
       <button class="lblbtn" data-v="false">&times; false</button>
       <button class="lblbtn" data-v="wrong_species">&times; wrong sp.</button></span>
+    <input class="spin" id="vsp" list="spplist" hidden placeholder="what was it?" title="what the animal actually was; saved when you leave the field">
     <button class="boxbtn" id="nextbtn" title="the next visit in the grid you haven't labelled">next unlabelled &rsaquo;</button>
+    <button class="boxbtn" id="boxqbtn" title="the next visit you tagged real whose still has a box with no tag yet (narrowed to the camera filter)">next box to tag &rsaquo;</button>
     <button class="boxbtn" id="hidebtn" title="hide this visit, or show one the gate or a zone hid (undo a mistake)">hide</button>
     <button class="boxbtn on" id="boxbtn">hide boxes</button> &middot; <a id="cliplink" target="_blank" rel="noopener" title="the full-resolution still in its own tab: scroll to zoom, drag to pan">full-res image</a>
-  </span></div></dialog>
+  </span></div>
+  <div class="boxtag" id="boxtag" hidden><span id="boxtagwhat"></span>
+    <span class="lblset" id="boxtagset" hidden title="tag just this box">
+      <button class="lblbtn" data-v="real">&check; real</button>
+      <button class="lblbtn" data-v="false">&times; false</button>
+      <button class="lblbtn" data-v="wrong_species">&times; wrong sp.</button></span>
+    <input class="spin" id="boxsp" list="spplist" hidden placeholder="what was it?" title="what this box's animal actually was">
+    <button class="boxbtn" id="boxclear" hidden title="remove this box's own tag (it takes the visit's again, where that holds)">clear</button></div>
+</dialog><div id="queuegrid" hidden></div><datalist id="spplist"></datalist>
 <script>
 const $=s=>document.querySelector(s), params=()=>{const p=new URLSearchParams();
   p.set('since',$('#since').value); if($('#taxon').value)p.set('taxon',$('#taxon').value);
@@ -942,24 +971,32 @@ $('#askform').addEventListener('submit',async ev=>{ev.preventDefault(); const q=
   }catch(e){$('#askans').className='askans err';$('#askans').textContent='network error: '+e;}
   finally{$('#askbtn').disabled=false;}});
 askInit();
-let labelEditable=true;
-function markLabel(v){$('#lblset').querySelectorAll('.lblbtn').forEach(b=>b.classList.toggle('on',b.dataset.v===v));}
-async function loadLabel(id){markLabel(null);
+let labelEditable=true, curLabel=null;
+// the visit's tag; real and wrong sp. can also say what it was (the species field)
+function markLabel(v,species){$('#lblset').querySelectorAll('.lblbtn').forEach(b=>b.classList.toggle('on',b.dataset.v===v));
+  const sp=$('#vsp'); sp.hidden=!(v==='real'||v==='wrong_species'); sp.disabled=!labelEditable;
+  sp.placeholder=v==='wrong_species'?'what was it?':'species (optional)'; if(species!==undefined)sp.value=species||'';}
+async function loadLabel(id){curLabel=null; markLabel(null,'');
   $('#lblset').querySelectorAll('.lblbtn').forEach(b=>b.disabled=true);
   try{const d=await (await fetch('/api/visit/'+id+'/label')).json();
-    labelEditable=d.editable; markLabel(d.label&&d.label.verdict);
+    labelEditable=d.editable; curLabel=d.label; markLabel(d.label&&d.label.verdict,d.label&&d.label.species);
     $('#lblset').querySelectorAll('.lblbtn').forEach(b=>b.disabled=!d.editable);
   }catch(e){}}
+async function postLabel(v,species){const res=await fetch('/api/visit/'+curVisit+'/label',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({verdict:v,species:v==='false'?'':species||''})});
+  if(res.ok){curLabel={verdict:v,species:v==='false'?null:species||null}; if(species)SPP=false;
+    if(curClip){boxData=null; loadBoxData().then(drawBoxes);} refreshBoxQueue();}  // inherited box tags follow the visit's
+  return res.ok;}
+$('#vsp').addEventListener('change',()=>{if(labelEditable&&curVisit&&curLabel)postLabel(curLabel.verdict,$('#vsp').value.trim()).then(()=>loadSpecies());});
 async function setLabel(v){if(!labelEditable||!curVisit)return;
-  try{const res=await fetch('/api/visit/'+curVisit+'/label',{method:'POST',
-    headers:{'Content-Type':'application/json'},body:JSON.stringify({verdict:v})});
-    if(res.ok){markLabel(v); const t=tileOf(curVisit);
+  try{const keep=v!=='false'?$('#vsp').value.trim():'';
+    if(await postLabel(v,keep)){markLabel(v); const t=tileOf(curVisit);
       const md=document.querySelector('.mdot[data-id="'+curVisit+'"]'); if(md){md.className='mdot v-'+v; MAPV[curVisit]&&(MAPV[curVisit].verdict=v);}
       if(VIEW==='map'){if(t)t.dataset.verdict=v;}  // map view: recolour only; never auto-advance through another view's grid
       else if(t){const had=t.dataset.verdict; t.dataset.verdict=v;  // CSS restyles the tile from this
-        if(!had)setTimeout(nextUnlabelled,350);}}}catch(e){}}  // first label on a visit: move on to the next
+        if(!had&&v!=='wrong_species')setTimeout(nextUnlabelled,350);}}}catch(e){}}  // first label: move on (wrong sp. waits for its species)
 function tileOf(id){return document.querySelector('#grid .tile[data-id="'+id+'"]')||document.querySelector('#askgrid .tile[data-id="'+id+'"]')
-  ||document.querySelector('#mapgrid .tile[data-id="'+id+'"]');}
+  ||document.querySelector('#mapgrid .tile[data-id="'+id+'"]')||document.querySelector('#queuegrid .tile[data-id="'+id+'"]');}
 function nextUnlabelled(){const ts=[...document.querySelectorAll('#grid .tile')], i=ts.indexOf(tileOf(curVisit));
   const t=[...ts.slice(i+1),...ts.slice(0,Math.max(i,0))].find(x=>!x.dataset.verdict);
   if(t)openVisit(t); else $('#clipmeta').textContent='every visit in the grid is labelled';}
@@ -982,7 +1019,7 @@ async function toggleHidden(){const t=tileOf(curVisit); if(!t||!labelEditable)re
     markHidden(t); $('#clipmeta').textContent=$('#clipmeta').textContent.replace(/ · hidden: .*$/,'')+
       (d.suppressed?' · hidden: '+d.suppressed:'');}catch(e){}}
 function openVisit(t){const id=t.dataset.id; curVisit=id; curClip=t.dataset.clip==='1'; markHidden(t);
-  boxData=null; mode='image'; boxesOn=curClip; stillFB=false; resetZoom();
+  boxData=null; selBox=null; mode='image'; boxesOn=curClip; stillFB=false; resetZoom(); $('#boxtag').hidden=true;
   const img=$('#still'), vid=$('#clip video');
   img.style.display=''; vid.pause(); vid.removeAttribute('src'); vid.style.display='none';
   img.src=(curClip?'/media/visit/'+id+'/frame':'/media/visit/'+id+'/thumb');
@@ -993,23 +1030,72 @@ function openVisit(t){const id=t.dataset.id; curVisit=id; curClip=t.dataset.clip
   $('#clipmeta').textContent=t.querySelector('.sp').firstChild.textContent+' — '+t.querySelector('.sub').textContent+
     (t.dataset.sup?' · hidden: '+t.dataset.sup.replace('_',' '):'');
   $('#cliplink').href='/visit/'+id+'/image';  // full window, scroll-zoom (the clip has "watch clip")
-  loadLabel(id); if(!$('#clip').open)$('#clip').showModal();
+  loadLabel(id); loadSpecies(); refreshBoxQueue(); if(!$('#clip').open)$('#clip').showModal();
   if(curClip) loadBoxData().then(drawBoxes);}
 async function loadBoxData(){if(boxData)return; try{boxData=await (await fetch('/api/visit/'+curVisit+'/boxes')).json();}catch(e){boxData={frames:[]};}}
 function drawBoxes(){const svg=$('#boxov'), m=activeMedia();
   svg.style.width=(m.clientWidth||m.offsetWidth)+'px'; svg.style.height=(m.clientHeight||m.offsetHeight)+'px';
-  if(!boxesOn||!boxData){svg.style.display='none';return;}
+  if(!boxesOn||!boxData){svg.style.display='none';renderBoxTag();return;}
   if(!boxData.frames||!boxData.frames.length){svg.innerHTML='<text x="2" y="7">no boxes stored</text>';svg.style.display='block';return;}
   const f=boxData.frames[boxData.best]||boxData.frames[0]; let s='';
-  (f.boxes||[]).forEach(b=>{const x=b.x*100,y=b.y*100,w=b.w*100,h=b.h*100;
-    s+='<rect x="'+x.toFixed(2)+'" y="'+y.toFixed(2)+'" width="'+w.toFixed(2)+'" height="'+h.toFixed(2)+'"/>';
-    if(b.conf!=null)s+='<text x="'+x.toFixed(2)+'" y="'+Math.max(3.2,y).toFixed(2)+'">'+Math.round(b.conf*100)+'%</text>';});
-  svg.innerHTML=s; svg.style.display='block';}
+  (f.boxes||[]).forEach(b=>{const x=b.x*100,y=b.y*100,w=b.w*100,h=b.h*100, t=b.tag;
+    const cls=(t?'t-'+t.verdict:'t-none')+(t&&t.source==='visit'?' inh':'')+(selBox&&selBox.ts===f.ts&&selBox.i===b.i?' sel':'');
+    s+='<rect class="'+cls+'" x="'+x.toFixed(2)+'" y="'+y.toFixed(2)+'" width="'+w.toFixed(2)+'" height="'+h.toFixed(2)+'"/>';
+    if(b.conf!=null)s+='<text class="'+cls+'" x="'+x.toFixed(2)+'" y="'+Math.max(3.2,y).toFixed(2)+'">'+Math.round(b.conf*100)+'%'+
+      (t?' '+TAGMARK[t.verdict]:'')+'</text>';});  // the species is in the tag bar: long names don't fit here
+  svg.innerHTML=s; svg.style.display='block'; renderBoxTag();}
+// ---- tags on single boxes: click a box on the still, tag it below; "next box to tag" walks the revisit list
+const TAGTXT={real:'real',false:'false',wrong_species:'wrong sp.'}, TAGMARK={real:'✓',false:'✗',wrong_species:'≠'};
+let selBox=null, SPP=false, BOXQ=null;
+function stillBoxes(){const f=boxData&&boxData.frames&&(boxData.frames[boxData.best]||boxData.frames[0]);
+  return f?{ts:f.ts,boxes:f.boxes||[]}:{ts:null,boxes:[]};}
+function renderBoxTag(){const bar=$('#boxtag'), {ts,boxes}=stillBoxes(), set=$('#boxtagset'), sp=$('#boxsp'), clr=$('#boxclear');
+  if(mode!=='image'||!boxesOn||!curClip||!boxes.length){bar.hidden=true;return;}
+  bar.hidden=false; const b=selBox&&selBox.ts===ts&&boxes.find(x=>x.i===selBox.i);
+  if(!b){selBox=null; const n=boxes.filter(x=>!x.tag).length;
+    $('#boxtagwhat').textContent=n?n+' of '+boxes.length+(boxes.length>1?' boxes':' box')+' on this still '+(n>1?'have':'has')+' no tag: click one to tag it'
+      :'click a box to tag it on its own'; set.hidden=sp.hidden=clr.hidden=true; return;}
+  const t=b.tag;
+  $('#boxtagwhat').textContent='box '+(b.i+1)+' \u00b7 '+Math.round((b.conf||0)*100)+'% \u00b7 '+
+    (t?(t.source==='box'?'tagged ':'from the visit: ')+TAGTXT[t.verdict]:'no tag');
+  set.hidden=false; set.querySelectorAll('.lblbtn').forEach(x=>{x.disabled=!labelEditable;
+    x.classList.toggle('on',!!t&&t.source==='box'&&t.verdict===x.dataset.v);});
+  sp.hidden=!(t&&t.verdict!=='false'); sp.disabled=!labelEditable; sp.value=t&&t.species||''; clr.hidden=!(t&&t.source==='box');}
+async function setBoxTag(v,species){if(!labelEditable||!selBox||!curVisit)return;
+  try{const r=await fetch('/api/visit/'+curVisit+'/box-label',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ts:selBox.ts,box:selBox.i,verdict:v,species:v&&v!=='false'?species||'':''})});
+    if(!r.ok)return;
+    // a visit with no tag yet becomes real when one of its boxes is tagged real
+    if(v==='real'&&!curLabel&&await postLabel('real','')){markLabel('real'); const t=tileOf(curVisit); if(t)t.dataset.verdict='real';}
+    if(species)SPP=false; boxData=null; await loadBoxData(); drawBoxes(); refreshBoxQueue(); loadSpecies();}catch(e){}}
+$('#boxtagset').querySelectorAll('.lblbtn').forEach(x=>x.onclick=()=>setBoxTag(x.dataset.v,x.dataset.v==='false'?'':$('#boxsp').value.trim()));
+$('#boxsp').addEventListener('change',()=>{const {boxes}=stillBoxes(), b=selBox&&boxes.find(x=>x.i===selBox.i);
+  if(b&&b.tag)setBoxTag(b.tag.verdict,$('#boxsp').value.trim());});  // naming an inherited tag makes it the box's own
+$('#boxclear').onclick=()=>setBoxTag(null,'');
+async function loadSpecies(){if(SPP)return; SPP=true;
+  try{const d=await (await fetch('/api/labels/species')).json();
+    $('#spplist').innerHTML=(d.species||[]).map(n=>'<option value="'+esc(n)+'">').join('');}catch(e){SPP=false;}}
+async function refreshBoxQueue(){const b=$('#boxqbtn');
+  try{const cam=$('#camera').value, d=await (await fetch('/api/labels/needs-box-tags'+(cam?'?camera='+encodeURIComponent(cam):''))).json();
+    BOXQ=d.visits||[]; const left=BOXQ.filter(v=>String(v.id)!==String(curVisit)).length;
+    b.innerHTML='next box to tag ('+left+') &rsaquo;'; b.disabled=!left;}catch(e){}}
+function nextBoxToTag(){const v=(BOXQ||[]).find(x=>String(x.id)!==String(curVisit)); if(!v)return;
+  const g=$('#queuegrid'); g.innerHTML=tileHTML(v); openVisit(g.querySelector('.tile'));}
+$('#boxqbtn').onclick=nextBoxToTag;
+// a click (not a drag) on the still picks the smallest box under it, with a little slack for tiny boxes
+(function(){let down=null; const st=$('#stage');
+  st.addEventListener('pointerdown',e=>{down={x:e.clientX,y:e.clientY};});
+  st.addEventListener('pointerup',e=>{if(!down)return; const moved=Math.abs(e.clientX-down.x)+Math.abs(e.clientY-down.y); down=null;
+    if(moved>5||mode!=='image'||!boxesOn||!boxData)return;
+    const r=$('#boxov').getBoundingClientRect(); if(!r.width)return;
+    const px=(e.clientX-r.left)/r.width, py=(e.clientY-r.top)/r.height, k=0.01, {ts,boxes}=stillBoxes();
+    const hit=boxes.filter(b=>px>=b.x-k&&px<=b.x+b.w+k&&py>=b.y-k&&py<=b.y+b.h+k).sort((a,b)=>a.w*a.h-b.w*b.h)[0];
+    selBox=hit?{ts,i:hit.i}:null; drawBoxes();});})();
 function toggleBoxes(){boxesOn=!boxesOn; $('#boxbtn').classList.toggle('on',boxesOn);
   $('#boxbtn').textContent=boxesOn?'hide boxes':'show boxes'; drawBoxes();}
 function playClip(){if(!curClip)return; const img=$('#still'), vid=$('#clip video');
   if(mode==='image'){mode='video'; resetZoom(); $('#stage').classList.remove('pan');
-    img.style.display='none'; vid.style.display=''; vid.src='/media/visit/'+curVisit+'/clip';
+    img.style.display='none'; vid.style.display=''; vid.src='/media/visit/'+curVisit+'/clip'; renderBoxTag();
     $('#playbtn').textContent='◀ back to image';}
   else{mode='image'; resetZoom(); $('#stage').classList.add('pan');
     vid.pause(); vid.removeAttribute('src'); vid.style.display='none'; img.style.display='';

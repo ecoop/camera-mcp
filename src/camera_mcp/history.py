@@ -251,16 +251,46 @@ class History:
             return {
                 "from": self._local(self._iso(t0)), "to": self._local(self._iso(t1)),
                 "total": total, "shown": len(rows), "hidden": hidden,
-                "visits": [{
-                    "id": r["id"], "camera": r["camera"],
-                    "started": self._local(r["started_at"]), "last_seen": self._local(r["ended_at"]),
-                    "still_there": bool(_get(r, "open", 0)), "label": r["label"], "group": r["grp"],
-                    "score": r["score"], "max_at_once": r["max_count"], "frames": r["frames"],
-                    "has_thumbnail": r["thumbnail"] is not None, "clip": r["clip"],
-                    "suppressed": _get(r, "suppressed"), "verdict": r["verdict"],
-                } for r in rows],
+                "visits": [self._visit_out(r) for r in rows],
                 "coverage": self.coverage(names, t0, t1, db),
             }
+
+    def _visit_out(self, r) -> dict:
+        """One visits row (with its `verdict`) as find_visits returns it."""
+        return {
+            "id": r["id"], "camera": r["camera"],
+            "started": self._local(r["started_at"]), "last_seen": self._local(r["ended_at"]),
+            "still_there": bool(_get(r, "open", 0)), "label": r["label"], "group": r["grp"],
+            "score": r["score"], "max_at_once": r["max_count"], "frames": r["frames"],
+            "has_thumbnail": r["thumbnail"] is not None, "clip": r["clip"],
+            "suppressed": _get(r, "suppressed"), "verdict": r["verdict"],
+        }
+
+    def visits_by_id(self, ids: list[int]) -> list[dict]:
+        """The given visits, in that order, as find_visits returns them (unknown ids are skipped)."""
+        if not ids:
+            return []
+        with closing(self._db()) as db:
+            verdict = ("(SELECT verdict FROM visit_labels l WHERE l.visit_id = v.id)"
+                       if "visit_labels" in _tables(db) else "NULL")
+            rows = {r["id"]: r for r in db.execute(
+                f"SELECT v.*, {verdict} AS verdict FROM visits v WHERE v.id IN ({','.join('?' * len(ids))})", ids)}
+        return [self._visit_out(rows[i]) for i in ids if i in rows]
+
+    def tagged_species(self) -> list[str]:
+        """Species named in tags so far (visit or box), most used first: the picker's first suggestions."""
+        with closing(self._db()) as db:
+            tables = _tables(db)
+            parts = []
+            if "visit_labels" in tables and "species" in {r[1] for r in db.execute("PRAGMA table_info(visit_labels)")}:
+                parts.append("SELECT species FROM visit_labels WHERE species IS NOT NULL")
+            if "box_labels" in tables:
+                parts.append("SELECT species FROM box_labels WHERE species IS NOT NULL")
+            if not parts:
+                return []
+            rows = db.execute(f"SELECT species, COUNT(*) n FROM ({' UNION ALL '.join(parts)})"
+                              " GROUP BY species ORDER BY n DESC, species").fetchall()
+        return [r["species"] for r in rows]
 
     def activity_summary(self, since: str = "7d", until: str | None = None, group_by: str = "species",
                          cameras: list[str] | None = None, tag: str | None = None,

@@ -688,3 +688,19 @@ def test_tags_carry_a_species_and_boxes_can_be_tagged(tmp_path):
     assert c.post("/api/visit/1/box-label", json={"box": 0}).status_code == 400
     assert c.post("/api/visit/1/box-label", json={"ts": frame["ts"], "box": 0, "verdict": None}).status_code == 200
     assert c.get("/api/labels/needs-box-tags").json() == {"visits": [], "count": 0}
+
+
+def test_the_viewer_tags_single_boxes_and_names_species(client):
+    """Click a box on the still to tag it (a click, not a drag; the smallest box under the pointer);
+    boxes are coloured by their tag, dashed when it comes from the visit's; a species field sits by
+    real / wrong sp. tags; wrong sp. waits for its species instead of moving on; "next box to tag"
+    walks the revisit list; suggestions come from /api/labels/species."""
+    page = client.get("/").text
+    assert 'id="boxtag"' in page and 'id="boxtagset"' in page and 'id="boxsp"' in page and 'id="vsp"' in page
+    assert 'id="boxqbtn"' in page and "function nextBoxToTag" in page and "/api/labels/needs-box-tags" in page
+    assert "if(moved>5||mode!=='image'||!boxesOn||!boxData)return;" in page
+    assert ".sort((a,b)=>a.w*a.h-b.w*b.h)[0]" in page
+    assert ".boxov rect.inh{stroke-dasharray:6 4}" in page and "t.source==='visit'?' inh'" in page
+    assert "if(!had&&v!=='wrong_species')setTimeout(nextUnlabelled,350)" in page
+    assert "if(v==='real'&&!curLabel&&await postLabel('real',''))" in page  # a box tagged real makes an untagged visit real
+    assert '<datalist id="spplist">' in page and client.get("/api/labels/species").json() == {"species": []}
