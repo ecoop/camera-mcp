@@ -654,3 +654,11 @@ def test_the_map_shows_day_or_night_apart(client):
     assert "dn.length===2||dn.includes(lit(v))" in page
     assert "only?[...stills.map(" in page and "'a '+only+' still, #'+v.id" in page
     assert "document.querySelectorAll('.mv,.mdn')" in page
+
+
+def test_map_dots_grow_a_little_when_zoomed_and_are_easy_to_hit(client):
+    """Dots grow far less than the picture (~2x at 800%, so clusters still separate), not a fixed
+    on-screen size that looks tiny on a magnified picture, and each has a margin that takes clicks."""
+    page = client.get("/map").text
+    assert "setProperty('--iz',Math.pow(mz,-0.65))" in page
+    assert ".mdot::after{content:'';position:absolute;inset:-6px" in page

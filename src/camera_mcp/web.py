@@ -634,6 +634,7 @@ dialog .vmeta a{color:var(--accent);cursor:pointer}
 .mdot{position:absolute;width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:50%;cursor:pointer;
   border:2px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.45);opacity:.9;transform:scale(var(--iz))}
 .mdot:hover{transform:scale(calc(var(--iz) * 1.6));opacity:1;z-index:2}
+.mdot::after{content:'';position:absolute;inset:-6px;border-radius:50%}  /* a bigger target than the dot */
 .mapstage .zoombar{position:absolute;right:.5rem;bottom:.5rem;display:flex;gap:.25rem;z-index:3}
 .mapstage .zoombar button{font-family:var(--mono);font-size:.8rem;background:var(--frame);color:var(--ink);
   border:1px solid var(--line);border-radius:7px;padding:.15rem .5rem;cursor:pointer;opacity:.92}
@@ -717,7 +718,7 @@ dialog .vmeta a{color:var(--accent);cursor:pointer}
       <label title="visits seen in colour (daylight)"><input type="checkbox" class="mdn" value="day" checked>day</label>
       <label title="visits seen under the camera's infrared light; with only this ticked, the picture is a recent night still"><input type="checkbox" class="mdn" value="night" checked>night (IR)</label></span>
   </div>
-  <div class="hint" id="maphint">Each dot is one visit, at its most confident box (the one its viewer shows), coloured by your label. Hover for details; click to open the visit and re-check or re-label it. Scroll (or pinch) to zoom into a cluster, drag to pan; dots stay the same size, so tight clusters spread apart. Uses the camera picked in the filter above and the time window; after a camera is re-aimed, older visits plot against the new view, so narrow the window to after the change.</div>
+  <div class="hint" id="maphint">Each dot is one visit, at its most confident box (the one its viewer shows), coloured by your label. Hover for details; click to open the visit and re-check or re-label it. Scroll (or pinch) to zoom into a cluster, drag to pan; dots grow only a little, so tight clusters spread apart. Uses the camera picked in the filter above and the time window; after a camera is re-aimed, older visits plot against the new view, so narrow the window to after the change.</div>
   <div class="mapstage" id="mapstage"><div class="mpz" id="mpz"><img id="mapimg" alt="camera picture"><div id="mapdots"></div></div>
     <div class="zoombar"><button id="mzout" title="zoom out">&minus;</button><span class="lvl" id="mzlvl">100%</span>
       <button id="mzin" title="zoom in">+</button><button id="mzfit" title="fit the whole picture">fit</button></div></div>
@@ -847,12 +848,13 @@ async function loadMap(){const cam=$('#camera').value, dots=$('#mapdots'), stage
     `<span id="mappic">${mapPicNote&&!stage.classList.contains('loading')?'picture: '+esc(mapPicNote):''}</span>`+
     `<span>${(d.from||'').slice(0,10)} &rarr; ${(d.to||'').slice(0,10)}</span>`;}
 document.querySelectorAll('.mv,.mdn').forEach(c=>c.onchange=()=>{if(VIEW==='map')loadMap();});
-// zoom & pan the map: the picture and dots scale together; dots are counter-scaled (--iz) to keep their size
+// zoom & pan the map: the picture and dots scale together; dots are counter-scaled (--iz) so they grow
+// far less than the picture (~2x at 800%): tight clusters still spread apart, and dots stay easy to hit
 let mz=1, mtx=0, mty=0, mpan=null, mJustPanned=false;
 const mclamp=(v,a,b)=>Math.min(b,Math.max(a,v));
 function mapZoomApply(){const r=$('#mapstage').getBoundingClientRect(), W=r.width, H=$('#mpz').offsetHeight;
   mtx=mclamp(mtx,W-W*mz,0); mty=mclamp(mty,H-H*mz,0);
-  $('#mpz').style.transform=`translate(${mtx}px,${mty}px) scale(${mz})`; $('#mapdots').style.setProperty('--iz',1/mz);
+  $('#mpz').style.transform=`translate(${mtx}px,${mty}px) scale(${mz})`; $('#mapdots').style.setProperty('--iz',Math.pow(mz,-0.65));
   $('#mzlvl').textContent=Math.round(mz*100)+'%'; $('#mapstage').classList.toggle('zoomed',mz>1);}
 function mapZoomAt(f,cx,cy){const n=mclamp(mz*f,1,12); const r=$('#mapstage').getBoundingClientRect();
   if(cx==null){cx=r.width/2;cy=r.height/2;} mtx=cx-(cx-mtx)*n/mz; mty=cy-(cy-mty)*n/mz; mz=n; mapZoomApply();}
