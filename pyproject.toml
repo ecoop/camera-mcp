@@ -2,7 +2,7 @@
 name = "camera-mcp"
 version = "0.1.0"
 description = "MCP server over home IP cameras: live snapshots, and a monitor that logs animal visits."
-requires-python = ">=3.11"
+requires-python = ">=3.13"
 license = "MIT"
 license-files = ["LICENSE"]
 dependencies = [

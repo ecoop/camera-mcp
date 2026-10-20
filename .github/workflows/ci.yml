@@ -3,8 +3,6 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
 
 permissions:
@@ -21,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.11", "3.12", "3.13", "3.14"]
+        python: ["3.13", "3.14"]  # the floor (requires-python) and the newest
     steps:
       - uses: actions/checkout@v4
 
