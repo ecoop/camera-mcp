@@ -19,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.13", "3.14"]  # the floor (requires-python) and the newest
+        python: ["3.12", "3.13"]  # the versions the whole product runs on (SpeciesNet needs < 3.14)
     steps:
       - uses: actions/checkout@v4
 

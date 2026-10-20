@@ -1,7 +1,7 @@
 # camera-mcp
 
 [![CI](https://github.com/ecoop/camera-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/ecoop/camera-mcp/actions/workflows/ci.yml)
-![Python](https://img.shields.io/badge/python-3.13%20%7C%203.14-blue)
+![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13-blue)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
 _Last updated: 2026-10-19_
@@ -46,8 +46,9 @@ taxon="night-critters")`.
 
 ## Setup
 
-Needs Python 3.13+ and the `ffmpeg` binary (Homebrew: `brew install ffmpeg`). Species identification
-(SpeciesNet, the `detect` extra) needs 3.13 until SpeciesNet supports 3.14; everything else runs on 3.14.
+Needs Python 3.12+ and the `ffmpeg` binary (Homebrew: `brew install ffmpeg`). Species identification
+(SpeciesNet, the `detect` extra) needs Python below 3.14 until SpeciesNet supports it; everything
+else also runs on 3.14.
 
 ```bash
 uv venv .venv && uv pip install --python .venv/bin/python -e '.[dev]'
@@ -318,10 +319,10 @@ on the GPU (MPS).
 
 The tests generate a clip with ffmpeg and use it as a camera. No network or hardware is needed.
 
-CI (`.github/workflows/ci.yml`) runs on every PR, on Python 3.13 (the
-minimum, and what the Studio runs) and 3.14 (the newest): it builds the wheel, installs it, imports
-every module from the installed package, starts the entry point, and runs the tests (without
-SpeciesNet, which the tests stand in for). A PR merges only once CI passes.
+CI (`.github/workflows/ci.yml`) runs on every PR, on Python 3.12 and 3.13, the
+versions the whole product (species identification included) runs on: it builds the wheel,
+installs it, imports every module from the installed package, starts the entry point, and runs the
+tests (without SpeciesNet, which the tests stand in for). A PR merges only once CI passes.
 
 ## Design notes
 
