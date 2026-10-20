@@ -704,3 +704,24 @@ def test_the_viewer_tags_single_boxes_and_names_species(client):
     assert "if(!had&&v!=='wrong_species')setTimeout(nextUnlabelled,350)" in page
     assert "if(v==='real'&&!curLabel&&await postLabel('real',''))" in page  # a box tagged real makes an untagged visit real
     assert '<datalist id="spplist">' in page and client.get("/api/labels/species").json() == {"species": []}
+
+
+def test_favourites_can_be_starred_from_the_viewer_and_filtered(tmp_path):
+    """POST /api/visit/{id}/favorite stars (still, or clip at a moment) and unstars; ?favorites=1 lists
+    them; the page has the star, the tile mark, the filter, and opens a favourite clip at its moment."""
+    from camera_mcp.config import Camera
+    from camera_mcp.web import build_app
+    _one_visit(tmp_path)
+    c = starlette_testclient.TestClient(build_app({"fence": Camera("fence", "f.mp4")}, tmp_path, None))
+    r = c.post("/api/visit/1/favorite", json={"on": True, "kind": "clip", "clip_at": 7.5})
+    assert r.status_code == 200 and r.json()["favorite"] == {"kind": "clip", "clip_at": 7.5}
+    (v,) = c.get("/api/visits?favorites=1&since=2h").json()["visits"]
+    assert v["id"] == 1 and v["favorite"] == {"kind": "clip", "clip_at": 7.5}
+    assert c.post("/api/visit/1/favorite", json={"on": True, "kind": "gif"}).status_code == 400
+    assert c.post("/api/visit/999/favorite", json={"on": True}).status_code == 404
+    assert c.post("/api/visit/1/favorite", json={"on": False}).status_code == 200
+    assert c.get("/api/visits?favorites=1").json()["visits"] == []
+    page = c.get("/").text
+    assert 'id="favbtn"' in page and 'id="favonly"' in page and "p.set('favorites','1')" in page
+    assert 'data-fav="${x.favorite?x.favorite.kind:\'\'}"' in page
+    assert "if(curClip&&t.dataset.fav==='clip'){seekTo=" in page and "if(seekTo!=null){try{vid.pause();vid.currentTime=seekTo;}" in page

@@ -111,7 +111,8 @@ def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
         cams = [q["camera"]] if q.get("camera") else None
         r = _ask(history.find_visits, since=q.get("since", "24h"), cameras=cams,
                  taxon=q.get("taxon") or None, limit=int(q.get("limit", 60)),
-                 include_suppressed=q.get("suppressed") == "1")  # ?suppressed=1: the gate's hidden visits too
+                 include_suppressed=q.get("suppressed") == "1",  # ?suppressed=1: the gate's hidden visits too
+                 favorites_only=q.get("favorites") == "1")  # ?favorites=1: starred ones, from any time
         return r if isinstance(r, Response) else JSONResponse(r)
 
     async def api_label_map(request: Request):
@@ -266,6 +267,30 @@ def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
         if isinstance(ids, Response):
             return ids
         return JSONResponse({"visits": history.visits_by_id(ids), "count": len(ids)})
+
+    async def api_favorite_set(request: Request):
+        """Star or unstar a visit: {"on": true|false, "kind": "still"|"clip", "clip_at": seconds}."""
+        if not editable:
+            return JSONResponse({"error": "labeling is disabled (CAMERA_MCP_WEB_READONLY)"}, status_code=403)
+        vid = int(request.path_params["vid"])
+        try:
+            body = await request.json()
+            on, kind = bool(body.get("on", True)), str(body.get("kind") or "still")
+            clip_at = float(body["clip_at"]) if body.get("clip_at") is not None else None
+        except (ValueError, TypeError, json.JSONDecodeError):
+            return JSONResponse({"error": "send {on, kind: still|clip, clip_at}"}, status_code=400)
+        if on and kind not in ("still", "clip"):
+            return JSONResponse({"error": "kind must be still or clip"}, status_code=400)
+        if not db_path.exists():
+            return JSONResponse({"error": "there's no visit log yet: the monitor hasn't run"}, status_code=503)
+        store = Store(db_path)
+        try:
+            store.set_favorite(vid, on, kind, clip_at, body.get("note"))
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=404)
+        finally:
+            store.close()
+        return JSONResponse({"ok": True, "favorite": {"kind": kind, "clip_at": clip_at if kind == "clip" else None} if on else None})
 
     async def api_tag_species(request: Request):
         """Suggestions for the tag species picker: names used in tags so far (most used first), then
@@ -508,6 +533,7 @@ def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
         Route("/api/visit/{vid:int}/label", api_visit_label_set, methods=["POST"]),
         Route("/api/visit/{vid:int}/hidden", api_visit_hidden_set, methods=["POST"]),
         Route("/api/visit/{vid:int}/box-label", api_box_label_set, methods=["POST"]),
+        Route("/api/visit/{vid:int}/favorite", api_favorite_set, methods=["POST"]),
         Route("/api/labels/needs-box-tags", api_needs_box_tags),
         Route("/api/labels/species", api_tag_species),
         Route("/media/visit/{vid:int}/thumb", media_thumb),
@@ -659,6 +685,8 @@ dialog .vmeta a{color:var(--accent);cursor:pointer}
 .tile[data-verdict=real]{outline:2px solid var(--good);outline-offset:-1px}
 .tile[data-verdict=false],.tile[data-verdict=wrong_species]{outline:2px solid var(--warn);outline-offset:-1px}
 .tile[data-verdict=real] img,.tile[data-verdict=false] img,.tile[data-verdict=wrong_species] img{opacity:.45}
+.tile[data-fav=still] .sp::after,.tile[data-fav=clip] .sp::after{content:" \\2605";color:#e0a800}  /* a favourite */
+.boxbtn.favbtn.on{color:#e0a800;border-color:#e0a800}  /* gold, not the red of other "on" buttons */
 .tile .vpill{display:none;position:absolute;top:.4rem;right:.4rem;font-family:var(--mono);font-size:.66rem;font-weight:600;
   padding:.05rem .45rem;border-radius:999px;background:var(--frame);border:1px solid}
 .tile[data-verdict=real] .vpill{display:block;color:var(--good)} .tile[data-verdict=real] .vpill::after{content:"\\2713  real"}
@@ -737,6 +765,8 @@ dialog .boxtag[hidden],.spin[hidden],.lblset[hidden],.boxbtn[hidden]{display:non
   <select id="camera"><option value="">all cameras</option></select>
   <label class="hidtog" id="hidtoglbl" title="also show visits hidden as likely junk (by the unrecognized-visit gate, a zone, or by hand), to review, label or un-hide">
     <input type="checkbox" id="showhidden"> + hidden</label>
+  <label class="hidtog" id="favtoglbl" title="just your favourites, from any time (the time window is ignored), hidden or not">
+    <input type="checkbox" id="favonly"> &#9733; favourites</label>
 </div>
 
 <section id="view-feeds">
@@ -816,6 +846,7 @@ dialog .boxtag[hidden],.spin[hidden],.lblset[hidden],.boxbtn[hidden]{display:non
     <input class="spin" id="vsp" list="spplist" hidden placeholder="what was it?" title="what the animal actually was; saved when you leave the field">
     <button class="boxbtn" id="nextbtn" title="the next visit in the grid you haven't labelled">next unlabelled &rsaquo;</button>
     <button class="boxbtn" id="boxqbtn" title="the next visit you tagged real whose still has a box with no tag yet (narrowed to the camera filter)">next box to tag &rsaquo;</button>
+    <button class="boxbtn favbtn" id="favbtn" title="keep this one: star it as a favourite. While the clip plays, the star remembers that moment">&#9734; favourite</button>
     <button class="boxbtn" id="hidebtn" title="hide this visit, or show one the gate or a zone hid (undo a mistake)">hide</button>
     <button class="boxbtn on" id="boxbtn">hide boxes</button> &middot; <a id="cliplink" target="_blank" rel="noopener" title="the full-resolution still in its own tab: scroll to zoom, drag to pan">full-res image</a>
   </span></div>
@@ -831,7 +862,7 @@ dialog .boxtag[hidden],.spin[hidden],.lblset[hidden],.boxbtn[hidden]{display:non
 const $=s=>document.querySelector(s), params=()=>{const p=new URLSearchParams();
   p.set('since',$('#since').value); if($('#taxon').value)p.set('taxon',$('#taxon').value);
   if($('#camera').value)p.set('camera',$('#camera').value);
-  if($('#showhidden').checked)p.set('suppressed','1'); return p.toString();};
+  if($('#showhidden').checked)p.set('suppressed','1'); if($('#favonly').checked)p.set('favorites','1'); return p.toString();};
 function tick(){$('#clock').textContent=new Date().toLocaleString();}
 async function loadHealth(){try{const win=$('#since').value;
   const h=await (await fetch('/api/health?since='+win)).json();
@@ -866,7 +897,8 @@ async function loadVisits(){const r=await (await fetch('/api/visits?'+params()))
   $('#grid').innerHTML=v.map(tileHTML).join('');
   document.querySelectorAll('#grid .tile').forEach(t=>t.onclick=ev=>{ev.preventDefault();openVisit(t);});}
 function tileHTML(x){return `<a class="tile${x.suppressed?' sup':''}" href="#" data-id="${x.id}" data-clip="${x.clip?1:0}"`+
-    ` data-verdict="${x.verdict||''}" data-sup="${x.suppressed||''}">`+
+    ` data-verdict="${x.verdict||''}" data-sup="${x.suppressed||''}" data-fav="${x.favorite?x.favorite.kind:''}"`+
+    ` data-favat="${x.favorite&&x.favorite.clip_at!=null?x.favorite.clip_at:''}">`+
     `<img loading="lazy" src="/media/visit/${x.id}/thumb" alt="${esc(x.label)}">`+
     (x.suppressed?`<span class="badge">hidden: ${x.suppressed.replace('_',' ')}</span>`:'')+`<span class="vpill"></span>`+
     `<div class="meta"><div class="sp">${esc(x.label)}${x.max_at_once>1?' ×'+x.max_at_once:''}`+
@@ -1018,7 +1050,20 @@ async function toggleHidden(){const t=tileOf(curVisit); if(!t||!labelEditable)re
       t.insertBefore(b,t.querySelector('.vpill'));} b.textContent='hidden: '+d.suppressed;} else if(b)b.remove();
     markHidden(t); $('#clipmeta').textContent=$('#clipmeta').textContent.replace(/ · hidden: .*$/,'')+
       (d.suppressed?' · hidden: '+d.suppressed:'');}catch(e){}}
-function openVisit(t){const id=t.dataset.id; curVisit=id; curClip=t.dataset.clip==='1'; markHidden(t);
+// Favourites: a star, apart from the tags. Starred while the clip plays, it keeps that moment and reopens there.
+let seekTo=null;
+const fmtAt=s=>Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0');
+function markFav(t){const k=t&&t.dataset.fav, b=$('#favbtn'); b.classList.toggle('on',!!k);
+  b.innerHTML=k?'&#9733; favourite'+(k==='clip'&&t.dataset.favat!==''?' (clip '+fmtAt(+t.dataset.favat)+')':''):'&#9734; favourite';
+  b.disabled=!labelEditable;}
+async function toggleFav(){const t=tileOf(curVisit); if(!t||!labelEditable)return; const on=!t.dataset.fav, vid=$('#clip video');
+  const kind=mode==='video'?'clip':'still', at=kind==='clip'?Math.round((vid.currentTime||0)*10)/10:null;
+  try{const r=await fetch('/api/visit/'+curVisit+'/favorite',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({on,kind,clip_at:at})}); if(!r.ok)return;
+    t.dataset.fav=on?kind:''; t.dataset.favat=on&&at!=null?at:''; markFav(t);
+    const g=document.querySelector('#grid .tile[data-id="'+curVisit+'"]'); if(g&&g!==t){g.dataset.fav=t.dataset.fav;g.dataset.favat=t.dataset.favat;}}catch(e){}}
+$('#favbtn').onclick=toggleFav;
+function openVisit(t){const id=t.dataset.id; curVisit=id; curClip=t.dataset.clip==='1'; markHidden(t); markFav(t);
   boxData=null; selBox=null; mode='image'; boxesOn=curClip; stillFB=false; resetZoom(); $('#boxtag').hidden=true;
   const img=$('#still'), vid=$('#clip video');
   img.style.display=''; vid.pause(); vid.removeAttribute('src'); vid.style.display='none';
@@ -1031,7 +1076,8 @@ function openVisit(t){const id=t.dataset.id; curVisit=id; curClip=t.dataset.clip
     (t.dataset.sup?' · hidden: '+t.dataset.sup.replace('_',' '):'');
   $('#cliplink').href='/visit/'+id+'/image';  // full window, scroll-zoom (the clip has "watch clip")
   loadLabel(id); loadSpecies(); refreshBoxQueue(); if(!$('#clip').open)$('#clip').showModal();
-  if(curClip) loadBoxData().then(drawBoxes);}
+  if(curClip) loadBoxData().then(drawBoxes);
+  if(curClip&&t.dataset.fav==='clip'){seekTo=t.dataset.favat!==''?+t.dataset.favat:null; playClip();}}  // a favourite clip opens at its moment
 async function loadBoxData(){if(boxData)return; try{boxData=await (await fetch('/api/visit/'+curVisit+'/boxes')).json();}catch(e){boxData={frames:[]};}}
 function drawBoxes(){const svg=$('#boxov'), m=activeMedia();
   svg.style.width=(m.clientWidth||m.offsetWidth)+'px'; svg.style.height=(m.clientHeight||m.offsetHeight)+'px';
@@ -1105,7 +1151,8 @@ $('#still').addEventListener('load',()=>{if(mode==='image')drawBoxes();});
 $('#still').addEventListener('error',()=>{if(curClip&&!stillFB){stillFB=true;$('#still').src='/media/visit/'+curVisit+'/thumb';}});
 $('#clip video').addEventListener('loadeddata',()=>{if(mode!=='video')return;
   const vid=$('#clip video'), f=boxData&&boxData.frames&&boxData.frames[boxData.best];
-  if(f){try{vid.pause();if(f.offset)vid.currentTime=f.offset;}catch(e){}} drawBoxes();});
+  if(seekTo!=null){try{vid.pause();vid.currentTime=seekTo;}catch(e){} seekTo=null;}
+  else if(f){try{vid.pause();if(f.offset)vid.currentTime=f.offset;}catch(e){}} drawBoxes();});
 (function(){const stage=$('#stage'); let drag=false,lx=0,ly=0;
   stage.addEventListener('wheel',e=>{if(mode!=='image')return; e.preventDefault();
     const r=stage.getBoundingClientRect(),cx=e.clientX-r.left,cy=e.clientY-r.top;
@@ -1241,6 +1288,7 @@ const viewOf=path=>path.indexOf('analytics')>=0?'analytics':path.indexOf('/map')
 function setView(v,push){VIEW=['analytics','map'].includes(v)?v:'feeds';
   $('#view-feeds').hidden=VIEW!=='feeds'; $('#view-analytics').hidden=VIEW!=='analytics'; $('#view-map').hidden=VIEW!=='map';
   $('#hidtoglbl').style.display=VIEW==='feeds'?'':'none';  // it filters the visits grid, which only feeds shows
+  $('#favtoglbl').style.display=VIEW==='feeds'?'':'none';
   document.querySelectorAll('.tabs a[data-view]').forEach(a=>a.classList.toggle('active',a.dataset.view===VIEW));
   if(push)history.pushState({v:VIEW},'',VIEW==='feeds'?'/':'/'+VIEW);
   renderView();}
@@ -1249,7 +1297,7 @@ addEventListener('popstate',()=>setView(viewOf(location.pathname),false));
 
 $('.hmode').querySelectorAll('button').forEach(b=>b.onclick=()=>{$('.hmode .on').classList.remove('on');b.classList.add('on');loadHeatmap();});
 // filters are global; a change refreshes the header and whichever view is showing
-['since','taxon','camera','showhidden'].forEach(id=>$('#'+id).addEventListener('change',()=>{loadHealth();renderView();}));
+['since','taxon','camera','showhidden','favonly'].forEach(id=>$('#'+id).addEventListener('change',()=>{loadHealth();renderView();}));
 $('#chartcam').onchange=()=>{if(VIEW==='analytics')loadStats();};
 try{$('#showidle').checked=localStorage.getItem('showIdle')==='1';}catch(e){}
 $('#showidle').onchange=()=>{try{localStorage.setItem('showIdle',idleOn()?'1':'0');}catch(e){} if(VIEW==='analytics'){loadStats();loadHeatmap();}};

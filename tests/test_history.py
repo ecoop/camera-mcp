@@ -489,3 +489,30 @@ def test_tag_species_and_visits_by_id(tmp_path):
     got = h.visits_by_id([b, 999, a])
     assert [v["id"] for v in got] == [b, a] and got[0]["verdict"] == "real" and "clip" in got[0]
     assert set(got[0]) == set(h.find_visits(since="1h")["visits"][0])
+
+
+def test_favourites_are_starred_apart_from_tags_and_listed_from_any_time(tmp_path):
+    """A star keeps whether it opens on the still or the clip (and the clip moment); the favourites
+    filter lists starred visits from any time, hidden or not; unstarring removes it."""
+    store = Store(tmp_path / "monitor.db")
+    old = _tagged_visit(store, "east_deck", [[(0.4, 0.4, 0.1, 0.1, 0.9)]], NOW - 20 * 86400)  # weeks ago
+    new = _tagged_visit(store, "east_deck", [[(0.4, 0.4, 0.1, 0.1, 0.9)]], NOW - 600)
+    plain = _tagged_visit(store, "east_deck", [[(0.4, 0.4, 0.1, 0.1, 0.9)]], NOW - 500)
+    store.set_favorite(old, True, "clip", clip_at=12.345)
+    store.set_favorite(new, True, "still")
+    store.set_visit_suppressed(new, "zone")  # hidden, but still a favourite
+    with pytest.raises(ValueError):
+        store.set_favorite(plain, True, "gif")
+    with pytest.raises(ValueError):
+        store.set_favorite(99999, True)
+    store.close()
+    h = History(tmp_path / "monitor.db", {"east_deck": Camera("east_deck", "x")}, Site(timezone="UTC"))
+    favs = h.find_visits(since="1h", favorites_only=True)["visits"]
+    assert [v["id"] for v in favs] == [new, old]  # any time, hidden or not, newest first
+    assert favs[1]["favorite"] == {"kind": "clip", "clip_at": 12.35} and favs[0]["favorite"] == {"kind": "still", "clip_at": None}
+    assert {v["id"]: v["favorite"] for v in h.find_visits(since="1h")["visits"]} == {plain: None}  # the normal grid: unchanged
+    assert h.visits_by_id([old])[0]["favorite"]["kind"] == "clip"
+    store = Store(tmp_path / "monitor.db")
+    store.set_favorite(old, False)
+    store.close()
+    assert [v["id"] for v in h.find_visits(since="1h", favorites_only=True)["visits"]] == [new]

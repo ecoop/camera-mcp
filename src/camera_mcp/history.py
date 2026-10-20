@@ -98,6 +98,14 @@ def _has_column(db: sqlite3.Connection, name: str) -> bool:
     return name in {r[1] for r in db.execute("PRAGMA table_info(visits)")}
 
 
+def _fav_cols(db: sqlite3.Connection) -> str:
+    """SQL for a visit row's favourite (kind, clip moment), NULL when the log has no favorites table."""
+    if "favorites" not in _tables(db):
+        return "NULL AS fav_kind, NULL AS fav_at"
+    return ("(SELECT kind FROM favorites f WHERE f.visit_id = v.id) AS fav_kind,"
+            " (SELECT clip_at FROM favorites f WHERE f.visit_id = v.id) AS fav_at")
+
+
 def _gated(db: sqlite3.Connection) -> bool:
     """Whether the log records the unnamed-visit gate's verdicts (an older monitor's doesn't)."""
     return "suppressed" in {r[1] for r in db.execute("PRAGMA table_info(visits)")}
@@ -226,11 +234,16 @@ class History:
 
     def find_visits(self, since: str = "24h", until: str | None = None, cameras: list[str] | None = None,
                     tag: str | None = None, taxon: str | None = None, overlapping: str | None = None,
-                    min_score: float = 0.0, limit: int = 50, include_suppressed: bool = False) -> dict:
+                    min_score: float = 0.0, limit: int = 50, include_suppressed: bool = False,
+                    favorites_only: bool = False) -> dict:
         """Visits overlapping the window, newest first. Visits the unnamed-visit gate hid (likely
-        leaves, see gate.py) are left out and counted in `hidden`, unless `include_suppressed`."""
+        leaves, see gate.py) are left out and counted in `hidden`, unless `include_suppressed`.
+        `favorites_only`: just the starred ones, from any time (the window is ignored) and hidden
+        or not: a favourite is a keeper wherever it is."""
         now = time.time()
         t0, t1 = parse_when(since, now, self.tz), parse_when(until, now, self.tz)
+        if favorites_only:
+            t0, include_suppressed = 0.0, True
         names = self._camera_names(cameras, tag)
         with closing(self._db()) as db:
             where, params = self._where(t0, t1, names, taxon, min_score, col="v.")
@@ -239,13 +252,15 @@ class History:
                 where += (" AND EXISTS (SELECT 1 FROM visits o WHERE o.camera = v.camera AND o.id != v.id"
                           f" AND o.started_at <= v.ended_at AND o.ended_at >= v.started_at AND {clause})")
                 params += p
+            if favorites_only:
+                where += (" AND v.id IN (SELECT visit_id FROM favorites)" if "favorites" in _tables(db) else " AND 0")
             hidden = 0 if include_suppressed else self._hidden(db, where, params, "v.")
             if not include_suppressed:
                 where = self._shown(db, where, "v.")
             total = db.execute(f"SELECT COUNT(*) FROM visits v WHERE {where}", params).fetchone()[0]
             verdict = ("(SELECT verdict FROM visit_labels l WHERE l.visit_id = v.id)"  # a human's label, if any
                        if "visit_labels" in _tables(db) else "NULL")
-            rows = db.execute(f"SELECT v.*, {verdict} AS verdict FROM visits v WHERE {where}"
+            rows = db.execute(f"SELECT v.*, {verdict} AS verdict, {_fav_cols(db)} FROM visits v WHERE {where}"
                               " ORDER BY v.started_at DESC LIMIT ?",
                               (*params, max(1, min(limit, 500)))).fetchall()
             return {
@@ -264,6 +279,7 @@ class History:
             "score": r["score"], "max_at_once": r["max_count"], "frames": r["frames"],
             "has_thumbnail": r["thumbnail"] is not None, "clip": r["clip"],
             "suppressed": _get(r, "suppressed"), "verdict": r["verdict"],
+            "favorite": {"kind": _get(r, "fav_kind"), "clip_at": _get(r, "fav_at")} if _get(r, "fav_kind") else None,
         }
 
     def visits_by_id(self, ids: list[int]) -> list[dict]:
@@ -274,7 +290,8 @@ class History:
             verdict = ("(SELECT verdict FROM visit_labels l WHERE l.visit_id = v.id)"
                        if "visit_labels" in _tables(db) else "NULL")
             rows = {r["id"]: r for r in db.execute(
-                f"SELECT v.*, {verdict} AS verdict FROM visits v WHERE v.id IN ({','.join('?' * len(ids))})", ids)}
+                f"SELECT v.*, {verdict} AS verdict, {_fav_cols(db)} FROM visits v WHERE v.id IN ({','.join('?' * len(ids))})",
+                ids)}
         return [self._visit_out(rows[i]) for i in ids if i in rows]
 
     def tagged_species(self) -> list[str]:

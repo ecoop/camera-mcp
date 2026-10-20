@@ -75,6 +75,15 @@ CREATE TABLE IF NOT EXISTS box_labels (  -- a human's verdict on one detector bo
   PRIMARY KEY (visit_id, frame_ts, box)
 );
 
+CREATE TABLE IF NOT EXISTS favorites (  -- visits a human starred as keepers (separate from correctness tags).
+  -- Their thumbnail, still and clip must survive any future media cleanup.
+  visit_id  INTEGER PRIMARY KEY REFERENCES visits(id),
+  kind      TEXT NOT NULL,       -- 'still' | 'clip': what the favourite opens on
+  clip_at   REAL,                -- for 'clip': seconds into the clip where the moment is
+  note      TEXT,                -- optional
+  at        TEXT NOT NULL        -- when it was starred (UTC ISO)
+);
+
 CREATE TABLE IF NOT EXISTS camera_uptime (
   camera      TEXT NOT NULL,
   started_at  TEXT NOT NULL,       -- a stretch of time the monitor was receiving this camera's frames
@@ -313,6 +322,25 @@ class Store:
                 " verdict = excluded.verdict, species = excluded.species, at = excluded.at",
                 (visit_id, frame_ts, box, verdict, species, iso(time.time())),
             )
+
+    def set_favorite(self, visit_id: int, on: bool, kind: str = "still", clip_at: float | None = None,
+                     note: str | None = None) -> None:
+        """Star a visit as a favourite (on), opening on its still or on its clip at `clip_at` seconds,
+        replacing an earlier star; or unstar it. Raises ValueError for an unknown kind or visit."""
+        if on and kind not in ("still", "clip"):
+            raise ValueError("kind must be 'still' or 'clip'")
+        with self._lock:
+            if self._db.execute("SELECT 1 FROM visits WHERE id = ?", (visit_id,)).fetchone() is None:
+                raise ValueError(f"no visit {visit_id}")
+            if not on:
+                self._db.execute("DELETE FROM favorites WHERE visit_id = ?", (visit_id,))
+                return
+            at = round(max(0.0, float(clip_at)), 2) if kind == "clip" and clip_at is not None else None
+            self._db.execute(
+                "INSERT INTO favorites (visit_id, kind, clip_at, note, at) VALUES (?, ?, ?, ?, ?)"
+                " ON CONFLICT(visit_id) DO UPDATE SET kind = excluded.kind, clip_at = excluded.clip_at,"
+                " note = excluded.note, at = excluded.at",
+                (visit_id, kind, at, (note or "").strip()[:200] or None, iso(time.time())))
 
     def visits_without_night(self, limit: int = 500) -> list[tuple[int, str]]:
         """(id, thumbnail) of saved visits whose day/night isn't recorded yet (logged before it was)."""

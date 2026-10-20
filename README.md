@@ -4,7 +4,7 @@
 ![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13-blue)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
-_Last updated: 2026-10-19_
+_Last updated: 2026-10-20_
 
 An MCP server over the home IP cameras. A model can list the cameras and look at a current frame
 from any of them; detections, activity and recording come in later phases. Combines the camera
@@ -197,6 +197,12 @@ real. A real or wrong-species tag has a **what was it?** field, suggesting names
 groups seen here; a wrong-species tag waits for it instead of moving on. **next box to tag ›**
 walks the real visits whose still still has an untagged box (narrowed to the camera filter): the
 ones to revisit before the stills are used as training data.
+
+**Favourites.** Separate from tags, **☆ favourite** in the viewer stars a visit as a keeper. Starred
+while its clip plays, it keeps that moment and reopens there (paused); starred on the image, it
+opens on the still. Starred visits show ★ after their name, and **★ favourites** in the filter bar
+lists them all, from any time (the window is ignored) and hidden or not. Nothing cleans up visit
+media today; any future cleanup must leave favourites alone.
 
 In the viewer, scroll to zoom and drag to pan. **full-res image** opens the still in its own tab,
 filling the window, with the same scroll-zoom and drag-pan (double-click fits; **boxes** turns the
