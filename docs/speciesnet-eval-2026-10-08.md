@@ -14,9 +14,8 @@ per visit, not per frame.
 
 - **Model:** `speciesnet` 5.0.5 (PyPI), classifier `v4.0.3a` (Kaggle, 214 MB), MegaDetector v5a
   (281 MB). PyTorch 2.2.2 on CPU, Intel i7 MacBook Pro.
-- **Input:** 244 frames pulled from the six raw clips in
-  `camera-controller/recordings/known_good_6` with ffmpeg: 3 fps for clips under 10 s, 1 fps for
-  the rest.
+- **Input:** 244 frames pulled from a six-clip known-good recording set with ffmpeg: 3 fps for
+  clips under 10 s, 1 fps for the rest.
 - **Labels:** the classifier's 2,498 labels are in [speciesnet-labels-v4.0.3a.txt](speciesnet-labels-v4.0.3a.txt),
   copied unchanged from the model download (Apache-2.0). Each line is
   `id;class;order;family;genus;species;common name`; blank fields mark higher-level labels.

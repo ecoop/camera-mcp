@@ -107,7 +107,7 @@ The monitor is the only writer. The MCP server opens the database read-only
 
 - Runs on a **low-resolution, low-rate decode** of each camera's `/stream2` (about 5 fps). Uses ffmpeg with hardware decode
   (`-hwaccel videotoolbox` on the Mac Studio).
-- Frame differencing with a background model, as in `wildlife-cv-pipeline`'s `MotionDetector`.
+- Frame differencing with a background model.
 - **Tuned for recall, not precision.** Swaying branches are fine: tier 2 rejects frames with no
   animal in them. Its only job is not to miss animals and to keep SpeciesNet's load bounded.
   Exclusion zones become optional; add one only where motion never stops (a flag, a feeder in the
@@ -457,7 +457,7 @@ Not built in phase 2; recorded here so phase 2 doesn't make it harder.
 1. The remaining primary cameras (and a seventh, not yet installed): name, IP, and placement.
    Stream paths are known (`/stream1`, `/stream2`).
 2. ~~Camera roles~~: answered; tags are set in the local `cameras.yaml`.
-3. Is `wildlife-cv-pipeline`'s `motion_capture.py` running anywhere, and still writing to MinIO?
+3. Is the earlier motion-capture pipeline running anywhere, and still writing to MinIO?
    Without its trained weights it emits random placeholder detections, so any data it wrote may be
    noise. Does camera-mcp need MinIO at all, or is local disk enough?
 4. Alert channel, and which labels should alert.
