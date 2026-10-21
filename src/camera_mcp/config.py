@@ -600,7 +600,7 @@ def load_cameras(
     for i, raw in enumerate(data.get("cameras") or []):
         name = raw.get("name")
         host = raw.get("host")
-        source = raw.get("source") or raw.get("rtsp_url")  # rtsp_url: wildlife-cv-pipeline's key
+        source = raw.get("source") or raw.get("rtsp_url")  # rtsp_url: the key name an earlier pipeline used
         if name is None or not (host or source):
             raise ConfigError(f"cameras[{i}]: needs a name and a host (or a source)")
         if host and source:
