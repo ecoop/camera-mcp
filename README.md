@@ -4,15 +4,30 @@
 ![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13-blue)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
-_Last updated: 2026-10-20_
+_Last updated: 2026-10-21_
 
-An MCP server over the home IP cameras. A model can list the cameras and look at a current frame
-from any of them; detections, activity and recording come in later phases. Phase 2 (monitor,
-visit log, history tools) is described in [docs/phase2-design.md](docs/phase2-design.md), backed by the
+An MCP server and an always-on monitor for home IP cameras, built to watch for wildlife on one
+machine without saturating it.
+
+- **Motion first, models second.** A lightweight motion frontend watches every camera on small
+  grayscale frames and opens a window only when something moves; only those windows reach the
+  detector. Analysis regions, motion masks and exclusion zones cut the work further, so six cameras
+  fit on one Apple-Silicon GPU.
+- **Detect, then identify.** MegaDetector finds animals, people and vehicles; SpeciesNet names the
+  animal, limited to species found in your area. Each arrival-to-departure is logged as one visit in
+  SQLite, with a thumbnail, a full-resolution still and a clip.
+- **Junk control.** A memory of fixed scenery, "ignore" zones that drop boxes before they are
+  classified, and a reversible gate for unidentified visits keep leaves, fruit and feeder roofs out
+  of the log.
+- **Ask Claude.** The MCP tools below answer live and history questions (what came by overnight, is
+  the yard clear) and say plainly when a camera wasn't being watched.
+- **A web dashboard** for browsing visits and analytics, tagging detections down to single boxes,
+  favourites, a labels map, drawing zones, and a plain-English ask box.
+- **A morning brief** by email or iMessage.
+
+The design is in [docs/phase2-design.md](docs/phase2-design.md), backed by the
 [SpeciesNet eval](docs/speciesnet-eval-2026-10-08.md). SpeciesNet's full label list is in
 [docs/speciesnet-labels-v4.0.3a.txt](docs/speciesnet-labels-v4.0.3a.txt).
-
-Household context and motivations stay out of the repo, in the git-ignored `notes/` folder.
 
 ## Tools
 
