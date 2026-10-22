@@ -9,8 +9,17 @@ from contextlib import closing
 from datetime import datetime
 
 from camera_mcp.config import find_camera
-from camera_mcp.history.base import GROUP_BY, HistoryError, WATCHING_LAG, _epoch, _fav_cols, _get, _tables, parse_when
+from camera_mcp.history.base import (
+    GROUP_BY,
+    WATCHING_LAG,
+    HistoryError,
+    _fav_cols,
+    _get,
+    _tables,
+    parse_when,
+)
 from camera_mcp.taxa import UNIONS
+from camera_mcp.times import epoch
 
 
 class VisitQueries:
@@ -175,7 +184,7 @@ class VisitQueries:
         out = []
         for name in self.cameras:
             st = status.get(name)
-            last = _epoch(st["last_frame_at"]) if st and st["last_frame_at"] else None
+            last = epoch(st["last_frame_at"]) if st and st["last_frame_at"] else None
             out.append({
                 "camera": name,
                 "watching_now": bool(st and st["state"] == "watching" and last and now - last < WATCHING_LAG),
