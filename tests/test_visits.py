@@ -488,7 +488,7 @@ def test_zones_elsewhere_or_hide_unrecognized_leave_the_visit_alone(tmp_path, bo
 
 
 def test_zone_drop_maps_roi_boxes_to_the_full_frame():
-    from camera_mcp.monitor import zone_drop
+    from camera_mcp.zones import zone_drop
     assert zone_drop(Camera("c", "x", exclude=((PATH, "hide_unrecognized"),))) is None  # only "ignore" zones drop
     drop = zone_drop(Camera("c", "x", roi=(0.0, 0.25, 1.0, 0.75), exclude=((PATH, "ignore"),)))
     centre_y = (0.5 - 0.25) / 0.75  # full-frame y 0.5, as a fraction of the roi band
@@ -555,7 +555,7 @@ def test_an_ignore_zone_with_min_size_drops_big_boxes_and_keeps_small_ones(tmp_p
 
 
 def test_zone_drop_measures_size_on_the_full_frame():
-    from camera_mcp.monitor import zone_drop
+    from camera_mcp.zones import zone_drop
     roi = (0.0, 0.25, 1.0, 0.5)
     drop = zone_drop(Camera("c", "x", roi=roi, exclude=((PATH, "ignore", 0.05),)))
     centre_y = (0.5 - 0.25) / 0.5

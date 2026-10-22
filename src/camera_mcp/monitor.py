@@ -27,7 +27,6 @@ from __future__ import annotations
 import argparse
 import collections
 import logging
-import os
 import re
 import signal
 import subprocess
@@ -42,19 +41,20 @@ import cv2
 import numpy as np
 
 from camera_mcp import ringbuffer
+from camera_mcp.alerts import Alerter
 from camera_mcp.capture import FFMPEG
 from camera_mcp.config import (Camera, ConfigError, default_config_path, default_data_dir, find_camera, load_cameras,
                                load_site)
-from camera_mcp.credentials import redact
-from camera_mcp.zones import zone_holds, zone_parts
 from camera_mcp.detect import Detector, SpeciesNetDetector, available
 from camera_mcp.gate import GateRules, in_zones, judge
 from camera_mcp.motion import MotionDetector, MotionWindows, Window
 from camera_mcp.probe import ProbeError, probe_stream
+from camera_mcp.recorder import _tail, stop_process, stop_stale_recorder, watcher_args
 from camera_mcp.scenery import Scenery
 from camera_mcp.store import Store
 from camera_mcp.view import ViewCheck, is_colour, is_infrared
 from camera_mcp.visits import Visit, VisitTracker
+from camera_mcp.zones import zone_drop
 
 log = logging.getLogger("camera_mcp.monitor")
 
@@ -82,24 +82,6 @@ PAUSE_RECHECK = 30.0  # seconds between clock checks while a camera is outside i
 SHUTDOWN_SECONDS = 120.0  # at most this long, after stopping, to save open visits and their media
 
 
-def zone_drop(camera: Camera):
-    """A test for the detector: True for a box (fractions of the analysis frame, i.e. the camera's
-    roi crop) whose centre lies in one of the camera's "ignore" exclusion zones (fractions of the
-    full frame), and whose size is in the zone's size range if it has one (config.zone_holds). None
-    when the camera has none. Such a box is dropped before it's classified, so it can't open or extend
-    a visit: a phantom on a feeder roof can't keep the GPU busy all night, while a small bird passing
-    the same spot (below the zone's min_size) is kept."""
-    zones = [z for z in camera.exclude if zone_parts(z)[1] == "ignore"]
-    if not zones:
-        return None
-    rx, ry, rw, rh = camera.roi or (0.0, 0.0, 1.0, 1.0)
-
-    def drop(b) -> bool:
-        cx, cy = rx + (b.x + b.w / 2) * rw, ry + (b.y + b.h / 2) * rh
-        return any(zone_holds(z, cx, cy, b.w * rw, b.h * rh) for z in zones)
-    return drop
-
-
 def analysis_frame(full: np.ndarray, crop: tuple[int, int, int, int] | None,
                    scale: tuple[int, int] | None) -> np.ndarray:
     """The detector's input cut from a full decoded frame (RGB): the camera's roi `crop` (x, y, w, h
@@ -118,84 +100,6 @@ def encode_still(full: np.ndarray) -> bytes | None:
     from. imencode, not imwrite: SpeciesNet's yolov5 replaces cv2.imwrite with a 2-argument version."""
     ok, buf = cv2.imencode(".jpg", cv2.cvtColor(full, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 92])
     return buf.tobytes() if ok else None
-
-
-def watcher_args(source: Camera, width: int, height: int, fps: float) -> list[str]:
-    """ffmpeg arguments that decode `source` to raw YUV 4:2:0 frames on stdout: the Y plane
-    (brightness) drives motion detection; the colour planes tell day from infrared night."""
-    args = [FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin"]
-    args += ["-rtsp_transport", "tcp", "-timeout", "10000000"] if source.is_stream else ["-re"]
-    return args + ["-i", source.source, "-an", "-vf", f"fps={fps},scale={width}:{height}",
-                   "-f", "rawvideo", "-pix_fmt", "yuv420p", "-"]
-
-
-def stop_process(proc: subprocess.Popen, grace: tuple[float, ...] = (2.0, 3.0)) -> None:
-    """Stop an ffmpeg child for certain.
-
-    ffmpeg 7 treats the first SIGTERM (or SIGINT) as "finish gracefully", and with the segment
-    muxer that can hang indefinitely; a second signal makes it exit. SIGKILL is the backstop.
-    """
-    for wait in grace:
-        if proc.poll() is not None:
-            return
-        proc.terminate()
-        try:
-            proc.wait(wait)
-            return
-        except subprocess.TimeoutExpired:
-            pass
-    proc.kill()
-    proc.wait()
-
-
-def _alive(pid: int) -> bool:
-    """True if `pid` is running; a zombie (exited, not yet reaped) counts as gone."""
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    ps = subprocess.run(["ps", "-p", str(pid), "-o", "stat="], capture_output=True, text=True)
-    return ps.returncode == 0 and not ps.stdout.strip().startswith("Z")
-
-
-def stop_stale_recorder(pid_file: Path) -> bool:
-    """Stop a recorder left running by a monitor that died, if it's still writing into this
-    camera's buffer. True if one was stopped. The command line must name the buffer directory,
-    so an unrelated process that reused the pid is left alone."""
-    try:
-        pid = int(pid_file.read_text().strip())
-    except (FileNotFoundError, ValueError):
-        return False
-    ps = subprocess.run(["ps", "-ww", "-p", str(pid), "-o", "command="], capture_output=True, text=True)
-    stopped = False
-    if ps.returncode == 0 and str(pid_file.parent) in ps.stdout:
-        for sig in (signal.SIGTERM, signal.SIGTERM, signal.SIGKILL):
-            try:
-                os.kill(pid, sig)
-            except ProcessLookupError:
-                break
-            for _ in range(20):
-                time.sleep(0.1)
-                if not _alive(pid):
-                    break
-            else:
-                continue
-            break
-        stopped = True
-    pid_file.unlink(missing_ok=True)
-    return stopped
-
-
-def _tail(proc: subprocess.Popen) -> collections.deque[str]:
-    """Collect the last few stderr lines of `proc` in the background (and keep the pipe drained)."""
-    lines: collections.deque[str] = collections.deque(maxlen=5)
-
-    def drain() -> None:
-        for raw in proc.stderr:
-            lines.append(redact(raw.decode(errors="replace").strip()))
-
-    threading.Thread(target=drain, daemon=True).start()
-    return lines
 
 
 class CameraWorker:
@@ -840,49 +744,6 @@ class Analyzer:
             for visit in closed:
                 worker._visit_closed(visit)
         return len(proc.stdout) // size  # frames (inferences) run on this segment
-
-
-class Alerter:
-    """Sends a short SMS (via an email->SMS gateway) the first time a high-priority species is
-    seen, then stays quiet for COOLDOWN per species so a lingering or returning animal does not
-    spam. Inactive (a no-op) unless alert species, mail settings, and a recipient are all set.
-
-    The alert fires when the sighting is *analysed*, which under a backlog can trail wall-clock;
-    the message carries the actual sighting time. Give the cameras that matter for alerts a higher
-    `priority` so their backlog is analysed before quieter cameras' — within one camera, segments
-    are still analysed in time order, so a fresh sighting waits behind that camera's own backlog."""
-
-    COOLDOWN = 300.0  # seconds between alerts for the same species
-
-    def __init__(self, species, settings, recipient, tz):
-        self.species = set(species)
-        self.settings = settings
-        self.recipient = recipient
-        self.tz = tz
-        self._last: dict[str, float] = {}
-
-    @property
-    def active(self) -> bool:
-        return bool(self.species and self.settings and self.recipient)
-
-    def maybe_alert(self, camera: str, species: str, t: float) -> None:
-        if not self.active or species not in self.species:
-            return
-        now = time.time()
-        if now - self._last.get(species, 0.0) < self.COOLDOWN:
-            return
-        self._last[species] = now
-        when = datetime.fromtimestamp(t, timezone.utc).astimezone(self.tz).strftime("%-I:%M%p").lower()
-        body = f"{species} at {camera}, {when}"
-        try:
-            from camera_mcp.mailer import MailError, send_email
-            try:
-                send_email("", body, {**self.settings, "SMTP_TO": self.recipient})
-                log.info("alert sent: %s", body)
-            except MailError as e:
-                log.warning("alert send failed (%s): %s", body, e)
-        except Exception:  # never let an alert crash analysis
-            log.exception("alert error for %s", body)
 
 
 def backfill_night(store: Store, data_dir: Path, stop: threading.Event | None = None) -> int:
