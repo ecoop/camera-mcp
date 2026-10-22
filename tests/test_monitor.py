@@ -20,7 +20,8 @@ import pytest
 
 from camera_mcp.config import (Camera, ConfigError, MonitorSettings, find_camera, load_cameras,
                                parse_active_window)
-from camera_mcp.monitor import Monitor, stop_stale_recorder
+from camera_mcp.monitor import Monitor
+from camera_mcp.recorder import stop_stale_recorder
 from camera_mcp.motion import MotionDetector, MotionWindows
 from camera_mcp.probe import probe_stream
 from camera_mcp.ringbuffer import covering, list_segments, prune
@@ -404,7 +405,7 @@ def test_analyzer_persists_stats(tmp_path):
 def test_alerter_fires_once_per_cooldown_for_alert_species(monkeypatch):
     from zoneinfo import ZoneInfo
     import camera_mcp.mailer as mailer
-    from camera_mcp.monitor import Alerter
+    from camera_mcp.alerts import Alerter
     sent = []
     monkeypatch.setattr(mailer, "send_email", lambda subj, body, settings: sent.append((body, settings["SMTP_TO"])))
     a = Alerter({"coyote"}, {"SMTP_HOST": "h", "SMTP_FROM": "f", "SMTP_TO": "brief@x"},

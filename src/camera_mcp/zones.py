@@ -220,3 +220,21 @@ def save_zone_overlay(path: str | Path, overlay_json: dict) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(overlay_json, indent=2))
     tmp.replace(path)
+
+
+def zone_drop(camera: Camera):
+    """A test for the detector: True for a box (fractions of the analysis frame, i.e. the camera's
+    roi crop) whose centre lies in one of the camera's "ignore" exclusion zones (fractions of the
+    full frame), and whose size is in the zone's size range if it has one (zone_holds). None
+    when the camera has none. Such a box is dropped before it's classified, so it can't open or extend
+    a visit: a phantom on a feeder roof can't keep the GPU busy all night, while a small bird passing
+    the same spot (below the zone's min_size) is kept."""
+    zones = [z for z in camera.exclude if zone_parts(z)[1] == "ignore"]
+    if not zones:
+        return None
+    rx, ry, rw, rh = camera.roi or (0.0, 0.0, 1.0, 1.0)
+
+    def drop(b) -> bool:
+        cx, cy = rx + (b.x + b.w / 2) * rw, ry + (b.y + b.h / 2) * rh
+        return any(zone_holds(z, cx, cy, b.w * rw, b.h * rh) for z in zones)
+    return drop
