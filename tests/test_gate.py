@@ -13,8 +13,9 @@ import pytest
 from camera_mcp.config import Camera, MonitorSettings, Site, load_cameras
 from camera_mcp.gate import GateRules, backtest, judge, main, travel
 from camera_mcp.history import History
-from camera_mcp.store import Store, iso
+from camera_mcp.store import Store
 from camera_mcp.taxa import Label
+from camera_mcp.times import iso
 from camera_mcp.visits import Box, Detection, Visit
 
 NOW = time.time()

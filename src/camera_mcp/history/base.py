@@ -5,20 +5,16 @@ tags, taxa, time), hidden-visit handling, schema checks for older logs, local ti
 
 from __future__ import annotations
 
-import re
 import sqlite3
 from collections import defaultdict
 from contextlib import closing
-from datetime import datetime, timedelta
 from pathlib import Path
 
+from camera_mcp import times
 from camera_mcp.config import Camera, Site, find_camera
-from camera_mcp.store import iso
 from camera_mcp.taxa import CLASS_NAMES, GROUPS, UNIONS, expand_taxon
+from camera_mcp.times import iso
 
-
-DURATION = re.compile(r"^(\d+(?:\.\d+)?)\s*(s|m|h|d|w)$")
-UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
 GROUP_NAMES = {g for g, _ in GROUPS} | {"bird", "mammal", "animal", "person", "vehicle"}
 GROUP_BY = ("species", "group", "camera", "hour", "day")
 WATCHING_LAG = 60.0  # a camera whose last frame is older than this isn't being watched now
@@ -29,26 +25,11 @@ class HistoryError(ValueError):
 
 
 def parse_when(text: str | None, now: float, tz) -> float:
-    """An ISO time (local if it has no zone), a duration ago ("15m", "4h", "3d", "2w"),
-    "now", "today" or "yesterday", as epoch seconds."""
-    if text is None or text.strip().lower() in ("", "now"):
-        return now
-    t = text.strip().lower()
-    if m := DURATION.match(t):
-        return now - float(m.group(1)) * UNITS[m.group(2)]
-    if t in ("today", "yesterday"):
-        midnight = datetime.fromtimestamp(now, tz).replace(hour=0, minute=0, second=0, microsecond=0)
-        return (midnight - timedelta(days=1 if t == "yesterday" else 0)).timestamp()
+    """times.parse_when, raising HistoryError (what every history answer's caller handles)."""
     try:
-        when = datetime.fromisoformat(text.strip())
-    except ValueError:
-        raise HistoryError(f"can't read the time {text!r}: use an ISO time like 2026-10-09T06:00, a "
-                           "duration ago like 15m, 4h, 3d or 2w, or now, today, yesterday") from None
-    return (when if when.tzinfo else when.replace(tzinfo=tz)).timestamp()
-
-
-def _epoch(iso: str) -> float:
-    return datetime.fromisoformat(iso).timestamp()
+        return times.parse_when(text, now, tz)
+    except times.TimeError as e:
+        raise HistoryError(str(e)) from None
 
 
 def _get(row: sqlite3.Row | None, key: str, default=None):
@@ -96,7 +77,7 @@ class LogReader:
         return db
 
     def _local(self, iso: str | None) -> str | None:
-        return datetime.fromisoformat(iso).astimezone(self.tz).isoformat(timespec="seconds") if iso else None
+        return times.local(iso, self.tz)
 
     @staticmethod
     def _iso(t: float) -> str:
@@ -177,12 +158,12 @@ class LogReader:
         if known:
             for row in db.execute(f"SELECT camera, started_at, ended_at FROM camera_uptime WHERE camera IN ({marks})"
                                   " AND started_at <= ? AND ended_at >= ?", (*names, self._iso(t1), self._iso(t0))):
-                watched[row["camera"]] += max(0.0, min(_epoch(row["ended_at"]), t1) - max(_epoch(row["started_at"]), t0))
+                watched[row["camera"]] += max(0.0, min(times.epoch(row["ended_at"]), t1) - max(times.epoch(row["started_at"]), t0))
         skipped: dict[str, float] = defaultdict(float)
         if "analysis_skipped" in _tables(db):
             for row in db.execute(f"SELECT camera, started_at, ended_at FROM analysis_skipped WHERE camera IN ({marks})"
                                   " AND started_at <= ? AND ended_at >= ?", (*names, self._iso(t1), self._iso(t0))):
-                skipped[row["camera"]] += max(0.0, min(_epoch(row["ended_at"]), t1) - max(_epoch(row["started_at"]), t0))
+                skipped[row["camera"]] += max(0.0, min(times.epoch(row["ended_at"]), t1) - max(times.epoch(row["started_at"]), t0))
         status = {r["camera"]: r for r in db.execute(f"SELECT * FROM camera_status WHERE camera IN ({marks})", names)}
         out = []
         for name in names:

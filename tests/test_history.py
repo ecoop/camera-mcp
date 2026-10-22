@@ -203,7 +203,7 @@ def test_monitor_status(log):
 def test_analysis_health(log):
     import sqlite3
 
-    from camera_mcp.store import iso
+    from camera_mcp.times import iso
 
     history, data = log
     db = sqlite3.connect(data / "monitor.db")
@@ -313,7 +313,7 @@ def test_logs_from_older_monitors(tmp_path):
 
 
 def iso_ago(seconds: float) -> str:
-    from camera_mcp.store import iso
+    from camera_mcp.times import iso
 
     return iso(time.time() - seconds)
 

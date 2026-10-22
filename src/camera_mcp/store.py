@@ -12,8 +12,9 @@ import json
 import sqlite3
 import threading
 import time
-from datetime import datetime, timezone
 from pathlib import Path
+
+from camera_mcp.times import iso
 
 VERDICTS = ("real", "false", "wrong_species")  # a human's correctness label on a visit
 
@@ -155,10 +156,6 @@ def _species(verdict: str, species: str | None) -> str | None:
     if species and verdict == "false":
         raise ValueError("a 'false' verdict can't name a species: nothing real was there")
     return species
-
-
-def iso(t: float) -> str:
-    return datetime.fromtimestamp(t, timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 class Store:
