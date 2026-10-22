@@ -149,3 +149,39 @@ def test_the_box_renders_a_safe_subset_of_markdown(log, monkeypatch):
     history, _, tmp = log
     page = starlette_testclient.TestClient(build_app(history.cameras, tmp, Site(timezone="UTC"))).get("/").text
     assert "function renderAnswer" in page and "esc(text)" in page  # escaped first, then bold/bullets/links
+
+
+def test_the_ask_box_uses_the_mcp_servers_own_tools(log):
+    """One definition: the ask box offers the MCP server's metadata-only tools with the server's own
+    names, descriptions and schemas (group_by's five choices included), calls them through it, gets
+    list results whole (the server wraps them), and passes errors on without the server's prefix."""
+    import anyio
+
+    from camera_mcp.ask import ASK_TOOLS
+    a = asker(log, FakeClient())
+    server = {t.name: t for t in anyio.run(a.server.list_tools)}
+    assert [t["name"] for t in a.tools()] == list(ASK_TOOLS) and "snapshot" not in ASK_TOOLS
+    for t in a.tools():
+        assert t["description"] == server[t["name"]].description and t["input_schema"] == server[t["name"]].input_schema
+    assert a.tools()[1]["input_schema"]["properties"]["group_by"]["enum"] == ["species", "group", "camera", "hour", "day"]
+    status = json.loads(a.run_tool("monitor_status", {}, {}))
+    assert sorted(c["camera"] for c in status) == ["backyard", "east_deck", "west_deck"]  # every camera, not the first
+    with pytest.raises(Exception) as e:
+        a.run_tool("find_visits", {"since": "24h", "cameras": ["garage"]}, {})
+    assert str(e.value).startswith("unknown camera") and "Error executing tool" not in str(e.value)
+
+
+def test_the_ask_box_keeps_its_own_visit_limit(log, monkeypatch):
+    """find_visits here defaults to 20 visits and never asks for more than 50, whatever Claude sends."""
+    from types import SimpleNamespace
+
+    a = asker(log, FakeClient())
+    sent = []
+
+    async def call_tool(name, args):
+        sent.append(args["limit"])
+        return SimpleNamespace(structured_content={"visits": [], "total": 0})
+    monkeypatch.setattr(a.server, "call_tool", call_tool)
+    for limit in (None, 5, 500):
+        a.run_tool("find_visits", {"since": "24h"} | ({"limit": limit} if limit else {}), {})
+    assert sent == [20, 5, 50]

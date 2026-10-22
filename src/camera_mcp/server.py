@@ -2,7 +2,10 @@
 """The camera MCP server: live snapshots, and questions about what the cameras have seen.
 
 Live tools (list_cameras, snapshot) open the cameras directly. History tools (find_visits,
-activity_summary, visit_media, monitor_status) read the monitor's visit log, read-only.
+activity_summary, visit_media, monitor_status, analysis_health) read the monitor's visit log,
+read-only. These are the one definition of the tools: the dashboard's ask box (ask.py) offers
+Claude the metadata-only ones by listing and calling this server in process, and an agent can
+connect to it over MCP.
 
 Run over stdio:  camera-mcp --config ~/projects/camera-mcp/cameras.yaml [--data-dir data]
 """
@@ -14,7 +17,7 @@ import json
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import anyio
 from mcp.server.mcpserver import Image, MCPServer
@@ -146,6 +149,7 @@ def build_server(cameras: dict[str, Camera], history: History | None = None, dat
                           min_score: float = 0.0, limit: int = 50,
                           include_suppressed: bool = False) -> dict[str, Any]:
         """Animal visits in a stretch of time, newest first, with how much of it each camera was watched.
+        Use for which / when / show-me questions.
 
         Args:
             since: start: ISO time or a duration ago (15m, 4h, 3d, 2w), today, yesterday
@@ -165,10 +169,12 @@ def build_server(cameras: dict[str, Camera], history: History | None = None, dat
             include_suppressed))
 
     @server.tool(annotations=READ_ONLY)
-    async def activity_summary(since: str = "7d", until: str | None = None, group_by: str = "species",
+    async def activity_summary(since: str = "7d", until: str | None = None,
+                               group_by: Literal["species", "group", "camera", "hour", "day"] = "species",
                                cameras: list[str] | None = None, tag: str | None = None,
                                taxon: str | None = None) -> dict[str, Any]:
         """Count visits in a stretch of time, grouped, with how much of it each camera was watched.
+        Use for how-many / when-most / busiest questions.
 
         Args:
             since: start: ISO time or a duration ago (15m, 4h, 3d, 2w), today, yesterday
