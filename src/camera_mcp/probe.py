@@ -20,7 +20,8 @@ import time
 from dataclasses import dataclass
 from fractions import Fraction
 
-from camera_mcp.config import Camera, ConfigError, default_config_path, load_cameras, redact
+from camera_mcp.config import Camera, ConfigError, default_config_path, load_cameras
+from camera_mcp.credentials import redact
 
 from camera_mcp.capture import find_tool
 

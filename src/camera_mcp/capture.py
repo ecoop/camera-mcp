@@ -23,7 +23,8 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
-from camera_mcp.config import NO_LOGIN, Camera, redact
+from camera_mcp.config import Camera
+from camera_mcp.credentials import NO_LOGIN, redact
 
 def find_tool(name: str, override_env: str) -> str:
     """Locate an ffmpeg-family binary: an explicit override, then PATH, then the usual Homebrew

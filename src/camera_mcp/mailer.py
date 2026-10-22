@@ -25,7 +25,7 @@ from email.message import EmailMessage
 from html import escape
 from pathlib import Path
 
-from camera_mcp.config import read_credentials_file
+from camera_mcp.credentials import read_credentials_file
 
 SETTINGS = ("SMTP_HOST", "SMTP_PORT", "SMTP_FROM", "SMTP_TO", "SMTP_USER", "SMTP_PASS",
             "SMTP_CA_FILE", "SMTP_INSECURE")

@@ -31,7 +31,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from camera_mcp.config import default_data_dir, zone_holds, zone_parts
+from camera_mcp.config import default_data_dir
+from camera_mcp.zones import zone_holds, zone_parts
 from camera_mcp.times import iso, parse_when
 from camera_mcp.visits import Box
 
