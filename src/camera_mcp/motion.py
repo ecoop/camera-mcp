@@ -17,7 +17,8 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
-from camera_mcp.config import MonitorSettings, Shape, is_poly
+from camera_mcp.config import MonitorSettings
+from camera_mcp.zones import is_poly, Shape
 
 
 class MotionDetector:

@@ -14,8 +14,9 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from camera_mcp.config import (ConfigError, exclude_json, find_camera, load_zone_overlay, parse_excludes,
-                               parse_rect, parse_shape, parse_shapes, save_zone_overlay, shape_json)
+from camera_mcp.config import ConfigError, find_camera
+from camera_mcp.zones import (exclude_json, load_zone_overlay, parse_excludes, parse_rect, parse_shape, parse_shapes,
+                              save_zone_overlay, shape_json)
 from camera_mcp.web.context import Context
 
 

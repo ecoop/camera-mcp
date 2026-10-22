@@ -43,10 +43,10 @@ import numpy as np
 
 from camera_mcp import ringbuffer
 from camera_mcp.capture import FFMPEG
-from camera_mcp.config import (
-    Camera, ConfigError, default_config_path, default_data_dir, find_camera, load_cameras, load_site, redact,
-    zone_holds, zone_parts,
-)
+from camera_mcp.config import (Camera, ConfigError, default_config_path, default_data_dir, find_camera, load_cameras,
+                               load_site)
+from camera_mcp.credentials import redact
+from camera_mcp.zones import zone_holds, zone_parts
 from camera_mcp.detect import Detector, SpeciesNetDetector, available
 from camera_mcp.gate import GateRules, in_zones, judge
 from camera_mcp.motion import MotionDetector, MotionWindows, Window

@@ -211,7 +211,8 @@ HEDGE = ((0.1, 0.1), (0.5, 0.1), (0.5, 0.5), (0.3, 0.25), (0.1, 0.5))  # concave
 
 
 def test_polygons_parse_round_trip_and_reject_bad_input():
-    from camera_mcp.config import ConfigError, parse_shape, parse_shapes, shape_json
+    from camera_mcp.config import ConfigError
+    from camera_mcp.zones import parse_shape, parse_shapes, shape_json
     assert parse_shape({"poly": [list(p) for p in HEDGE]}, "t", "k") == HEDGE
     assert parse_shape([0.1, 0.2, 0.3, 0.4], "t", "k") == (0.1, 0.2, 0.3, 0.4)  # rectangles still work
     mixed = parse_shapes([[0.1, 0.2, 0.3, 0.4], {"poly": [list(p) for p in HEDGE]}], "t", "k")
@@ -223,7 +224,7 @@ def test_polygons_parse_round_trip_and_reject_bad_input():
 
 
 def test_point_in_a_concave_polygon():
-    from camera_mcp.config import shape_contains
+    from camera_mcp.zones import shape_contains
     assert shape_contains(HEDGE, 0.2, 0.2) and shape_contains(HEDGE, 0.49, 0.45)  # either side of the notch
     assert not shape_contains(HEDGE, 0.3, 0.4)  # in the notch: inside the bounding box, outside the shape
     assert not shape_contains(HEDGE, 0.7, 0.2)
@@ -282,7 +283,8 @@ def test_min_size_keeps_small_boxes_out_of_a_zone():
 def test_min_size_parses_round_trips_and_is_optional(tmp_path):
     import json
 
-    from camera_mcp.config import ConfigError, exclude_json, load_cameras
+    from camera_mcp.config import ConfigError, load_cameras
+    from camera_mcp.zones import exclude_json
     cfg = tmp_path / "cameras.yaml"
     cfg.write_text("cameras:\n  - {name: backyard, source: b.mp4}\n")
     zones = tmp_path / "zones.json"
@@ -316,7 +318,8 @@ def test_max_size_keeps_big_boxes_out_of_a_zone():
 def test_max_size_parses_round_trips_and_must_be_above_min_size(tmp_path):
     import json
 
-    from camera_mcp.config import ConfigError, exclude_json, load_cameras
+    from camera_mcp.config import ConfigError, load_cameras
+    from camera_mcp.zones import exclude_json
     cfg = tmp_path / "cameras.yaml"
     cfg.write_text("cameras:\n  - {name: west_alley, source: w.mp4}\n")
     zones = tmp_path / "zones.json"

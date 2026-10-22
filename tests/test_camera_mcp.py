@@ -12,9 +12,10 @@ import numpy as np
 import pytest
 from mcp import Client
 
-from camera_mcp import config as camera_config
+from camera_mcp import credentials
 from camera_mcp.capture import grab_frame, reachable, to_jpeg
-from camera_mcp.config import Camera, ConfigError, load_cameras, redact
+from camera_mcp.config import Camera, ConfigError, load_cameras
+from camera_mcp.credentials import redact
 from camera_mcp.probe import ProbeError, probe_stream
 from camera_mcp.server import build_server
 
@@ -87,7 +88,7 @@ def test_host_quotes_special_characters_in_credentials(tmp_path, monkeypatch):
 def _no_env_login(monkeypatch, keychain=None):
     monkeypatch.delenv("CAMERA_USER", raising=False)
     monkeypatch.delenv("CAMERA_PASS", raising=False)
-    monkeypatch.setattr(camera_config, "_keychain_login", lambda: keychain)
+    monkeypatch.setattr(credentials, "_keychain_login", lambda: keychain)
 
 
 def test_host_without_credentials_is_an_error(tmp_path, monkeypatch):
@@ -118,18 +119,18 @@ def test_keychain_lookup_parses_security_output(monkeypatch):
         return subprocess.CompletedProcess(args, 0, stdout='keychain: "login.keychain-db"\nattributes:\n'
                                            '    "acct"<blob>="tapo-admin"\n    "svce"<blob>="camera-mcp"\n', stderr="")
 
-    camera_config._keychain_login.cache_clear()
-    monkeypatch.setattr(camera_config.shutil, "which", lambda name: "/usr/bin/security")
-    monkeypatch.setattr(camera_config.subprocess, "run", fake_run)
+    credentials._keychain_login.cache_clear()
+    monkeypatch.setattr(credentials.shutil, "which", lambda name: "/usr/bin/security")
+    monkeypatch.setattr(credentials.subprocess, "run", fake_run)
     try:
-        assert camera_config._keychain_login() == ("tapo-admin", "s3cret pass")
+        assert credentials._keychain_login() == ("tapo-admin", "s3cret pass")
         assert all("-s" in c and "camera-mcp" in c for c in calls)
-        camera_config._keychain_login.cache_clear()
-        monkeypatch.setattr(camera_config.subprocess, "run",
+        credentials._keychain_login.cache_clear()
+        monkeypatch.setattr(credentials.subprocess, "run",
                             lambda args, **kw: subprocess.CompletedProcess(args, 44, stdout="", stderr="not found"))
-        assert camera_config._keychain_login() is None
+        assert credentials._keychain_login() is None
     finally:
-        camera_config._keychain_login.cache_clear()
+        credentials._keychain_login.cache_clear()
 
 
 async def test_server_without_a_login_still_answers_but_snapshot_says_why(tmp_path, monkeypatch):
@@ -288,19 +289,19 @@ def test_login_falls_back_to_a_credentials_file(tmp_path, monkeypatch):
     creds = tmp_path / "credentials"
     creds.write_text("# camera login\nCAMERA_USER = filecam \nCAMERA_PASS=f1le:p@ss\n")
     monkeypatch.setenv("CAMERA_MCP_CREDENTIALS", str(creds))
-    assert camera_config.camera_login() == ("filecam", "f1le:p@ss")
+    assert credentials.camera_login() == ("filecam", "f1le:p@ss")
     # env still wins over the file
     monkeypatch.setenv("CAMERA_USER", "envu"); monkeypatch.setenv("CAMERA_PASS", "envp")
-    assert camera_config.camera_login() == ("envu", "envp")
+    assert credentials.camera_login() == ("envu", "envp")
 
 
 def test_credentials_file_missing_or_incomplete_is_none(tmp_path, monkeypatch):
     _no_env_login(monkeypatch)
     monkeypatch.setenv("CAMERA_MCP_CREDENTIALS", str(tmp_path / "nope"))
-    assert camera_config._file_login() is None
+    assert credentials._file_login() is None
     half = tmp_path / "half"; half.write_text("CAMERA_USER=only\n")
     monkeypatch.setenv("CAMERA_MCP_CREDENTIALS", str(half))
-    assert camera_config._file_login() is None
+    assert credentials._file_login() is None
 
 
 def test_host_camera_uses_the_credentials_file_when_set(tmp_path, monkeypatch):

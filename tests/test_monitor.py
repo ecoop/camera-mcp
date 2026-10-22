@@ -319,7 +319,7 @@ def test_roi_parses_and_rejects_bad(tmp_path):
 
 def test_zone_overlay_merges_and_overrides(tmp_path):
     import json
-    from camera_mcp.config import load_zone_overlay
+    from camera_mcp.zones import load_zone_overlay
     cfg = write(tmp_path, "cameras:\n"
                 "  - {name: a, source: a.mp4, roi: [0.1, 0.1, 0.5, 0.5]}\n"
                 "  - {name: b, source: b.mp4}\n")

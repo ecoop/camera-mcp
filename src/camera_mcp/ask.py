@@ -25,7 +25,7 @@ from pathlib import Path
 import anyio
 from mcp.server.mcpserver.exceptions import ToolError
 
-from camera_mcp.config import read_credentials_file
+from camera_mcp.credentials import read_credentials_file
 from camera_mcp.history import History, HistoryError
 from camera_mcp.server import INSTRUCTIONS, build_server
 
