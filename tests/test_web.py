@@ -194,8 +194,8 @@ def test_visit_label_blocked_when_readonly(tmp_path, monkeypatch):
 @pytest.fixture
 def no_reload(monkeypatch):
     # the editor restarts the monitor LaunchAgent on save; stub it in tests
-    import camera_mcp.web as web
-    monkeypatch.setattr(web, "_reload_monitor", lambda: (True, "stubbed"))
+    import camera_mcp.web.zones as zones
+    monkeypatch.setattr(zones, "_reload_monitor", lambda: (True, "stubbed"))
 
 
 def test_zones_page_and_list(client):
@@ -522,7 +522,7 @@ def test_the_monitor_service_is_found_among_the_loaded_agents(monkeypatch):
     import subprocess
     from types import SimpleNamespace
 
-    import camera_mcp.web as web
+    import camera_mcp.web.zones as web
     calls = []
 
     def run(cmd, **kw):
@@ -543,7 +543,7 @@ def test_reload_says_what_to_do_when_there_is_no_monitor_service(monkeypatch):
     import subprocess
     from types import SimpleNamespace
 
-    import camera_mcp.web as web
+    import camera_mcp.web.zones as web
     monkeypatch.delenv("CAMERA_MCP_LABEL", raising=False)
     monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: SimpleNamespace(
         returncode=0, stdout="PID\tStatus\tLabel\n-\t0\tcom.apple.something\n", stderr=""))
@@ -634,16 +634,22 @@ def test_the_full_res_image_opens_in_its_own_zoomable_page(client):
     assert client.get("/visit/x/image").status_code == 404
 
 
-def test_nothing_is_defined_after_the_main_guard():
-    """The web agent runs `python -m camera_mcp.web`, which enters main() at the guard: anything defined
-    below it doesn't exist yet when requests arrive (imports, as in these tests, never notice)."""
+def test_python_m_camera_mcp_web_starts_the_dashboard():
+    """The web agent runs `python -m camera_mcp.web`: the package's __main__ only calls main(), and no
+    module in the package has a main guard of its own (one in the middle of web.py once left a page
+    undefined at run time while imports, as in these tests, never noticed). And it really starts."""
     import ast
-    import inspect
-
-    import camera_mcp.web as web
-    body = ast.parse(inspect.getsource(web)).body
-    last = body[-1]
-    assert isinstance(last, ast.If) and "__main__" in ast.unparse(last.test)
+    import subprocess
+    import sys
+    from importlib import resources
+    pkg = resources.files("camera_mcp.web")
+    main_body = ast.parse((pkg / "__main__.py").read_text()).body
+    assert ast.unparse(main_body[-1]) == "main()"
+    for f in pkg.iterdir():
+        if f.name.endswith(".py") and f.name != "__main__.py":
+            assert "__main__" not in f.read_text(), f"{f.name} has its own main guard"
+    r = subprocess.run([sys.executable, "-m", "camera_mcp.web", "--help"], capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0 and "python -m camera_mcp.web" in r.stdout and "read-only web dashboard" in r.stdout
 
 
 def test_the_map_shows_day_or_night_apart(client):
@@ -728,10 +734,10 @@ def test_favourites_can_be_starred_from_the_viewer_and_filtered(tmp_path):
 
 
 def test_pages_are_html_files_shipped_with_the_package(client):
-    """The dashboard, zone editor and image pages are plain HTML files in camera_mcp/pages/ (package
+    """The dashboard, zone editor and image pages are plain HTML files in camera_mcp/web/pages/ (package
     data, so they ship in the wheel), served as they are: copyright line first, then the doctype."""
     from importlib import resources
-    pages = resources.files("camera_mcp") / "pages"
+    pages = resources.files("camera_mcp.web") / "pages"
     for route, name in (("/", "dashboard.html"), ("/zones", "zones.html"), ("/visit/1/image", "image.html")):
         html = (pages / name).read_text(encoding="utf-8")
         assert html.startswith("<!-- Copyright") and html.splitlines()[1].startswith("<!doctype html>")
