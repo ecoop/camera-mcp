@@ -1,9 +1,9 @@
 # Copyright (c) 2026 Eric Cooper.
 """Ask the visit log in plain English, from the dashboard: "all skunks in the last 24 hours?"
 
-Claude answers with the same read-only history tools the MCP server offers (find_visits,
-activity_summary, monitor_status, analysis_health). Only metadata leaves the machine — labels,
-times, counts, camera names — never images or clips. Visits it mentions are written as [#1234]
+Claude answers with the MCP server's own read-only history tools (find_visits, activity_summary,
+monitor_status, analysis_health), listed and called in process, so there is one definition of each.
+Only metadata leaves the machine — labels, times, counts, camera names — never images or clips. Visits it mentions are written as [#1234]
 so the dashboard can show their thumbnails.
 
 Spend is capped per day (ASK_DAILY_USD, default $1): the running total is kept in
@@ -22,8 +22,12 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+import anyio
+from mcp.server.mcpserver.exceptions import ToolError
+
 from camera_mcp.config import read_credentials_file
 from camera_mcp.history import History, HistoryError
+from camera_mcp.server import INSTRUCTIONS, build_server
 
 MODEL = "claude-opus-5-5"
 EFFORT = "low"  # short Q&A over a few tool calls: low effort answers well and keeps cost and latency down
@@ -41,57 +45,12 @@ PRICES = {
 }
 VISIT_REF = re.compile(r"\[#(\d+)\]")
 
-TOOLS = [
-    {
-        "name": "find_visits",
-        "description": "Animal visits in a stretch of time, newest first, with how much of it each camera was "
-                       "watched (coverage). Use for 'which/when/show me' questions.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "since": {"type": "string", "description": "start: ISO time (local) or a duration ago (15m, 4h, 3d, 2w), today, yesterday"},
-                "until": {"type": "string", "description": "end (default now)"},
-                "cameras": {"type": "array", "items": {"type": "string"}, "description": "camera names (default all)"},
-                "tag": {"type": "string", "description": "only cameras with this tag"},
-                "taxon": {"type": "string", "description": "group, union, class or common name, e.g. skunk, night-critters, songbirds, bird"},
-                "limit": {"type": "integer", "description": "at most this many visits (1-50, default 20); 'total' says how many matched"},
-                "include_suppressed": {"type": "boolean", "description": "also list visits the gate or a zone hid as likely junk"},
-            },
-            "required": ["since"],
-        },
-    },
-    {
-        "name": "activity_summary",
-        "description": "Count visits in a stretch of time, grouped by species, group, camera, hour (local hour of "
-                       "day) or day. Use for 'how many / when most / busiest' questions.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "since": {"type": "string", "description": "start, as for find_visits"},
-                "until": {"type": "string", "description": "end (default now)"},
-                "group_by": {"type": "string", "enum": ["species", "group", "camera", "hour", "day"]},
-                "cameras": {"type": "array", "items": {"type": "string"}},
-                "tag": {"type": "string"},
-                "taxon": {"type": "string"},
-            },
-            "required": ["since"],
-        },
-    },
-    {
-        "name": "monitor_status",
-        "description": "Which cameras are being watched right now, when each last saw motion, and open visits.",
-        "input_schema": {"type": "object", "properties": {}},
-    },
-    {
-        "name": "analysis_health",
-        "description": "How the detector kept up over a window: frames analysed, backlog/lag, anything dropped.",
-        "input_schema": {
-            "type": "object",
-            "properties": {"since": {"type": "string"}, "until": {"type": "string"}},
-            "required": ["since"],
-        },
-    },
-]
+# The history tools Claude may use here: the metadata-only ones from the MCP server (no images or clips).
+# Their names, descriptions and input schemas come from the server itself (see Asker.tools).
+ASK_TOOLS = ("find_visits", "activity_summary", "monitor_status", "analysis_health")
+ASK_LIMIT, ASK_MAX_LIMIT = 20, 50  # find_visits here: a default and a cap that keep answers (and cost) small
+VISIT_FIELDS = ("id", "camera", "started", "last_seen", "still_there", "label", "group", "score", "max_at_once",
+                "frames", "suppressed", "verdict")  # what a visit sent to Claude carries: metadata only
 
 STYLE = """
 You answer questions about this visit log for its owner, from a box on their camera dashboard.
@@ -110,6 +69,7 @@ You answer questions about this visit log for its owner, from a box on their cam
   cameras at once. Treat it as a weak hint: don't let it cast doubt on a count by itself, and
   mention it at most in one short clause, only if the question is about a camera being moved or
   a surprising absence.
+- find_visits returns at most 50 visits here; for counts over many visits use activity_summary.
 - You can only read the log. You can't see images or clips, change settings, or control cameras;
   say so if asked.
 """
@@ -194,6 +154,9 @@ class Asker:
     def __init__(self, history: History, budget: Budget, client=None):
         self.history, self.budget = history, budget
         self._client = client  # injected in tests; otherwise built from the API key on first use
+        self.server = build_server(history.cameras, history)  # the MCP tools, called in process
+        self._tools: list[dict] | None = None
+        self._wrapped: set[str] = set()  # tools whose result the server wraps as {"result": ...} (lists)
 
     @property
     def enabled(self) -> bool:
@@ -211,9 +174,20 @@ class Asker:
             self._client = anthropic.Anthropic(api_key=key)
         return self._client
 
+    def tools(self) -> list[dict]:
+        """ASK_TOOLS as the MCP server defines them (name, description, input schema), in that order."""
+        if self._tools is None:
+            listed = {t.name: t for t in anyio.run(self.server.list_tools)}
+            for n in ASK_TOOLS:
+                out = listed[n].output_schema or {}
+                if out.get("required") == ["result"] and set(out.get("properties", {})) == {"result"}:
+                    self._wrapped.add(n)
+            self._tools = [{"name": n, "description": listed[n].description, "input_schema": listed[n].input_schema}
+                           for n in ASK_TOOLS]
+        return self._tools
+
     def system(self) -> list[dict]:
         """The stable part of the prompt (cached): the MCP server's own guidance and the cameras."""
-        from camera_mcp.server import INSTRUCTIONS
         def line(c) -> str:
             hours = f"watched {c.active} local, paused otherwise" if c.active else "watched around the clock"
             return f"- {c.name}: {hours}" + (f"; tags: {', '.join(c.tags)}" if c.tags else "")
@@ -221,32 +195,29 @@ class Asker:
         return [{"type": "text", "text": INSTRUCTIONS + "\nCameras:\n" + cams + "\n" + STYLE}]
 
     def run_tool(self, name: str, args: dict, seen: dict) -> str:
-        """One read-only history call, as compact JSON. Visits it returns are remembered (`seen`)
-        so the answer's [#id] references can be shown."""
-        h, a = self.history, dict(args or {})
+        """One read-only history call through the MCP server, as compact JSON. find_visits gets this
+        box's limit and is trimmed to metadata; the visits it returns are remembered (`seen`) so the
+        answer's [#id] references can be shown."""
+        if name not in ASK_TOOLS:
+            raise HistoryError(f"unknown tool {name!r}")
+        a = dict(args or {})
         if name == "find_visits":
-            limit = max(1, min(int(a.get("limit") or 20), 50))
-            r = h.find_visits(since=a.get("since", "24h"), until=a.get("until"), cameras=a.get("cameras"),
-                              tag=a.get("tag"), taxon=a.get("taxon"), limit=limit,
-                              include_suppressed=bool(a.get("include_suppressed")))
-            keep = ("id", "camera", "started", "last_seen", "still_there", "label", "group", "score",
-                    "max_at_once", "frames", "suppressed", "verdict")
+            a["limit"] = max(1, min(int(a.get("limit") or ASK_LIMIT), ASK_MAX_LIMIT))
+        self.tools()  # learns which results come wrapped
+        try:
+            result = anyio.run(self.server.call_tool, name, a)
+        except ToolError as e:  # the server's message, without its "Error executing tool …:" prefix
+            raise HistoryError(str(e).removeprefix(f"Error executing tool {name}: ")) from None
+        r = result.structured_content
+        if name in self._wrapped:
+            r = r["result"]
+        if name == "find_visits":
             trimmed = []
             for v in r["visits"]:
-                meta = {k: v.get(k) for k in keep}
+                meta = {k: v.get(k) for k in VISIT_FIELDS}
                 seen[meta["id"]] = meta | {"has_thumbnail": v.get("has_thumbnail"), "clip": bool(v.get("clip"))}
                 trimmed.append(meta)
             r["visits"] = trimmed
-        elif name == "activity_summary":
-            r = h.activity_summary(since=a.get("since", "7d"), until=a.get("until"),
-                                   group_by=a.get("group_by", "species"), cameras=a.get("cameras"),
-                                   tag=a.get("tag"), taxon=a.get("taxon"))
-        elif name == "monitor_status":
-            r = h.monitor_status()
-        elif name == "analysis_health":
-            r = h.analysis_health(since=a.get("since", "24h"), until=a.get("until"))
-        else:
-            raise HistoryError(f"unknown tool {name!r}")
         return json.dumps(r, default=str, separators=(",", ":"))
 
     def ask(self, question: str) -> Answer:
@@ -271,7 +242,7 @@ class Asker:
                 text = (text + "\n\n" if text else "") + "(Stopped: today's ask budget is used up.)"
                 break
             response = client.beta.messages.create(
-                model=MODEL, max_tokens=MAX_TOKENS, system=self.system(), tools=TOOLS, messages=messages,
+                model=MODEL, max_tokens=MAX_TOKENS, system=self.system(), tools=self.tools(), messages=messages,
                 output_config={"effort": EFFORT}, cache_control={"type": "ephemeral"},
                 betas=[FALLBACK_BETA], fallbacks="default",
             )

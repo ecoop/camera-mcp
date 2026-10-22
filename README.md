@@ -4,7 +4,7 @@
 ![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13-blue)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
-_Last updated: 2026-10-21_
+_Last updated: 2026-10-22_
 
 An MCP server and an always-on monitor for home IP cameras, built to watch for wildlife on one
 machine without saturating it.
@@ -295,7 +295,9 @@ filled in when the monitor next starts.
 
 The dashboard can answer plain-English questions about the visit log ("all skunks in the last 24
 hours?", "when do raccoons come?", "was every camera watched last night?"). Claude (`claude-opus-5-5`,
-low effort) answers with the same read-only history tools the MCP server offers. Visits it mentions
+low effort) answers with the MCP server's own read-only history tools (`find_visits`,
+`activity_summary`, `monitor_status`, `analysis_health`), listed and called in process, so each tool
+is defined once, in `server.py`, for the ask box, Claude Code and any agent alike. Visits it mentions
 show as thumbnails you can open, label or hide. **Only metadata leaves the machine** (labels, times,
 counts, camera names), never images or clips. It can't change settings or control cameras.
 
