@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "cameras": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/launch-server",
+      "args": ["${user_config.host}", "${user_config.repo_dir}"]
+    }
+  }
+}

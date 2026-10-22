@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Copyright (c) 2026 Eric Cooper.
+# Start the camera-mcp server for Claude Code over stdio: on this machine, or on the monitor's machine
+# over SSH. Arguments come from the plugin's settings: the SSH host (empty: run here) and the camera-mcp
+# folder there. CAMERA_MCP_HOST / CAMERA_MCP_DIR in the environment override them.
+set -euo pipefail
+
+host="${CAMERA_MCP_HOST:-${1:-}}"
+dir="${CAMERA_MCP_DIR:-${2:-}}"
+case "$host" in '${'*) host="" ;; esac   # a setting never saved arrives as its literal ${...} reference
+case "$dir" in ''|'${'*) dir="~/projects/camera-mcp" ;; esac
+
+if [ -n "$host" ]; then
+    # "~" stays unexpanded here so the remote shell expands it; BatchMode: never stop for a password prompt
+    exec ssh -o BatchMode=yes "$host" "$dir/.venv/bin/camera-mcp --config $dir/cameras.yaml --data-dir $dir/data"
+fi
+dir="${dir/#\~/$HOME}"
+exec "$dir/.venv/bin/camera-mcp" --config "$dir/cameras.yaml" --data-dir "$dir/data"

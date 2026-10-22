@@ -1,0 +1,12 @@
+{
+  "name": "camera-mcp",
+  "owner": { "name": "Eric Cooper" },
+  "description": "The camera-mcp Claude Code plugin, from this repository.",
+  "plugins": [
+    {
+      "name": "camera-mcp",
+      "source": "./plugin",
+      "description": "The camera-mcp server (live snapshots, the wildlife visit log, coverage and monitor health) plus a Skill that knows how to read its answers."
+    }
+  ]
+}

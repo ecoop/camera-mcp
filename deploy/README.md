@@ -1,6 +1,6 @@
 # Running the monitor on the Mac Studio
 
-_Last updated: 2026-10-13_
+_Last updated: 2026-10-22_
 
 The monitor identifies animals with SpeciesNet, which needs a GPU to keep up. On Apple Silicon
 (the Mac Studio M2) PyTorch uses the GPU (MPS); on the Intel MacBook it is CPU-only and far too
@@ -53,7 +53,9 @@ Logs go to `data/monitor.log`. Status: `launchctl print gui/$(id -u)/camera-mcp`
 
 ## Use the tools from the MacBook
 
-Point Claude Code's MCP server at the Studio over SSH (one time, needs key-based SSH):
+Point Claude Code's MCP server at the Studio over SSH (one time, needs key-based SSH). The plugin
+does this for you: install it and give the Studio as its monitor host (see "Use from Claude Code"
+in the main README). By hand:
 
 ```bash
 claude mcp remove cameras    # if the local one was added earlier

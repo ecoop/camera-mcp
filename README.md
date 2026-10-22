@@ -98,6 +98,29 @@ expanded from the environment.
 
 ## Use from Claude Code
 
+**As a plugin** (the easy way): this repository is also a Claude Code plugin marketplace. The plugin
+brings the MCP server and a Skill, `camera-history`, that teaches Claude how to answer from it:
+common questions with the exact tool calls, and how to read coverage, paused cameras, hidden
+visits and your tags honestly. It also adds two shortcuts, `/camera-mcp:overnight` and
+`/camera-mcp:yard-check [camera tag]`.
+
+```
+/plugin marketplace add ecoop/camera-mcp
+/plugin install camera-mcp@camera-mcp
+```
+
+On install it asks for two settings: the **monitor host** (`user@host`, reached over key-based SSH;
+leave it empty if Claude Code runs on the monitor's machine) and the **camera-mcp folder** there
+(default `~/projects/camera-mcp`). `CAMERA_MCP_HOST` / `CAMERA_MCP_DIR` in the environment override
+them. The plugin's tools are named `mcp__plugin_camera-mcp_cameras__<tool>`; if you added the server
+by hand before (below), remove that entry (`claude mcp remove cameras`) so Claude doesn't see every
+tool twice, and update any permission rules that named the old tools. To try it without installing:
+`claude --plugin-dir plugin`. The plugin lives in `plugin/`; `tests/test_plugin.py` keeps its Skill
+true to the server's tools and the taxon list (`plugin/skills/camera-history/reference.md` is
+generated from `taxa.py`).
+
+**By hand:**
+
 ```bash
 claude mcp add cameras -- ~/projects/camera-mcp/.venv/bin/camera-mcp --config ~/projects/camera-mcp/cameras.yaml --data-dir ~/projects/camera-mcp/data
 ```
