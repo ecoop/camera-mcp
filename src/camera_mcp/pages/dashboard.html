@@ -1,0 +1,715 @@
+<!-- Copyright (c) 2026 Eric Cooper. -->
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Yard Sentry</title>
+<style>
+:root{--paper:#f5f4ef;--frame:#fff;--ink:#2c2b27;--muted:#6d6a60;--line:#d3d0c6;--chrome:#eceae2;
+  --accent:#5b6b8c;--accent-soft:#dde3ee;--good:#4f7a52;--warn:#a5514a;
+  --mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]){--paper:#12141a;--frame:#191c22;
+  --ink:#d6d9e0;--muted:#868b95;--line:#353a45;--chrome:#20242c;--accent:#8fa6cf;--accent-soft:#28324a;
+  --good:#7fae82;--warn:#d98b83;}}
+*{box-sizing:border-box}body{background:var(--paper);color:var(--ink);font-family:var(--sans);
+  margin:0;line-height:1.5;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1180px;margin:0 auto;padding:1.4rem 20px 3rem}
+.bar{display:flex;align-items:center;justify-content:space-between;gap:.6rem;flex-wrap:wrap;margin-bottom:1rem}
+.brand{font-family:var(--mono);font-weight:600;font-size:1.2rem}
+.who{font-family:var(--mono);font-size:.72rem;color:var(--muted)}
+.tabs{display:flex;gap:1rem;flex:1;margin-left:1.3rem}
+.tabs a{font-family:var(--mono);font-size:.82rem;color:var(--muted);text-decoration:none;text-transform:lowercase;letter-spacing:.02em;padding:.1rem 0;border-bottom:2px solid transparent}
+.tabs a.active{color:var(--accent);border-bottom-color:var(--accent)}
+.tabs a:hover{color:var(--ink)}
+.morelink{font-family:var(--mono);font-size:.72rem;color:var(--accent);text-decoration:none;white-space:nowrap}
+.morelink:hover{text-decoration:underline}
+#featsel{font-family:var(--mono);font-size:.72rem;background:var(--frame);color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:.2rem .4rem;text-transform:none;letter-spacing:0}
+.health{font-family:var(--mono);font-size:.74rem;color:var(--muted);border:1px solid var(--line);
+  border-radius:8px;padding:.5rem .7rem;background:var(--frame);margin-bottom:1rem}
+.health b{color:var(--ink)} .ok{color:var(--good)} .bad{color:var(--warn)}
+.cams{display:flex;gap:.4rem;flex-wrap:wrap;margin:.4rem 0 0}
+.chip{font-family:var(--mono);font-size:.68rem;border:1px solid var(--line);border-radius:999px;
+  padding:.1rem .5rem;color:var(--muted)} .chip.live{color:var(--good);border-color:var(--good)}
+.chip.off{opacity:.55}
+.chart{border:1px solid var(--line);border-radius:11px;background:var(--frame);padding:.6rem;margin-bottom:1rem}
+.chart svg{width:100%;height:132px;display:block}
+.cgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:.55rem}
+.cmini{border:1px solid var(--line);border-radius:8px;background:var(--chrome);padding:.3rem .4rem}
+.cmini svg{width:100%;height:52px;display:block}
+.cmini.idle{opacity:.6} .cmini.idle .cmh span{font-style:italic}
+.cmh{display:flex;justify-content:space-between;gap:.5rem;font-family:var(--mono);font-size:.63rem;color:var(--muted);margin-bottom:.15rem}
+.cmh b{color:var(--ink)}
+/* validated categorical palette for the visits timeline (dark steps swap in dark mode) */
+:root{--c-birds:#2a78d6;--c-night:#eb6834;--c-rodents:#1baf7a;--c-pets:#eda100;--c-canids:#e87ba4;--c-person:#4a3aa7;--c-other:#9a988f}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]){--c-birds:#3987e5;--c-night:#d95926;--c-rodents:#199e70;--c-pets:#c98500;--c-canids:#d55181;--c-person:#9085e9;--c-other:#8a887f}}
+:root[data-theme=dark]{--c-birds:#3987e5;--c-night:#d95926;--c-rodents:#199e70;--c-pets:#c98500;--c-canids:#d55181;--c-person:#9085e9;--c-other:#8a887f}
+.vtl svg{width:100%;height:120px;display:block}
+.vleg{display:flex;flex-wrap:wrap;gap:.1rem .8rem;font-family:var(--mono);font-size:.64rem;color:var(--muted);margin-top:.35rem}
+.vleg span{display:inline-flex;align-items:center;gap:.28rem}
+.vleg i{width:9px;height:9px;border-radius:2px;display:inline-block}
+.vtip{position:fixed;z-index:50;pointer-events:none;background:var(--ink);color:var(--frame);font-family:var(--mono);font-size:.66rem;padding:.3rem .45rem;border-radius:6px;opacity:0;transition:opacity .08s;max-width:220px;line-height:1.45}
+#hmap{overflow-x:auto}
+.hgrid{display:grid;gap:2px;font-family:var(--mono);font-size:.6rem;min-width:520px}
+.hcell{height:15px;border-radius:2px;background:var(--chrome)}
+.hlab{color:var(--muted);display:flex;align-items:center;justify-content:center}
+.hcamlab{color:var(--ink);padding-right:.45rem;white-space:nowrap;justify-content:flex-end}
+.hmode{display:inline-flex;gap:.3rem}
+.clabel{display:flex;justify-content:space-between;gap:1rem;font-family:var(--mono);font-size:.66rem;color:var(--muted);margin-top:.35rem;flex-wrap:wrap}
+.xax{display:flex;justify-content:space-between;font-family:var(--mono);font-size:.62rem;color:var(--muted);margin-top:.15rem;padding:0 3px}
+.filters{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-bottom:1rem}
+.filters select,.filters input{font-family:var(--mono);font-size:.78rem;background:var(--frame);
+  color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:.3rem .5rem}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:.8rem}
+.tile{border:1px solid var(--line);border-radius:11px;overflow:hidden;background:var(--frame);
+  text-decoration:none;color:inherit;display:flex;flex-direction:column}
+.tile img{width:100%;aspect-ratio:16/9;object-fit:cover;background:var(--chrome);display:block}
+.tile .meta{padding:.45rem .6rem;font-family:var(--mono);font-size:.72rem}
+.tile .sp{color:var(--ink);font-weight:600} .tile .sub{color:var(--muted)}
+.empty{color:var(--muted);font-family:var(--mono);font-size:.8rem;padding:2rem 0}
+.sect{font-family:var(--mono);font-size:.74rem;color:var(--muted);text-transform:uppercase;
+  letter-spacing:.05em;margin:1.4rem 0 .6rem}
+dialog{border:1px solid var(--line);border-radius:12px;background:var(--frame);color:var(--ink);
+  max-width:92vw;padding:0}
+.stage{position:relative;overflow:hidden;max-width:86vw;max-height:76vh;background:#000;border-radius:12px 12px 0 0;touch-action:none}
+.stage.pan{cursor:grab} .stage.panning{cursor:grabbing}
+.pz{position:relative;transform-origin:0 0;line-height:0;will-change:transform}
+.pz img,.pz video{display:block;max-width:86vw;max-height:76vh}
+dialog .vmeta{font-family:var(--mono);font-size:.74rem;padding:.6rem .8rem;display:flex;justify-content:space-between;gap:.8rem;align-items:center;flex-wrap:wrap}
+dialog .vmeta a{color:var(--accent);cursor:pointer}
+.vact{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
+.clipx{position:absolute;top:.4rem;right:.4rem;z-index:3;width:2rem;height:2rem;border-radius:50%;
+  border:1px solid var(--line);background:rgba(0,0,0,.55);color:#fff;font-size:1rem;line-height:1;cursor:pointer}
+.lblset{display:inline-flex;gap:.3rem}
+.lblbtn{border:1px solid var(--line);border-radius:6px;padding:.15rem .5rem;color:var(--muted);background:none;font-family:var(--mono);font-size:.72rem;cursor:pointer}
+.lblbtn:hover:not(:disabled){border-color:var(--ink);color:var(--ink)}
+.lblbtn.on[data-v=real]{color:var(--good);border-color:var(--good)}
+.lblbtn.on[data-v=false],.lblbtn.on[data-v=wrong_species]{color:var(--warn);border-color:var(--warn)}
+.lblbtn:disabled{opacity:.5;cursor:default}
+/* gate-hidden visits: shown only with "+ hidden"; a badge says why, a mark says how they were labelled */
+.hidtog{font-family:var(--mono);font-size:.78rem;color:var(--muted);display:inline-flex;align-items:center;gap:.3rem;cursor:pointer}
+.tile{position:relative}
+.tile.sup img{opacity:.72}
+.tile .badge{position:absolute;top:.4rem;left:.4rem;font-family:var(--mono);font-size:.62rem;padding:.05rem .4rem;
+  border-radius:999px;background:var(--frame);color:var(--warn);border:1px solid var(--warn)}
+/* labelled tiles: outlined, dimmed and badged from data-verdict, so what's left to label stands out */
+.tile[data-verdict=real]{outline:2px solid var(--good);outline-offset:-1px}
+.tile[data-verdict=false],.tile[data-verdict=wrong_species]{outline:2px solid var(--warn);outline-offset:-1px}
+.tile[data-verdict=real] img,.tile[data-verdict=false] img,.tile[data-verdict=wrong_species] img{opacity:.45}
+.tile[data-fav=still] .sp::after,.tile[data-fav=clip] .sp::after{content:" \2605";color:#e0a800}  /* a favourite */
+.boxbtn.favbtn.on{color:#e0a800;border-color:#e0a800}  /* gold, not the red of other "on" buttons */
+.tile .vpill{display:none;position:absolute;top:.4rem;right:.4rem;font-family:var(--mono);font-size:.66rem;font-weight:600;
+  padding:.05rem .45rem;border-radius:999px;background:var(--frame);border:1px solid}
+.tile[data-verdict=real] .vpill{display:block;color:var(--good)} .tile[data-verdict=real] .vpill::after{content:"\2713  real"}
+.tile[data-verdict=false] .vpill,.tile[data-verdict=wrong_species] .vpill{display:block;color:var(--warn)}
+.tile[data-verdict=false] .vpill::after{content:"\2717  false"} .tile[data-verdict=wrong_species] .vpill::after{content:"\2717  wrong sp."}
+#hidnote{text-transform:none;letter-spacing:0}
+/* the labels map: one dot per visit over the camera's picture */
+.mapctl{display:inline-flex;gap:.7rem;flex-wrap:wrap;text-transform:none;letter-spacing:0;font-family:var(--mono);font-size:.72rem}
+.mapctl label{display:inline-flex;align-items:center;gap:.25rem;cursor:pointer}
+.mapsep{color:var(--line);margin:0 .15rem}
+.sw{display:inline-block;width:10px;height:10px;border-radius:50%;border:2px solid transparent}
+.mapstage{position:relative;border:1px solid var(--line);border-radius:11px;overflow:hidden;background:var(--chrome);
+  min-height:120px;touch-action:none;user-select:none}
+.mapstage.zoomed{cursor:grab} .mapstage.panning{cursor:grabbing}
+.mpz{position:relative;transform-origin:0 0}  /* the picture and its dots, zoomed and panned together */
+.mapstage img{width:100%;height:auto;display:block;pointer-events:none}
+#mapdots{position:absolute;inset:0;--iz:1}
+/* while a camera's picture loads: hold the stage at the picture's shape, show neither it nor dots */
+.mapstage.loading .mpz{aspect-ratio:var(--ar,16/9)} .mapstage.loading img,.mapstage.loading #mapdots{visibility:hidden}
+.mapstage.loading::after{content:'loading picture\2026';position:absolute;inset:0;display:grid;place-items:center;
+  font-family:var(--mono);font-size:.75rem;color:var(--muted)}
+.mdot{position:absolute;width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:50%;cursor:pointer;
+  border:2px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.45);opacity:.9;transform:scale(var(--iz))}
+.mdot:hover{transform:scale(calc(var(--iz) * 1.6));opacity:1;z-index:2}
+.mdot::after{content:'';position:absolute;inset:-6px;border-radius:50%}  /* a bigger target than the dot */
+.mapstage .zoombar{position:absolute;right:.5rem;bottom:.5rem;display:flex;gap:.25rem;z-index:3}
+.mapstage .zoombar button{font-family:var(--mono);font-size:.8rem;background:var(--frame);color:var(--ink);
+  border:1px solid var(--line);border-radius:7px;padding:.15rem .5rem;cursor:pointer;opacity:.92}
+.mapstage .zoombar .lvl{font-family:var(--mono);font-size:.68rem;color:var(--muted);background:var(--frame);
+  border:1px solid var(--line);border-radius:7px;padding:.15rem .4rem;min-width:3.2rem;text-align:center}
+.v-false{background:#d6453d} .v-real{background:#3da35a} .v-wrong_species{background:#e0a020}
+.v-none{background:rgba(160,160,160,.55);border-color:rgba(255,255,255,.6)}
+.mdot.v-none{width:8px;height:8px;margin:-4px 0 0 -4px}
+/* the ask box: a question about the visit log, answered with linked visits */
+.ask{margin:0 0 1rem}
+.ask form{display:flex;gap:.5rem}
+.ask input{flex:1;min-width:0;font-family:var(--sans);font-size:.9rem;background:var(--frame);color:var(--ink);
+  border:1px solid var(--line);border-radius:9px;padding:.5rem .7rem}
+.ask button{font-family:var(--mono);font-size:.8rem;background:var(--accent);color:#fff;border:1px solid var(--accent);
+  border-radius:9px;padding:.45rem .9rem;cursor:pointer}
+.ask button:disabled{opacity:.6;cursor:default}
+.askans{font-size:.92rem;line-height:1.5;margin:.6rem 0 0;white-space:normal}
+.askans:empty{display:none}
+.askans .vref{font-family:var(--mono);font-size:.8rem;color:var(--accent);cursor:pointer;text-decoration:none;
+  border-bottom:1px dotted var(--accent)}
+.askans.err{color:var(--warn)}
+.askans ul{margin:.25rem 0 .25rem 1.1rem;padding:0} .askans li{margin:.1rem 0}
+.askmeta{font-family:var(--mono);font-size:.66rem;color:var(--muted);margin-top:.35rem}
+.askgrid{margin-top:.6rem}
+.askgrid:empty{display:none}
+.boxov{position:absolute;top:0;left:0;pointer-events:none;display:none}
+.boxov rect{fill:none;stroke:#ff3b30;stroke-width:2;vector-effect:non-scaling-stroke}
+.boxov text{fill:#ff3b30;font-family:var(--mono);font-size:3.2px;paint-order:stroke;
+  stroke:rgba(0,0,0,.55);stroke-width:.6px;dominant-baseline:text-after-edge}
+.boxbtn{border:1px solid var(--line);border-radius:6px;padding:.15rem .5rem;color:var(--muted);background:none;font-family:var(--mono);font-size:.72rem;cursor:pointer}
+.boxbtn:disabled{opacity:.45;cursor:default}
+/* tags on single boxes: colour = the box's tag; dashed = taken from the visit's tag; thick = selected */
+.boxov rect.t-real{stroke:#34c759} .boxov rect.t-false{stroke:#9a9aa0} .boxov rect.t-wrong_species{stroke:#ff9f0a}
+.boxov text.t-real{fill:#34c759} .boxov text.t-false{fill:#c7c7cc} .boxov text.t-wrong_species{fill:#ff9f0a}
+.boxov rect.inh{stroke-dasharray:6 4} .boxov rect.sel{stroke-width:4}
+dialog .boxtag{font-family:var(--mono);font-size:.72rem;color:var(--muted);padding:0 .8rem .6rem;display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
+dialog .boxtag[hidden],.spin[hidden],.lblset[hidden],.boxbtn[hidden]{display:none}
+.spin{font-family:var(--mono);font-size:.72rem;width:11rem;padding:.12rem .4rem;border:1px solid var(--line);border-radius:6px;
+  background:var(--frame);color:var(--ink)}
+.boxbtn.on{color:var(--warn);border-color:var(--warn)}
+</style></head><body><div class="wrap">
+<div class="bar"><div class="brand">&#129437; Yard Sentry</div>
+  <nav class="tabs"><a href="/" data-view="feeds">feeds</a><a href="/analytics" data-view="analytics">analytics</a><a href="/map" data-view="map">map</a>
+    <a href="/zones">zones &rarr;</a></nav>
+  <div class="who"><span id="clock"></span></div></div>
+<div class="health" id="health">loading&hellip;</div>
+<div class="filters">
+  <select id="since"><option value="2h">last 2h</option><option value="12h">12h</option>
+    <option value="24h" selected>24h</option><option value="3d">3 days</option><option value="7d">7 days</option><option value="30d">30 days</option></select>
+  <select id="taxon"><option value="">all species</option></select>
+  <select id="camera"><option value="">all cameras</option></select>
+  <label class="hidtog" id="hidtoglbl" title="also show visits hidden as likely junk (by the unrecognized-visit gate, a zone, or by hand), to review, label or un-hide">
+    <input type="checkbox" id="showhidden"> + hidden</label>
+  <label class="hidtog" id="favtoglbl" title="just your favourites, from any time (the time window is ignored), hidden or not">
+    <input type="checkbox" id="favonly"> &#9733; favourites</label>
+</div>
+
+<section id="view-feeds">
+  <div class="ask" id="askbox" hidden>
+    <form id="askform"><input id="askq" maxlength="500" autocomplete="off"
+      placeholder="Ask about your cameras, e.g. all skunks in the last 24 hours?"><button id="askbtn">ask</button></form>
+    <div class="askans" id="askans"></div>
+    <div class="grid askgrid" id="askgrid"></div>
+    <div class="askmeta" id="askmeta"></div>
+  </div>
+  <div class="sect" style="margin-top:0">Visits <span id="hidnote"></span></div>
+  <div class="grid" id="grid"></div>
+  <div class="empty" id="empty" style="display:none">No visits in this window.</div>
+  <div class="sect">Live</div>
+  <div class="grid" id="live"></div>
+  <div class="sect" style="display:flex;justify-content:space-between;align-items:center;gap:1rem">
+    <span>At a glance</span>
+    <span style="display:flex;gap:.6rem;align-items:center">
+      <select id="featsel"><option value="timeline">visits over time</option>
+        <option value="throughput">throughput &amp; backlog</option>
+        <option value="heatmap">hourly load</option></select>
+      <a class="morelink" href="/analytics" data-view="analytics">full analytics &rarr;</a>
+    </span>
+  </div>
+  <div class="chart" id="feat"></div>
+</section>
+
+<section id="view-map" hidden>
+  <div class="sect" style="margin-top:0;display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap">
+    <span>Labels map</span>
+    <span class="mapctl">
+      <label><input type="checkbox" class="mv" value="false" checked><i class="sw v-false"></i>false</label>
+      <label><input type="checkbox" class="mv" value="real" checked><i class="sw v-real"></i>real</label>
+      <label><input type="checkbox" class="mv" value="wrong_species" checked><i class="sw v-wrong_species"></i>wrong sp.</label>
+      <label><input type="checkbox" class="mv" value="none"><i class="sw v-none"></i>unlabelled</label>
+      <span class="mapsep" aria-hidden="true">|</span>
+      <label title="visits seen in colour (daylight)"><input type="checkbox" class="mdn" value="day" checked>day</label>
+      <label title="visits seen under the camera's infrared light; with only this ticked, the picture is a recent night still"><input type="checkbox" class="mdn" value="night" checked>night (IR)</label></span>
+  </div>
+  <div class="hint" id="maphint">Each dot is one visit, at its most confident box (the one its viewer shows), coloured by your label. Hover for details; click to open the visit and re-check or re-label it. Scroll (or pinch) to zoom into a cluster, drag to pan; dots grow only a little, so tight clusters spread apart. Uses the camera picked in the filter above and the time window; after a camera is re-aimed, older visits plot against the new view, so narrow the window to after the change.</div>
+  <div class="mapstage" id="mapstage"><div class="mpz" id="mpz"><img id="mapimg" alt="camera picture"><div id="mapdots"></div></div>
+    <div class="zoombar"><button id="mzout" title="zoom out">&minus;</button><span class="lvl" id="mzlvl">100%</span>
+      <button id="mzin" title="zoom in">+</button><button id="mzfit" title="fit the whole picture">fit</button></div></div>
+  <div class="clabel" id="maplegend"></div>
+  <div id="mapgrid" hidden></div>
+</section>
+<section id="view-analytics" hidden>
+  <div class="sect" style="margin-top:0;display:flex;justify-content:space-between;align-items:center;gap:1rem">
+    <span>Throughput &amp; backlog</span>
+    <span style="display:flex;gap:.6rem;align-items:center;text-transform:none;letter-spacing:0">
+    <label class="hidtog" title="include cameras with no data in this window (e.g. paused outside their watch hours) as blank tiles and rows">
+      <input type="checkbox" id="showidle"> paused cameras</label>
+    <select id="chartcam" style="font-family:var(--mono);font-size:.72rem;background:var(--frame);color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:.2rem .4rem;text-transform:none;letter-spacing:0">
+      <option value="">all cameras</option><option value="__each__">per camera (grid)</option></select></span>
+  </div>
+  <div class="chart" id="chart"></div>
+  <div class="sect" style="display:flex;justify-content:space-between;align-items:center;gap:1rem">
+    <span>Hourly load &middot; by camera</span>
+    <span class="hmode"><button class="boxbtn on" data-m="dropped">drops</button><button class="boxbtn" data-m="frames">activity</button></span>
+  </div>
+  <div class="chart" id="hmap"></div>
+  <div class="sect">Visits over time</div>
+  <div class="chart vtl" id="vtl"></div>
+</section>
+<div class="vtip" id="vtip"></div>
+<dialog id="clip"><div class="stage pan" id="stage"><button class="clipx" id="clipclose" aria-label="close">&times;</button><div class="pz" id="pz">
+    <img id="still" alt="frame">
+    <video controls style="display:none"></video>
+    <svg class="boxov" id="boxov" viewBox="0 0 100 100" preserveAspectRatio="none"></svg></div></div>
+  <div class="vmeta"><span id="clipmeta"></span>
+  <span class="vact">
+    <button class="boxbtn" id="playbtn">watch clip &#9654;</button>
+    <span class="lblset" id="lblset" title="was this detection correct?">
+      <button class="lblbtn" data-v="real">&check; real</button>
+      <button class="lblbtn" data-v="false">&times; false</button>
+      <button class="lblbtn" data-v="wrong_species">&times; wrong sp.</button></span>
+    <input class="spin" id="vsp" list="spplist" hidden placeholder="what was it?" title="what the animal actually was; saved when you leave the field">
+    <button class="boxbtn" id="nextbtn" title="the next visit in the grid you haven't labelled">next unlabelled &rsaquo;</button>
+    <button class="boxbtn" id="boxqbtn" title="the next visit you tagged real whose still has a box with no tag yet (narrowed to the camera filter)">next box to tag &rsaquo;</button>
+    <button class="boxbtn favbtn" id="favbtn" title="keep this one: star it as a favourite. While the clip plays, the star remembers that moment">&#9734; favourite</button>
+    <button class="boxbtn" id="hidebtn" title="hide this visit, or show one the gate or a zone hid (undo a mistake)">hide</button>
+    <button class="boxbtn on" id="boxbtn">hide boxes</button> &middot; <a id="cliplink" target="_blank" rel="noopener" title="the full-resolution still in its own tab: scroll to zoom, drag to pan">full-res image</a>
+  </span></div>
+  <div class="boxtag" id="boxtag" hidden><span id="boxtagwhat"></span>
+    <span class="lblset" id="boxtagset" hidden title="tag just this box">
+      <button class="lblbtn" data-v="real">&check; real</button>
+      <button class="lblbtn" data-v="false">&times; false</button>
+      <button class="lblbtn" data-v="wrong_species">&times; wrong sp.</button></span>
+    <input class="spin" id="boxsp" list="spplist" hidden placeholder="what was it?" title="what this box's animal actually was">
+    <button class="boxbtn" id="boxclear" hidden title="remove this box's own tag (it takes the visit's again, where that holds)">clear</button></div>
+</dialog><div id="queuegrid" hidden></div><datalist id="spplist"></datalist>
+<script>
+const $=s=>document.querySelector(s), params=()=>{const p=new URLSearchParams();
+  p.set('since',$('#since').value); if($('#taxon').value)p.set('taxon',$('#taxon').value);
+  if($('#camera').value)p.set('camera',$('#camera').value);
+  if($('#showhidden').checked)p.set('suppressed','1'); if($('#favonly').checked)p.set('favorites','1'); return p.toString();};
+function tick(){$('#clock').textContent=new Date().toLocaleString();}
+async function loadHealth(){try{const win=$('#since').value;
+  const h=await (await fetch('/api/health?since='+win)).json();
+  const st=await (await fetch('/api/status')).json();
+  const watching=st.filter(c=>c.watching_now).length, total=st.filter(c=>c.state!=='never seen by the monitor').length;
+  let s;
+  if(h.samples){const dr=h.segments_dropped; s=`<b>Analysis (${win}):</b> ${h.frames_analyzed.toLocaleString()} frames &middot; `+
+    `<span class="${dr?'bad':'ok'}">${dr?dr+' dropped':'none dropped'}</span> &middot; peak lag ${Math.round(h.peak_lag_seconds)}s`;}
+  else s='<b>Analysis:</b> no stats yet';
+  st.forEach(c=>CAMSTATE[c.camera]=c.state);
+  s+=`<div class="cams">`+st.map(c=>`<span class="chip ${c.watching_now?'live':(c.state==='paused'?'off':'')}">`+
+    `${c.camera}${c.state==='paused'?' (paused)':''}</span>`).join('')+`</div>`;
+  $('#health').innerHTML=s;}catch(e){$('#health').textContent='health unavailable';}}
+let CAMS=[], CAMSTATE={};  // the enabled live cameras, and each one's monitor state (watching / paused / ...)
+const idleOn=()=>$('#showidle').checked;
+const idleLabel=n=>CAMSTATE[n]==='paused'?'paused':'no activity';
+async function loadCameras(){const cs=await (await fetch('/api/cameras')).json();
+  CAMS=cs.filter(c=>c.enabled&&c.stream).map(c=>c.name);
+  if(VIEW==='analytics'&&idleOn()){loadStats();loadHeatmap();}
+  const opts=cs.filter(c=>c.enabled).map(c=>`<option value="${c.name}">${c.name}</option>`).join('');
+  $('#camera').insertAdjacentHTML('beforeend',opts);
+  $('#chartcam').insertAdjacentHTML('beforeend',opts);
+  $('#live').innerHTML=cs.filter(c=>c.enabled&&c.stream).map(c=>`<a class="tile"><img loading="lazy" `+
+    `src="/api/snapshot/${c.name}?w=480" alt="${c.name}"><div class="meta"><span class="sp">${c.name}</span></div></a>`).join('');}
+async function loadSpecies(){try{const r=await (await fetch('/api/species')).json();
+  $('#taxon').insertAdjacentHTML('beforeend',(r.species||[]).map(s=>`<option value="${s}">${s}</option>`).join(''));
+  }catch(e){}}
+async function loadVisits(){const r=await (await fetch('/api/visits?'+params())).json();
+  const v=(r.visits||[]).filter(x=>x.has_thumbnail);
+  $('#empty').style.display=v.length?'none':'block';
+  $('#hidnote').textContent=r.hidden?`· ${r.hidden} hidden as likely leaves`:'';
+  $('#grid').innerHTML=v.map(tileHTML).join('');
+  document.querySelectorAll('#grid .tile').forEach(t=>t.onclick=ev=>{ev.preventDefault();openVisit(t);});}
+function tileHTML(x){return `<a class="tile${x.suppressed?' sup':''}" href="#" data-id="${x.id}" data-clip="${x.clip?1:0}"`+
+    ` data-verdict="${x.verdict||''}" data-sup="${x.suppressed||''}" data-fav="${x.favorite?x.favorite.kind:''}"`+
+    ` data-favat="${x.favorite&&x.favorite.clip_at!=null?x.favorite.clip_at:''}">`+
+    `<img loading="lazy" src="/media/visit/${x.id}/thumb" alt="${esc(x.label)}">`+
+    (x.suppressed?`<span class="badge">hidden: ${x.suppressed.replace('_',' ')}</span>`:'')+`<span class="vpill"></span>`+
+    `<div class="meta"><div class="sp">${esc(x.label)}${x.max_at_once>1?' ×'+x.max_at_once:''}`+
+    `</div>`+
+    `<div class="sub">${x.camera} &middot; ${(x.started||'').slice(5,16).replace('T',' ')}</div></div></a>`;}
+const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+// ---- the labels map: past visits plotted where they were boxed; click one to open it ----
+let MAPV={};  // id -> visit, for the tooltip and the viewer
+const VLABEL={false:'false',real:'real',wrong_species:'wrong sp.',none:'unlabelled'};
+// the picture shown: a camera's live view, or (day or night only) a recent still of that kind
+let mapSeq=0, mapCam=null, mapPic=null, mapPicNote='';  // latest request (a slower one is dropped); picture shown; picture asked for
+async function loadMap(){const cam=$('#camera').value, dots=$('#mapdots'), stage=$('#mapstage'), seq=++mapSeq;
+  if(!cam){mapCam=mapPic=null;dots.innerHTML='';stage.classList.remove('loading');$('#mapimg').removeAttribute('src');
+    $('#maplegend').textContent='pick a camera in the filter above';return;}
+  const dn=[...document.querySelectorAll('.mdn:checked')].map(c=>c.value), only=dn.length===1?dn[0]:'';
+  const key=cam+'|'+only, newPic=key!==mapCam;
+  if(newPic){mapCam=key;dots.innerHTML='';$('#maplegend').textContent='';stage.classList.add('loading');}
+  const want=[...document.querySelectorAll('.mv:checked')].map(c=>c.value);
+  const p=new URLSearchParams({camera:cam,since:$('#since').value}); if($('#taxon').value)p.set('taxon',$('#taxon').value);
+  if(want.includes('none'))p.set('unlabelled','1');
+  let d; try{d=await (await fetch('/api/labels/map?'+p)).json();}catch(e){d={error:'map unavailable'};}
+  if(seq!==mapSeq)return;  // a newer request (another camera or filter) has taken over
+  if(d.error){stage.classList.remove('loading');$('#maplegend').textContent=d.error;return;}
+  const lit=v=>v.night===true?'night':v.night===false?'day':'';  // '' unknown: shown only when both are
+  const vs=(d.visits||[]).filter(v=>want.includes(v.verdict||'none')&&(dn.length===2||dn.includes(lit(v))));
+  // a new camera's picture: the live one, else the saved frame of a recent visit (up to 10 tried: some
+  // may have aged out). Picture and dots show together once it's in; a filter change keeps the picture.
+  const stills=(d.visits||[]).filter(v=>v.clip&&(!only||lit(v)===only)).slice(0,10);
+  const pic=key+'|'+(only&&stills.length?stills[0].id:'live');  // day/night only: follows the newest still in the window
+  if(mapPic!==pic){mapPic=pic; stage.classList.add('loading'); const img=$('#mapimg'), live='/api/snapshot/'+encodeURIComponent(cam)+'?w=2560&t='+Date.now();
+    // day or night only: the newest still of that kind first (the live view may be the other light)
+    const tries=only?[...stills.map(v=>['/media/visit/'+v.id+'/frame','a '+only+' still, #'+v.id]),[live,'live view']]
+                    :[[live,'live view'],...stills.map(v=>['/media/visit/'+v.id+'/frame','still #'+v.id])];
+    const next=()=>{const t=tries.shift(); if(!t){stage.classList.remove('loading');return;} mapPicNote=t[1]; img.src=t[0];};
+    img.onload=()=>{if(mapCam!==key||mapPic!==pic)return; stage.style.setProperty('--ar',img.naturalWidth+'/'+img.naturalHeight);
+      stage.classList.remove('loading'); mapZoomReset(); const n=$('#mappic'); if(n)n.textContent='picture: '+mapPicNote;};
+    img.onerror=next; next(); mapZoomReset();}
+  dots.innerHTML=''; MAPV={}; const counts={};
+  vs.slice().reverse().forEach(v=>{MAPV[v.id]=v; const k=v.verdict||'none'; counts[k]=(counts[k]||0)+1;  // newest on top
+    const el=document.createElement('div'); el.className='mdot v-'+k; el.dataset.id=v.id;
+    el.style.left=(v.x*100)+'%'; el.style.top=(v.y*100)+'%';
+    el.addEventListener('mousemove',e=>{const w=MAPV[v.id];showTip(e,`<b>${esc(w.label)}</b> &middot; #${w.id}<br>${(w.started||'').slice(5,16).replace('T',' ')} &middot; ${w.frames} frames<br>your label: ${VLABEL[w.verdict||'none']}${w.suppressed?'<br>hidden: '+w.suppressed:''}${w.spread>0.05?'<br><i>boxes in more than one place; the dot is its most confident box</i>':''}`);});
+    el.addEventListener('mouseleave',hideTip);
+    el.onclick=()=>{hideTip(); const box=$('#mapgrid'); box.innerHTML=tileHTML(MAPV[v.id]); openVisit(box.querySelector('.tile'));};
+    dots.appendChild(el);});
+  $('#maplegend').innerHTML=`<span>${Object.entries(counts).map(([k,n])=>`${n} ${VLABEL[k]}`).join(' &middot; ')||'no visits match'} &middot; ${esc(cam)}</span>`+
+    `<span id="mappic">${mapPicNote&&!stage.classList.contains('loading')?'picture: '+esc(mapPicNote):''}</span>`+
+    `<span>${(d.from||'').slice(0,10)} &rarr; ${(d.to||'').slice(0,10)}</span>`;}
+document.querySelectorAll('.mv,.mdn').forEach(c=>c.onchange=()=>{if(VIEW==='map')loadMap();});
+// zoom & pan the map: the picture and dots scale together; dots are counter-scaled (--iz) so they grow
+// far less than the picture (~2x at 800%): tight clusters still spread apart, and dots stay easy to hit
+let mz=1, mtx=0, mty=0, mpan=null, mJustPanned=false;
+const mclamp=(v,a,b)=>Math.min(b,Math.max(a,v));
+function mapZoomApply(){const r=$('#mapstage').getBoundingClientRect(), W=r.width, H=$('#mpz').offsetHeight;
+  mtx=mclamp(mtx,W-W*mz,0); mty=mclamp(mty,H-H*mz,0);
+  $('#mpz').style.transform=`translate(${mtx}px,${mty}px) scale(${mz})`; $('#mapdots').style.setProperty('--iz',Math.pow(mz,-0.65));
+  $('#mzlvl').textContent=Math.round(mz*100)+'%'; $('#mapstage').classList.toggle('zoomed',mz>1);}
+function mapZoomAt(f,cx,cy){const n=mclamp(mz*f,1,12); const r=$('#mapstage').getBoundingClientRect();
+  if(cx==null){cx=r.width/2;cy=r.height/2;} mtx=cx-(cx-mtx)*n/mz; mty=cy-(cy-mty)*n/mz; mz=n; mapZoomApply();}
+function mapZoomReset(){mz=1;mtx=0;mty=0;mapZoomApply();}
+$('#mapstage').addEventListener('wheel',ev=>{ev.preventDefault();const r=$('#mapstage').getBoundingClientRect();
+  mapZoomAt(Math.exp(-ev.deltaY*(ev.ctrlKey?0.01:0.0015)),ev.clientX-r.left,ev.clientY-r.top);},{passive:false});
+$('#mzin').onclick=()=>mapZoomAt(1.5); $('#mzout').onclick=()=>mapZoomAt(1/1.5); $('#mzfit').onclick=mapZoomReset;
+// drag to pan; a press that doesn't move is still a click on a dot
+$('#mapstage').addEventListener('pointerdown',ev=>{if(ev.button!==0||ev.target.closest('.zoombar'))return;
+  mpan={x:ev.clientX,y:ev.clientY,tx:mtx,ty:mty,id:ev.pointerId,moved:false};});
+$('#mapstage').addEventListener('pointermove',ev=>{if(!mpan)return; const dx=ev.clientX-mpan.x, dy=ev.clientY-mpan.y;
+  if(!mpan.moved&&Math.hypot(dx,dy)<5)return;
+  if(!mpan.moved){mpan.moved=true;$('#mapstage').setPointerCapture(mpan.id);$('#mapstage').classList.add('panning');hideTip();}
+  mtx=mpan.tx+dx; mty=mpan.ty+dy; mapZoomApply();});
+$('#mapstage').addEventListener('pointerup',()=>{if(mpan&&mpan.moved){mJustPanned=true;setTimeout(()=>mJustPanned=false,0);}
+  mpan=null;$('#mapstage').classList.remove('panning');});
+$('#mapstage').addEventListener('click',ev=>{if(mJustPanned){ev.stopPropagation();ev.preventDefault();}},true);  // a drag isn't a click
+addEventListener('resize',()=>{if(VIEW==='map')mapZoomApply();});
+// ---- the ask box ----
+// The answer is escaped first (nothing in it can inject markup), then gets a small, safe subset:
+// [#1234] -> a visit link, **bold** -> bold, "- " lines -> bullets, other newlines -> line breaks.
+function renderAnswer(text,byId){
+  const lines=esc(text).replace(/\[#(\d+)\]/g,(m,id)=>byId[id]?`<a class="vref" data-id="${id}">#${id}</a>`:m)
+    .replace(/\*\*([^*\n]+)\*\*/g,'<b>$1</b>').split('\n');
+  let html='',inList=false;
+  for(const l of lines){const b=l.match(/^\s*[-•]\s+(.*)$/);
+    if(b){if(!inList){html+='<ul>';inList=true;} html+=`<li>${b[1]}</li>`;continue;}
+    if(inList){html+='</ul>';inList=false;}
+    html+=l.trim()?l+'<br>':'';}
+  return html+(inList?'</ul>':'');}
+async function askInit(){try{const d=await (await fetch('/api/ask')).json(); if(!d.enabled)return;
+  $('#askbox').hidden=false; askMeta(d.spent_today,d.cap);}catch(e){}}
+function askMeta(spent,cap,cost){$('#askmeta').textContent=(cost!=null?`this answer ≈ $${cost.toFixed(3)} · `:'')+
+  `$${(+spent).toFixed(2)} of $${(+cap).toFixed(2)} used today · answers use the visit log only (no images)`;}
+$('#askform').addEventListener('submit',async ev=>{ev.preventDefault(); const q=$('#askq').value.trim(); if(!q)return;
+  $('#askbtn').disabled=true; $('#askans').className='askans'; $('#askans').textContent='looking…'; $('#askgrid').innerHTML='';
+  try{const res=await fetch('/api/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:q})});
+    const d=await res.json();
+    if(!res.ok){$('#askans').className='askans err';$('#askans').textContent=d.error||'something went wrong';return;}
+    const byId={}; (d.visits||[]).forEach(v=>byId[v.id]=v);
+    $('#askans').innerHTML=renderAnswer(d.answer,byId);
+    $('#askgrid').innerHTML=(d.visits||[]).filter(v=>v.has_thumbnail).map(tileHTML).join('');
+    $('#askgrid').querySelectorAll('.tile').forEach(t=>t.onclick=e=>{e.preventDefault();openVisit(t);});
+    $('#askans').querySelectorAll('.vref').forEach(a=>a.onclick=()=>{const t=$('#askgrid .tile[data-id="'+a.dataset.id+'"]');if(t)openVisit(t);});
+    askMeta(d.spent_today,d.cap,d.cost);
+  }catch(e){$('#askans').className='askans err';$('#askans').textContent='network error: '+e;}
+  finally{$('#askbtn').disabled=false;}});
+askInit();
+let labelEditable=true, curLabel=null;
+// the visit's tag; real and wrong sp. can also say what it was (the species field)
+function markLabel(v,species){$('#lblset').querySelectorAll('.lblbtn').forEach(b=>b.classList.toggle('on',b.dataset.v===v));
+  const sp=$('#vsp'); sp.hidden=!(v==='real'||v==='wrong_species'); sp.disabled=!labelEditable;
+  sp.placeholder=v==='wrong_species'?'what was it?':'species (optional)'; if(species!==undefined)sp.value=species||'';}
+async function loadLabel(id){curLabel=null; markLabel(null,'');
+  $('#lblset').querySelectorAll('.lblbtn').forEach(b=>b.disabled=true);
+  try{const d=await (await fetch('/api/visit/'+id+'/label')).json();
+    labelEditable=d.editable; curLabel=d.label; markLabel(d.label&&d.label.verdict,d.label&&d.label.species);
+    $('#lblset').querySelectorAll('.lblbtn').forEach(b=>b.disabled=!d.editable);
+  }catch(e){}}
+async function postLabel(v,species){const res=await fetch('/api/visit/'+curVisit+'/label',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({verdict:v,species:v==='false'?'':species||''})});
+  if(res.ok){curLabel={verdict:v,species:v==='false'?null:species||null}; if(species)SPP=false;
+    if(curClip){boxData=null; loadBoxData().then(drawBoxes);} refreshBoxQueue();}  // inherited box tags follow the visit's
+  return res.ok;}
+$('#vsp').addEventListener('change',()=>{if(labelEditable&&curVisit&&curLabel)postLabel(curLabel.verdict,$('#vsp').value.trim()).then(()=>loadSpecies());});
+async function setLabel(v){if(!labelEditable||!curVisit)return;
+  try{const keep=v!=='false'?$('#vsp').value.trim():'';
+    if(await postLabel(v,keep)){markLabel(v); const t=tileOf(curVisit);
+      const md=document.querySelector('.mdot[data-id="'+curVisit+'"]'); if(md){md.className='mdot v-'+v; MAPV[curVisit]&&(MAPV[curVisit].verdict=v);}
+      if(VIEW==='map'){if(t)t.dataset.verdict=v;}  // map view: recolour only; never auto-advance through another view's grid
+      else if(t){const had=t.dataset.verdict; t.dataset.verdict=v;  // CSS restyles the tile from this
+        if(!had&&v!=='wrong_species')setTimeout(nextUnlabelled,350);}}}catch(e){}}  // first label: move on (wrong sp. waits for its species)
+function tileOf(id){return document.querySelector('#grid .tile[data-id="'+id+'"]')||document.querySelector('#askgrid .tile[data-id="'+id+'"]')
+  ||document.querySelector('#mapgrid .tile[data-id="'+id+'"]')||document.querySelector('#queuegrid .tile[data-id="'+id+'"]');}
+function nextUnlabelled(){const ts=[...document.querySelectorAll('#grid .tile')], i=ts.indexOf(tileOf(curVisit));
+  const t=[...ts.slice(i+1),...ts.slice(0,Math.max(i,0))].find(x=>!x.dataset.verdict);
+  if(t)openVisit(t); else $('#clipmeta').textContent='every visit in the grid is labelled';}
+$('#lblset').querySelectorAll('.lblbtn').forEach(b=>b.onclick=()=>setLabel(b.dataset.v));
+// A visit opens on a full-res still (zoom/pan); "watch clip" swaps to the video. Boxes on by default.
+let curVisit=null, curClip=false, mode='image', boxesOn=true, boxData=null, stillFB=false;
+let zs=1, ztx=0, zty=0;
+function applyZoom(){$('#pz').style.transform='translate('+ztx+'px,'+zty+'px) scale('+zs+')';}
+function resetZoom(){zs=1;ztx=0;zty=0;applyZoom();}
+function activeMedia(){return mode==='video'?$('#clip video'):$('#still');}
+// Show/hide by hand: the case-by-case override of the gate and exclusion zones.
+function markHidden(t){const sup=t&&t.dataset.sup; $('#hidebtn').textContent=sup?'show ('+sup.replace('_',' ')+')':'hide';
+  $('#hidebtn').classList.toggle('on',!!sup);}
+async function toggleHidden(){const t=tileOf(curVisit); if(!t||!labelEditable)return; const hide=!t.dataset.sup;
+  try{const res=await fetch('/api/visit/'+curVisit+'/hidden',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({hidden:hide})}); if(!res.ok)return; const d=await res.json();
+    t.dataset.sup=d.suppressed||''; t.classList.toggle('sup',!!d.suppressed);
+    let b=t.querySelector('.badge'); if(d.suppressed){if(!b){b=document.createElement('span');b.className='badge';
+      t.insertBefore(b,t.querySelector('.vpill'));} b.textContent='hidden: '+d.suppressed;} else if(b)b.remove();
+    markHidden(t); $('#clipmeta').textContent=$('#clipmeta').textContent.replace(/ · hidden: .*$/,'')+
+      (d.suppressed?' · hidden: '+d.suppressed:'');}catch(e){}}
+// Favourites: a star, apart from the tags. Starred while the clip plays, it keeps that moment and reopens there.
+let seekTo=null;
+const fmtAt=s=>Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0');
+function markFav(t){const k=t&&t.dataset.fav, b=$('#favbtn'); b.classList.toggle('on',!!k);
+  b.innerHTML=k?'&#9733; favourite'+(k==='clip'&&t.dataset.favat!==''?' (clip '+fmtAt(+t.dataset.favat)+')':''):'&#9734; favourite';
+  b.disabled=!labelEditable;}
+async function toggleFav(){const t=tileOf(curVisit); if(!t||!labelEditable)return; const on=!t.dataset.fav, vid=$('#clip video');
+  const kind=mode==='video'?'clip':'still', at=kind==='clip'?Math.round((vid.currentTime||0)*10)/10:null;
+  try{const r=await fetch('/api/visit/'+curVisit+'/favorite',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({on,kind,clip_at:at})}); if(!r.ok)return;
+    t.dataset.fav=on?kind:''; t.dataset.favat=on&&at!=null?at:''; markFav(t);
+    const g=document.querySelector('#grid .tile[data-id="'+curVisit+'"]'); if(g&&g!==t){g.dataset.fav=t.dataset.fav;g.dataset.favat=t.dataset.favat;}}catch(e){}}
+$('#favbtn').onclick=toggleFav;
+function openVisit(t){const id=t.dataset.id; curVisit=id; curClip=t.dataset.clip==='1'; markHidden(t); markFav(t);
+  boxData=null; selBox=null; mode='image'; boxesOn=curClip; stillFB=false; resetZoom(); $('#boxtag').hidden=true;
+  const img=$('#still'), vid=$('#clip video');
+  img.style.display=''; vid.pause(); vid.removeAttribute('src'); vid.style.display='none';
+  img.src=(curClip?'/media/visit/'+id+'/frame':'/media/visit/'+id+'/thumb');
+  $('#stage').classList.add('pan');
+  $('#playbtn').style.display=curClip?'':'none'; $('#playbtn').textContent='watch clip ▶';
+  $('#boxbtn').style.display=curClip?'':'none';
+  $('#boxbtn').classList.toggle('on',boxesOn); $('#boxbtn').textContent=boxesOn?'hide boxes':'show boxes';
+  $('#clipmeta').textContent=t.querySelector('.sp').firstChild.textContent+' — '+t.querySelector('.sub').textContent+
+    (t.dataset.sup?' · hidden: '+t.dataset.sup.replace('_',' '):'');
+  $('#cliplink').href='/visit/'+id+'/image';  // full window, scroll-zoom (the clip has "watch clip")
+  loadLabel(id); loadSpecies(); refreshBoxQueue(); if(!$('#clip').open)$('#clip').showModal();
+  if(curClip) loadBoxData().then(drawBoxes);
+  if(curClip&&t.dataset.fav==='clip'){seekTo=t.dataset.favat!==''?+t.dataset.favat:null; playClip();}}  // a favourite clip opens at its moment
+async function loadBoxData(){if(boxData)return; try{boxData=await (await fetch('/api/visit/'+curVisit+'/boxes')).json();}catch(e){boxData={frames:[]};}}
+function drawBoxes(){const svg=$('#boxov'), m=activeMedia();
+  svg.style.width=(m.clientWidth||m.offsetWidth)+'px'; svg.style.height=(m.clientHeight||m.offsetHeight)+'px';
+  if(!boxesOn||!boxData){svg.style.display='none';renderBoxTag();return;}
+  if(!boxData.frames||!boxData.frames.length){svg.innerHTML='<text x="2" y="7">no boxes stored</text>';svg.style.display='block';return;}
+  const f=boxData.frames[boxData.best]||boxData.frames[0]; let s='';
+  (f.boxes||[]).forEach(b=>{const x=b.x*100,y=b.y*100,w=b.w*100,h=b.h*100, t=b.tag;
+    const cls=(t?'t-'+t.verdict:'t-none')+(t&&t.source==='visit'?' inh':'')+(selBox&&selBox.ts===f.ts&&selBox.i===b.i?' sel':'');
+    s+='<rect class="'+cls+'" x="'+x.toFixed(2)+'" y="'+y.toFixed(2)+'" width="'+w.toFixed(2)+'" height="'+h.toFixed(2)+'"/>';
+    if(b.conf!=null)s+='<text class="'+cls+'" x="'+x.toFixed(2)+'" y="'+Math.max(3.2,y).toFixed(2)+'">'+Math.round(b.conf*100)+'%'+
+      (t?' '+TAGMARK[t.verdict]:'')+'</text>';});  // the species is in the tag bar: long names don't fit here
+  svg.innerHTML=s; svg.style.display='block'; renderBoxTag();}
+// ---- tags on single boxes: click a box on the still, tag it below; "next box to tag" walks the revisit list
+const TAGTXT={real:'real',false:'false',wrong_species:'wrong sp.'}, TAGMARK={real:'✓',false:'✗',wrong_species:'≠'};
+let selBox=null, SPP=false, BOXQ=null;
+function stillBoxes(){const f=boxData&&boxData.frames&&(boxData.frames[boxData.best]||boxData.frames[0]);
+  return f?{ts:f.ts,boxes:f.boxes||[]}:{ts:null,boxes:[]};}
+function renderBoxTag(){const bar=$('#boxtag'), {ts,boxes}=stillBoxes(), set=$('#boxtagset'), sp=$('#boxsp'), clr=$('#boxclear');
+  if(mode!=='image'||!boxesOn||!curClip||!boxes.length){bar.hidden=true;return;}
+  bar.hidden=false; const b=selBox&&selBox.ts===ts&&boxes.find(x=>x.i===selBox.i);
+  if(!b){selBox=null; const n=boxes.filter(x=>!x.tag).length;
+    $('#boxtagwhat').textContent=n?n+' of '+boxes.length+(boxes.length>1?' boxes':' box')+' on this still '+(n>1?'have':'has')+' no tag: click one to tag it'
+      :'click a box to tag it on its own'; set.hidden=sp.hidden=clr.hidden=true; return;}
+  const t=b.tag;
+  $('#boxtagwhat').textContent='box '+(b.i+1)+' · '+Math.round((b.conf||0)*100)+'% · '+
+    (t?(t.source==='box'?'tagged ':'from the visit: ')+TAGTXT[t.verdict]:'no tag');
+  set.hidden=false; set.querySelectorAll('.lblbtn').forEach(x=>{x.disabled=!labelEditable;
+    x.classList.toggle('on',!!t&&t.source==='box'&&t.verdict===x.dataset.v);});
+  sp.hidden=!(t&&t.verdict!=='false'); sp.disabled=!labelEditable; sp.value=t&&t.species||''; clr.hidden=!(t&&t.source==='box');}
+async function setBoxTag(v,species){if(!labelEditable||!selBox||!curVisit)return;
+  try{const r=await fetch('/api/visit/'+curVisit+'/box-label',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ts:selBox.ts,box:selBox.i,verdict:v,species:v&&v!=='false'?species||'':''})});
+    if(!r.ok)return;
+    // a visit with no tag yet becomes real when one of its boxes is tagged real
+    if(v==='real'&&!curLabel&&await postLabel('real','')){markLabel('real'); const t=tileOf(curVisit); if(t)t.dataset.verdict='real';}
+    if(species)SPP=false; boxData=null; await loadBoxData(); drawBoxes(); refreshBoxQueue(); loadSpecies();}catch(e){}}
+$('#boxtagset').querySelectorAll('.lblbtn').forEach(x=>x.onclick=()=>setBoxTag(x.dataset.v,x.dataset.v==='false'?'':$('#boxsp').value.trim()));
+$('#boxsp').addEventListener('change',()=>{const {boxes}=stillBoxes(), b=selBox&&boxes.find(x=>x.i===selBox.i);
+  if(b&&b.tag)setBoxTag(b.tag.verdict,$('#boxsp').value.trim());});  // naming an inherited tag makes it the box's own
+$('#boxclear').onclick=()=>setBoxTag(null,'');
+async function loadSpecies(){if(SPP)return; SPP=true;
+  try{const d=await (await fetch('/api/labels/species')).json();
+    $('#spplist').innerHTML=(d.species||[]).map(n=>'<option value="'+esc(n)+'">').join('');}catch(e){SPP=false;}}
+async function refreshBoxQueue(){const b=$('#boxqbtn');
+  try{const cam=$('#camera').value, d=await (await fetch('/api/labels/needs-box-tags'+(cam?'?camera='+encodeURIComponent(cam):''))).json();
+    BOXQ=d.visits||[]; const left=BOXQ.filter(v=>String(v.id)!==String(curVisit)).length;
+    b.innerHTML='next box to tag ('+left+') &rsaquo;'; b.disabled=!left;}catch(e){}}
+function nextBoxToTag(){const v=(BOXQ||[]).find(x=>String(x.id)!==String(curVisit)); if(!v)return;
+  const g=$('#queuegrid'); g.innerHTML=tileHTML(v); openVisit(g.querySelector('.tile'));}
+$('#boxqbtn').onclick=nextBoxToTag;
+// a click (not a drag) on the still picks the smallest box under it, with a little slack for tiny boxes
+(function(){let down=null; const st=$('#stage');
+  st.addEventListener('pointerdown',e=>{down={x:e.clientX,y:e.clientY};});
+  st.addEventListener('pointerup',e=>{if(!down)return; const moved=Math.abs(e.clientX-down.x)+Math.abs(e.clientY-down.y); down=null;
+    if(moved>5||mode!=='image'||!boxesOn||!boxData)return;
+    const r=$('#boxov').getBoundingClientRect(); if(!r.width)return;
+    const px=(e.clientX-r.left)/r.width, py=(e.clientY-r.top)/r.height, k=0.01, {ts,boxes}=stillBoxes();
+    const hit=boxes.filter(b=>px>=b.x-k&&px<=b.x+b.w+k&&py>=b.y-k&&py<=b.y+b.h+k).sort((a,b)=>a.w*a.h-b.w*b.h)[0];
+    selBox=hit?{ts,i:hit.i}:null; drawBoxes();});})();
+function toggleBoxes(){boxesOn=!boxesOn; $('#boxbtn').classList.toggle('on',boxesOn);
+  $('#boxbtn').textContent=boxesOn?'hide boxes':'show boxes'; drawBoxes();}
+function playClip(){if(!curClip)return; const img=$('#still'), vid=$('#clip video');
+  if(mode==='image'){mode='video'; resetZoom(); $('#stage').classList.remove('pan');
+    img.style.display='none'; vid.style.display=''; vid.src='/media/visit/'+curVisit+'/clip'; renderBoxTag();
+    $('#playbtn').textContent='◀ back to image';}
+  else{mode='image'; resetZoom(); $('#stage').classList.add('pan');
+    vid.pause(); vid.removeAttribute('src'); vid.style.display='none'; img.style.display='';
+    $('#playbtn').textContent='watch clip ▶'; drawBoxes();}}
+$('#playbtn').onclick=playClip; $('#boxbtn').onclick=toggleBoxes; $('#nextbtn').onclick=nextUnlabelled; $('#hidebtn').onclick=toggleHidden;
+$('#still').addEventListener('load',()=>{if(mode==='image')drawBoxes();});
+$('#still').addEventListener('error',()=>{if(curClip&&!stillFB){stillFB=true;$('#still').src='/media/visit/'+curVisit+'/thumb';}});
+$('#clip video').addEventListener('loadeddata',()=>{if(mode!=='video')return;
+  const vid=$('#clip video'), f=boxData&&boxData.frames&&boxData.frames[boxData.best];
+  if(seekTo!=null){try{vid.pause();vid.currentTime=seekTo;}catch(e){} seekTo=null;}
+  else if(f){try{vid.pause();if(f.offset)vid.currentTime=f.offset;}catch(e){}} drawBoxes();});
+(function(){const stage=$('#stage'); let drag=false,lx=0,ly=0;
+  stage.addEventListener('wheel',e=>{if(mode!=='image')return; e.preventDefault();
+    const r=stage.getBoundingClientRect(),cx=e.clientX-r.left,cy=e.clientY-r.top;
+    const f=e.deltaY<0?1.15:1/1.15,ns=Math.min(8,Math.max(1,zs*f));
+    ztx=cx-(cx-ztx)*(ns/zs); zty=cy-(cy-zty)*(ns/zs); zs=ns; if(zs===1){ztx=0;zty=0;} applyZoom();},{passive:false});
+  stage.addEventListener('pointerdown',e=>{if(mode!=='image'||zs===1)return; drag=true;lx=e.clientX;ly=e.clientY;
+    stage.classList.add('panning'); try{stage.setPointerCapture(e.pointerId);}catch(_){}});
+  stage.addEventListener('pointermove',e=>{if(!drag)return; ztx+=e.clientX-lx; zty+=e.clientY-ly; lx=e.clientX; ly=e.clientY; applyZoom();});
+  stage.addEventListener('pointerup',()=>{drag=false;stage.classList.remove('panning');});
+  stage.addEventListener('dblclick',()=>{if(mode==='image')resetZoom();});})();
+$('#clip').onclick=e=>{if(e.target.id==='clip')$('#clip').close();};
+$('#clipclose').addEventListener('pointerdown',e=>e.stopPropagation());  // don't start a pan
+$('#clipclose').onclick=e=>{e.stopPropagation();$('#clip').close();};
+$('#clip').addEventListener('close',()=>{const v=$('#clip video');try{v.pause();}catch(_){}} );  // stop audio on close
+// one lag-area chart as an SVG string; shared by the big chart and the per-camera minis
+function lagSVG(pts,W,H,maxLag,grid){const pad=4,n=pts.length,cap=1800;
+  const X=i=>pad+i*(W-2*pad)/(n-1||1), Y=v=>H-pad-(v/maxLag)*(H-2*pad);
+  let area='M'+X(0).toFixed(1)+','+(H-pad);
+  pts.forEach((p,i)=>area+=' L'+X(i).toFixed(1)+','+Y(p.lag).toFixed(1));
+  area+=' L'+X(n-1).toFixed(1)+','+(H-pad)+' Z';
+  // activity: frames analysed per sample, on its own scale (shape, not comparable to lag)
+  const maxF=pts.reduce((m,p)=>Math.max(m,p.frames||0),0);
+  let act='';
+  if(maxF>0){const YF=v=>H-pad-(v/maxF)*(H-2*pad);
+    act='<polyline fill="none" stroke="var(--good)" stroke-width="1.2" opacity=".85" points="'+
+        pts.map((p,i)=>X(i).toFixed(1)+','+YF(p.frames||0).toFixed(1)).join(' ')+'"/>';}
+  const dh=Math.max(5,H*0.06);
+  const drops=pts.map((p,i)=>p.dropped>0?`<rect x="${X(i).toFixed(1)}" y="${(H-dh).toFixed(1)}" width="2" height="${dh.toFixed(1)}" fill="var(--warn)"/>`:'').join('');
+  let g='';
+  if(grid){const tix=[0,.25,.5,.75,1].map(f=>Math.round(f*(n-1)));
+    g=tix.map(i=>`<line x1="${X(i).toFixed(1)}" y1="0" x2="${X(i).toFixed(1)}" y2="${(H-9).toFixed(1)}" stroke="var(--line)" stroke-width="1" opacity=".45"/>`).join('');}
+  const capLine=cap<=maxLag?`<line x1="0" y1="${Y(cap).toFixed(1)}" x2="${W}" y2="${Y(cap).toFixed(1)}" stroke="var(--warn)" stroke-dasharray="5 5" stroke-width="1" opacity=".55"/>`:'';
+  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">`+g+capLine+
+    `<path d="${area}" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.5"/>${act}${drops}</svg>`;}
+const peakFrames=pts=>pts.reduce((m,p)=>Math.max(m,p.frames||0),0);
+const sumFrames=pts=>pts.reduce((s,p)=>s+(p.frames||0),0);
+const fmtK=n=>n>=1000?(n/1000).toFixed(n>=10000?0:1)+'k':''+n;
+function xAxis(pts){const n=pts.length,tix=[0,.25,.5,.75,1].map(f=>Math.round(f*(n-1)));
+  return tix.map((i,k)=>`<span style="${k===0?'':(k===tix.length-1?'text-align:right':'text-align:center')}">${(pts[i].at||'').slice(11,16)}</span>`).join('');}
+const peakLag=pts=>pts.reduce((m,p)=>Math.max(m,p.lag),0);
+async function loadStats(sel='#chart',forceAll=false){const el=$(sel); try{const cc=forceAll?'':$('#chartcam').value;
+  if(cc==='__each__') return loadStatsGrid(el);
+  const d=await (await fetch('/api/stats?since='+$('#since').value+(cc?'&camera='+encodeURIComponent(cc):''))).json();
+  const pts=d.points||[];
+  if(!pts.length){el.innerHTML='<div class="empty" style="padding:1rem">'+(d.camera?'no per-camera stats for '+d.camera+' yet (recorded from this build on)':'no stats yet')+'</div>';return;}
+  const maxLag=Math.max(30,peakLag(pts));  // fit the data; the 30-min cap line shows only when neared
+  el.innerHTML=lagSVG(pts,1000,132,maxLag,true)+
+    `<div class="xax">${xAxis(pts)}</div>`+
+    `<div class="clabel"><span>${d.camera?'<b>'+d.camera+'</b> &middot; ':''}<b style="color:var(--accent)">lag</b> (area) &middot; <b style="color:var(--good)">activity</b> (line) &middot; <span class="bad">drops</span> (ticks)${peakLag(pts)>=1800?' &middot; dashed = 30-min cap':''}</span>`+
+    `<span>${fmtK(sumFrames(pts))} frames &middot; ${(d.from||'').slice(0,10)}</span></div>`;
+}catch(e){el.innerHTML='<div class="empty" style="padding:1rem">stats unavailable</div>';}}
+async function loadStatsGrid(el){const d=await (await fetch('/api/stats/all?since='+$('#since').value)).json();
+  const cams=d.cameras||{}, names=Object.keys(cams).filter(n=>cams[n].length);
+  const idle=idleOn()?CAMS.filter(n=>!names.includes(n)):[];
+  if(!names.length&&!idle.length){el.innerHTML='<div class="empty" style="padding:1rem">no per-camera stats yet (recorded from the latest build on)</div>';return;}
+  let maxLag=30; names.forEach(n=>{const p=peakLag(cams[n]); if(p>maxLag)maxLag=p;});  // shared lag scale, fit to data
+  const totDrop=n=>cams[n].reduce((s,p)=>s+p.dropped,0);
+  const busy=n=>totDrop(n)*1e7+sumFrames(cams[n]);  // worst first: drops, then total activity
+  names.sort((a,b)=>busy(b)-busy(a));
+  let html='<div class="cgrid">';
+  names.forEach(n=>{const pts=cams[n], pk=Math.round(peakLag(pts)), dr=totDrop(n);
+    html+=`<div class="cmini"><div class="cmh"><b>${n}</b><span>${fmtK(sumFrames(pts))}f &middot; peak ${pk}s${dr?' &middot; <span class="bad">'+dr+' drop</span>':''}</span></div>`+
+      lagSVG(pts,500,52,maxLag,false)+'</div>';});
+  idle.forEach(n=>{html+=`<div class="cmini idle"><div class="cmh"><b>${n}</b><span>${idleLabel(n)} &middot; no data in window</span></div>`+
+    `<svg viewBox="0 0 500 52" preserveAspectRatio="none"></svg></div>`;});
+  const capNote=maxLag>=1800?' &middot; dashed = 30-min cap':'';
+  html+=`</div><div class="clabel"><span><b style="color:var(--accent)">lag</b> (area, shared scale) &middot; <b style="color:var(--good)">activity</b> (line, per-camera) &middot; <span class="bad">drops</span>${capNote}</span>`+
+    `<span>${(d.from||'').slice(0,10)} &middot; ${(d.from||'').slice(11,16)}&ndash;${(d.to||'').slice(11,16)}</span></div>`;
+  el.innerHTML=html;}
+// ---- visits timeline (what visited, when) ----
+const GROUP_CLASS={songbirds:'birds',jays:'birds',crows:'birds','doves/pigeons':'birds',hawks:'birds',owls:'birds',bird:'birds',
+  raccoon:'night',skunk:'night',opossum:'night', rat:'rodents',squirrel:'rodents',rodent:'rodents',
+  cat:'pets',dog:'pets', fox:'canids',coyote:'canids', person:'person'};
+const TL_CLASSES=[['birds','birds','--c-birds'],['night','night-critters','--c-night'],['rodents','rodents','--c-rodents'],
+  ['pets','cat/dog','--c-pets'],['canids','fox/coyote','--c-canids'],['person','person','--c-person'],['other','other','--c-other']];
+const classOf=g=>GROUP_CLASS[g]||'other';
+function showTip(e,html){const t=$('#vtip');t.innerHTML=html;t.style.opacity='1';
+  t.style.left=Math.min(e.clientX+12,innerWidth-230)+'px';t.style.top=(e.clientY+14)+'px';}
+function hideTip(){$('#vtip').style.opacity='0';}
+async function loadTimeline(sel='#vtl'){const el=$(sel); try{
+  const p=new URLSearchParams();p.set('since',$('#since').value);if($('#camera').value)p.set('camera',$('#camera').value);
+  const d=await (await fetch('/api/visits/timeline?'+p.toString())).json();
+  const bins=d.bins||[];
+  if(!d.visits){el.innerHTML='<div class="empty" style="padding:1rem">no visits in this window</div>';return;}
+  const data=bins.map(b=>{const c={};for(const[g,v]of Object.entries(b.grps||{}))c[classOf(g)]=(c[classOf(g)]||0)+v;return {t:b.t,c,raw:b.grps};});
+  const present=TL_CLASSES.filter(([k])=>data.some(b=>b.c[k]));
+  const maxTot=Math.max(1,...data.map(b=>Object.values(b.c).reduce((s,v)=>s+v,0)));
+  const W=1000,H=120,pad=4,n=data.length,bw=(W-2*pad)/n;
+  let bars='';
+  data.forEach((b,i)=>{let y=H-pad;const x=pad+i*bw;
+    present.forEach(([k,,v])=>{const cnt=b.c[k]||0;if(!cnt)return;const h=(cnt/maxTot)*(H-2*pad);
+      bars+=`<rect x="${(x+0.6).toFixed(1)}" y="${(y-h).toFixed(1)}" width="${Math.max(0.5,bw-1.2).toFixed(1)}" height="${h.toFixed(1)}" fill="var(${v})"></rect>`;
+      y-=h+(h>3?0.8:0);});
+    const tot=Object.values(b.c).reduce((s,v)=>s+v,0);
+    const lines=Object.entries(b.raw).sort((a,b)=>b[1]-a[1]).map(([g,c])=>g+' '+c).join('<br>');
+    bars+=`<rect x="${x.toFixed(1)}" y="0" width="${bw.toFixed(1)}" height="${H}" fill="transparent" class="vhit" data-tip="${(b.t||'').slice(11,16)} &middot; ${tot} visit${tot==1?'':'s'}<br>${lines}"></rect>`;});
+  const tix=[0,.25,.5,.75,1].map(f=>Math.round(f*(bins.length-1)));
+  el.innerHTML=`<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${bars}</svg>`+
+    `<div class="xax">`+tix.map((i,k)=>`<span style="${k===0?'':(k===4?'text-align:right':'text-align:center')}">${(bins[i].t||'').slice(11,16)}</span>`).join('')+`</div>`+
+    `<div class="vleg">`+present.map(([,label,v])=>`<span><i style="background:var(${v})"></i>${label}</span>`).join('')+
+    `<span style="margin-left:auto">${d.visits} visits &middot; ${(d.from||'').slice(0,10)}</span></div>`;
+  el.querySelectorAll('.vhit').forEach(r=>{r.addEventListener('mousemove',e=>showTip(e,r.dataset.tip));r.addEventListener('mouseleave',hideTip);});
+}catch(e){el.innerHTML='<div class="empty" style="padding:1rem">timeline unavailable</div>';}}
+// ---- hourly load heatmap (hour-of-day x camera) ----
+async function loadHeatmap(sel='#hmap',forceMode=null){const el=$(sel),mode=forceMode||($('.hmode .on')&&$('.hmode .on').dataset.m)||'dropped'; try{
+  const d=await (await fetch('/api/stats/heatmap?since='+$('#since').value)).json();
+  const cams=(d.cameras||[]).slice(), blank=Array.from({length:24},()=>({frames:0,dropped:0}));
+  if(idleOn())CAMS.filter(n=>!cams.includes(n)).forEach(n=>{cams.push(n);d.cells[n]=blank;});
+  if(!cams.length){el.innerHTML='<div class="empty" style="padding:1rem">no per-camera stats yet (recorded from the latest build on)</div>';return;}
+  const max=mode==='dropped'?d.max_dropped:d.max_frames, hue=mode==='dropped'?'--warn':'--accent';
+  let html='<div class="hgrid" style="grid-template-columns:auto repeat(24,1fr)"><div></div>';
+  for(let h=0;h<24;h++)html+=`<div class="hlab">${h%6===0?h:''}</div>`;
+  cams.forEach(cam=>{html+=`<div class="hlab hcamlab">${cam}${(d.cameras||[]).includes(cam)?'':'<span class="k" style="margin-left:.3rem">('+idleLabel(cam)+')</span>'}</div>`;
+    d.cells[cam].forEach((c,h)=>{const v=mode==='dropped'?c.dropped:c.frames,intl=max?v/max:0;
+      const bg=v?`color-mix(in srgb, var(${hue}) ${Math.round(12+intl*88)}%, transparent)`:'var(--chrome)';
+      html+=`<div class="hcell" style="background:${bg}" data-tip="<b>${cam}</b> &middot; ${h}:00&ndash;${h+1}:00<br>${c.frames.toLocaleString()} frames &middot; ${c.dropped} dropped"></div>`;});});
+  html+=`</div><div class="clabel"><span>${mode==='dropped'?'<span class="bad">segments dropped</span>':'frames analysed'} per hour of day &middot; darker = more &middot; hover a cell</span><span>${(d.from||'').slice(0,10)} &rarr; ${(d.to||'').slice(0,10)}</span></div>`;
+  el.innerHTML=html;
+  el.querySelectorAll('.hcell').forEach(c=>{c.addEventListener('mousemove',e=>showTip(e,c.dataset.tip));c.addEventListener('mouseleave',hideTip);});
+}catch(e){el.innerHTML='<div class="empty" style="padding:1rem">heatmap unavailable</div>';}}
+// ---- the one featured chart on the feeds view (user-selectable, persisted per browser) ----
+function loadFeatured(){const k=$('#featsel').value;
+  if(k==='throughput')loadStats('#feat',true);        // always all-cameras in the compact slot
+  else if(k==='heatmap')loadHeatmap('#feat','dropped');
+  else loadTimeline('#feat');}
+try{const f=localStorage.getItem('feat'); if(f)$('#featsel').value=f;}catch(e){}
+$('#featsel').onchange=()=>{try{localStorage.setItem('feat',$('#featsel').value);}catch(e){} loadFeatured();};
+
+// ---- two views (feeds / analytics), bookmarkable at / and /analytics ----
+let VIEW='feeds';
+function renderView(){if(VIEW==='analytics'){loadStats();loadTimeline();loadHeatmap();}else if(VIEW==='map'){loadMap();}else{loadVisits();loadFeatured();}}
+const viewOf=path=>path.indexOf('analytics')>=0?'analytics':path.indexOf('/map')>=0?'map':'feeds';
+function setView(v,push){VIEW=['analytics','map'].includes(v)?v:'feeds';
+  $('#view-feeds').hidden=VIEW!=='feeds'; $('#view-analytics').hidden=VIEW!=='analytics'; $('#view-map').hidden=VIEW!=='map';
+  $('#hidtoglbl').style.display=VIEW==='feeds'?'':'none';  // it filters the visits grid, which only feeds shows
+  $('#favtoglbl').style.display=VIEW==='feeds'?'':'none';
+  document.querySelectorAll('.tabs a[data-view]').forEach(a=>a.classList.toggle('active',a.dataset.view===VIEW));
+  if(push)history.pushState({v:VIEW},'',VIEW==='feeds'?'/':'/'+VIEW);
+  renderView();}
+document.querySelectorAll('a[data-view]').forEach(a=>a.addEventListener('click',e=>{e.preventDefault();setView(a.dataset.view,true);}));
+addEventListener('popstate',()=>setView(viewOf(location.pathname),false));
+
+$('.hmode').querySelectorAll('button').forEach(b=>b.onclick=()=>{$('.hmode .on').classList.remove('on');b.classList.add('on');loadHeatmap();});
+// filters are global; a change refreshes the header and whichever view is showing
+['since','taxon','camera','showhidden','favonly'].forEach(id=>$('#'+id).addEventListener('change',()=>{loadHealth();renderView();}));
+$('#chartcam').onchange=()=>{if(VIEW==='analytics')loadStats();};
+try{$('#showidle').checked=localStorage.getItem('showIdle')==='1';}catch(e){}
+$('#showidle').onchange=()=>{try{localStorage.setItem('showIdle',idleOn()?'1':'0');}catch(e){} if(VIEW==='analytics'){loadStats();loadHeatmap();}};
+tick();setInterval(tick,1000);loadCameras();loadSpecies();loadHealth();
+setView(viewOf(location.pathname),false);
+setInterval(()=>{loadHealth();renderView();},60000);
+</script></div></body></html>

@@ -725,3 +725,14 @@ def test_favourites_can_be_starred_from_the_viewer_and_filtered(tmp_path):
     assert 'id="favbtn"' in page and 'id="favonly"' in page and "p.set('favorites','1')" in page
     assert 'data-fav="${x.favorite?x.favorite.kind:\'\'}"' in page
     assert "if(curClip&&t.dataset.fav==='clip'){seekTo=" in page and "if(seekTo!=null){try{vid.pause();vid.currentTime=seekTo;}" in page
+
+
+def test_pages_are_html_files_shipped_with_the_package(client):
+    """The dashboard, zone editor and image pages are plain HTML files in camera_mcp/pages/ (package
+    data, so they ship in the wheel), served as they are: copyright line first, then the doctype."""
+    from importlib import resources
+    pages = resources.files("camera_mcp") / "pages"
+    for route, name in (("/", "dashboard.html"), ("/zones", "zones.html"), ("/visit/1/image", "image.html")):
+        html = (pages / name).read_text(encoding="utf-8")
+        assert html.startswith("<!-- Copyright") and html.splitlines()[1].startswith("<!doctype html>")
+        assert client.get(route).text == html
