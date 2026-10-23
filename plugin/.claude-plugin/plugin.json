@@ -1,0 +1,25 @@
+{
+  "name": "camera-mcp",
+  "displayName": "Camera MCP",
+  "version": "0.1.0",
+  "description": "Ask about your home cameras from Claude Code: the camera-mcp server (live snapshots, the wildlife visit log, coverage and monitor health) plus a Skill that knows how to read its answers.",
+  "author": { "name": "Eric Cooper" },
+  "homepage": "https://github.com/ecoop/camera-mcp",
+  "repository": "https://github.com/ecoop/camera-mcp",
+  "license": "MIT",
+  "keywords": ["mcp", "cameras", "wildlife", "speciesnet", "megadetector"],
+  "userConfig": {
+    "host": {
+      "type": "string",
+      "title": "Monitor host (SSH)",
+      "description": "user@host of the machine running the camera monitor, reached over key-based SSH. Leave empty if Claude Code runs on that machine.",
+      "default": ""
+    },
+    "repo_dir": {
+      "type": "string",
+      "title": "camera-mcp folder on that machine",
+      "description": "Where camera-mcp is checked out on the monitor's machine (with its .venv, cameras.yaml and data/).",
+      "default": "~/projects/camera-mcp"
+    }
+  }
+}

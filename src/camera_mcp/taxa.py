@@ -123,3 +123,29 @@ def expand_taxon(query: str) -> list[str]:
             return list(prefixes)
     reverse = {v: k for k, v in CLASS_NAMES.items()}
     return [reverse.get(query, query)]
+
+
+def reference_markdown() -> str:
+    """The taxon reference shipped with the Claude Code plugin's Skill (plugin/skills/camera-history/
+    reference.md): every group, union and class a `taxon` filter accepts, generated from the tables
+    above so the two can't drift. Regenerate with
+    `python -c "from camera_mcp.taxa import reference_markdown as r; print(r(), end='')" > plugin/skills/camera-history/reference.md`."""
+    lines = ["# Taxon reference", "",
+             "What the `taxon` (and `overlapping`) filter of `find_visits` and `activity_summary` accepts.",
+             "Generated from `camera_mcp/taxa.py`; don't edit by hand.", "",
+             "## Groups", "",
+             "Each visit is put in one group, checked in this order (the first match wins, so crows and",
+             "jays are not counted as songbirds).", "",
+             "| group | covers (SpeciesNet taxonomy prefixes) |", "|---|---|"]
+    lines += [f"| `{g}` | {', '.join(f'`{p}`' for p in prefixes)} |" for g, prefixes in GROUPS]
+    lines += ["", "## Unions", "", "Groups of groups, for questions like \"was the yard clear?\".", "",
+              "| union | groups |", "|---|---|"]
+    lines += [f"| `{u}` | {', '.join(f'`{g}`' for g in groups)} |" for u, groups in UNIONS.items()]
+    lines += ["", "## Classes", "", "Broad: everything in the class, whatever its group.", "",
+              "| class | taxonomy |", "|---|---|"]
+    lines += [f"| `{name}` | `{cls}` |" for cls, name in CLASS_NAMES.items()]
+    lines += ["", "## Anything else", "",
+              "A common name (`striped skunk`, `house finch`) matches that label exactly. Visits the detector",
+              "found but couldn't name are labelled `animal`; plain `bird` visits couldn't be sorted into a",
+              "group, so mention them as possibly songbirds when asked about songbirds.", ""]
+    return "\n".join(lines)
