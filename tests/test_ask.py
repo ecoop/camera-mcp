@@ -12,6 +12,7 @@ import pytest
 from camera_mcp.ask import FALLBACK_BETA, MODEL, Asker, AskError, Budget, cost_of
 from camera_mcp.config import Camera, Site
 from camera_mcp.history import History
+from camera_mcp.server import VISIT_FIELDS
 from camera_mcp.store import Store
 from camera_mcp.visits import Visit
 
@@ -161,6 +162,7 @@ def test_the_ask_box_uses_the_mcp_servers_own_tools(log):
     a = asker(log, FakeClient())
     server = {t.name: t for t in anyio.run(a.server.list_tools)}
     assert [t["name"] for t in a.tools()] == list(ASK_TOOLS) and "snapshot" not in ASK_TOOLS
+    assert set(server) == set(ASK_TOOLS) and not anyio.run(a.server.list_resources)  # metadata-only: nothing else
     for t in a.tools():
         assert t["description"] == server[t["name"]].description and t["input_schema"] == server[t["name"]].input_schema
     assert a.tools()[1]["input_schema"]["properties"]["group_by"]["enum"] == ["species", "group", "camera", "hour", "day"]
@@ -172,16 +174,121 @@ def test_the_ask_box_uses_the_mcp_servers_own_tools(log):
 
 
 def test_the_ask_box_keeps_its_own_visit_limit(log, monkeypatch):
-    """find_visits here defaults to 20 visits and never asks for more than 50, whatever Claude sends."""
-    from types import SimpleNamespace
-
+    """find_visits here (the server built metadata-only) defaults to 20 visits and never asks for more
+    than 50, whatever Claude sends; its visits carry metadata only."""
     a = asker(log, FakeClient())
     sent = []
+    real = a.history.find_visits
 
-    async def call_tool(name, args):
-        sent.append(args["limit"])
-        return SimpleNamespace(structured_content={"visits": [], "total": 0})
-    monkeypatch.setattr(a.server, "call_tool", call_tool)
+    def find_visits(*args):
+        sent.append(args[7])  # limit
+        return real(*args)
+    monkeypatch.setattr(a.history, "find_visits", find_visits)
+    seen = {}
     for limit in (None, 5, 500):
-        a.run_tool("find_visits", {"since": "24h"} | ({"limit": limit} if limit else {}), {})
+        out = json.loads(a.run_tool("find_visits", {"since": "24h"} | ({"limit": limit} if limit else {}), seen))
     assert sent == [20, 5, 50]
+    assert out["visits"] and set(out["visits"][0]) == {*VISIT_FIELDS, "clip"} and seen
+
+
+# The same box on the Agent SDK (ASK_BACKEND=agent), with a stand-in for claude_agent_sdk.query.
+
+def agent_run(log, *script, cap=1.0, tools=None, result=None, spent=0.0):
+    """An AgentAsker whose SDK plays `script` (assistant turns and tool results), offering `tools`
+    at init, then ending with `result`; returns the asker and the options it was started with."""
+    sdk = pytest.importorskip("claude_agent_sdk")
+    from camera_mcp.ask import AgentAsker
+    history, _, tmp = log
+    seen = {}
+
+    async def query(prompt, options):
+        seen.update(prompt=prompt, options=options)
+        names = tools if tools is not None else [f"mcp__cameras__{n}" for n in
+                                                 ("find_visits", "activity_summary", "monitor_status", "analysis_health")]
+        yield sdk.SystemMessage(subtype="init", data={"tools": names})
+        for m in script:
+            yield m
+        yield result or sdk.ResultMessage(subtype="success", duration_ms=1, duration_api_ms=1, is_error=False,
+                                          num_turns=2, session_id="s", total_cost_usd=0.03, result="done")
+    budget = Budget(tmp / "ask_usage.json", cap)
+    budget.add(spent)
+    return AgentAsker(history, budget, tmp / "cameras.yaml", tmp, query=query), seen
+
+
+def find_turn(log, args, tid="t1"):
+    """find_visits called with `args`, and its result as the metadata-only server returns it."""
+    import anyio
+    sdk = pytest.importorskip("claude_agent_sdk")
+    from camera_mcp.server import build_server
+    history, _, tmp = log
+    r = anyio.run(build_server(history.cameras, history, tmp, metadata_only=True).call_tool, "find_visits", args)
+    return (sdk.AssistantMessage(content=[sdk.ToolUseBlock(id=tid, name="mcp__cameras__find_visits", input=args)],
+                                 model=MODEL),
+            sdk.UserMessage(content=[sdk.ToolResultBlock(tool_use_id=tid, content=[
+                {"type": "text", "text": json.dumps(r.structured_content)}], is_error=False)]))
+
+
+def done(text, cost=0.03, subtype="success", stop="end_turn", is_error=False):
+    sdk = pytest.importorskip("claude_agent_sdk")
+    return sdk.ResultMessage(subtype=subtype, duration_ms=1, duration_api_ms=1, is_error=is_error, num_turns=2,
+                             session_id="s", total_cost_usd=cost, result=text, stop_reason=stop)
+
+
+def test_the_agent_backend_answers_and_links_its_visits(log):
+    _, (sk1, sk2, _), _ = log
+    a, seen = agent_run(log, *find_turn(log, {"since": "24h", "taxon": "skunk"}),
+                        result=done(f"Two skunks: [#{sk2}] and [#{sk1}]. Also [#99999].", cost=0.04))
+    ans = a.ask("all skunks in the last 24 hours?")
+    assert [v["id"] for v in ans.visits] == [sk2, sk1] and ans.visits[0]["has_thumbnail"]  # unseen ids dropped
+    assert ans.cost == 0.04 and a.budget.spent() == pytest.approx(0.04) and ans.rounds == 2
+    assert seen["prompt"].startswith("(It is now ") and seen["prompt"].endswith("all skunks in the last 24 hours?")
+
+
+def test_the_agent_backend_is_locked_down(log):
+    """No built-in tools, no other MCP servers, settings, plugins or stored logins; only the four
+    history tools pre-approved and everything else refused; the server metadata-only; and a
+    question may spend only what's left of today's cap."""
+    a, seen = agent_run(log, cap=1.0, spent=0.25)
+    a.ask("anything?")
+    o = seen["options"]
+    assert o.tools == [] and o.strict_mcp_config and o.setting_sources == [] and o.permission_mode == "dontAsk"
+    assert set(o.allowed_tools) == a.tool_names and len(a.tool_names) == 4
+    assert o.extra_args == {"bare": None, "no-session-persistence": None}
+    assert "--metadata-only" in o.mcp_servers["cameras"]["args"]
+    assert o.max_budget_usd == pytest.approx(0.75) and o.max_turns == 6 and o.model == MODEL
+    assert "isn't offline" in o.system_prompt and "Home cameras watched" not in o.system_prompt  # the server sends that
+
+
+def test_the_agent_backend_fails_closed_on_any_other_tool(log):
+    a, _ = agent_run(log, tools=["mcp__cameras__find_visits", "mcp__cameras__snapshot", "Bash"])
+    with pytest.raises(AskError) as e:
+        a.ask("anything?")
+    assert e.value.status == 503 and "snapshot" in str(e.value)
+
+
+def test_the_agent_backend_reports_stops_and_refusals(log):
+    a, _ = agent_run(log, result=done("", subtype="error_max_turns", is_error=True))
+    assert "more steps" in a.ask("q").text
+    a, _ = agent_run(log, result=done("Partly:", subtype="error_max_budget_usd", is_error=True))
+    assert a.ask("q").text == "Partly:\n\n(Stopped: today's ask budget is used up.)"
+    a, _ = agent_run(log, result=done("no", stop="refusal"))
+    r = a.ask("q")
+    assert r.refused and r.text == "I can't help with that one."
+    a, _ = agent_run(log, result=done("", is_error=True))
+    with pytest.raises(RuntimeError):
+        a.ask("q")
+    a, _ = agent_run(log, cap=1.0, spent=1.0)
+    with pytest.raises(AskError) as e:  # the cap is checked before the agent starts
+        a.ask("q")
+    assert e.value.status == 429
+
+
+def test_ask_backend_picks_the_loop(log, monkeypatch):
+    from camera_mcp import ask
+    history, _, tmp = log
+    monkeypatch.setattr(ask, "read_credentials_file", dict)
+    budget = Budget(tmp / "u.json", 1.0)
+    monkeypatch.delenv("ASK_BACKEND", raising=False)
+    assert type(ask.make_asker(history, budget, tmp / "c.yaml", tmp)) is ask.Asker
+    monkeypatch.setenv("ASK_BACKEND", "Agent")
+    assert type(ask.make_asker(history, budget, tmp / "c.yaml", tmp)) is ask.AgentAsker

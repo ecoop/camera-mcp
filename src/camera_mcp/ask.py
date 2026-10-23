@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -27,7 +28,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 
 from camera_mcp.credentials import read_credentials_file
 from camera_mcp.history import History, HistoryError
-from camera_mcp.server import INSTRUCTIONS, build_server
+from camera_mcp.server import INSTRUCTIONS, METADATA_TOOLS, build_server
 
 MODEL = "claude-opus-5-5"
 EFFORT = "low"  # short Q&A over a few tool calls: low effort answers well and keeps cost and latency down
@@ -45,12 +46,9 @@ PRICES = {
 }
 VISIT_REF = re.compile(r"\[#(\d+)\]")
 
-# The history tools Claude may use here: the metadata-only ones from the MCP server (no images or clips).
-# Their names, descriptions and input schemas come from the server itself (see Asker.tools).
-ASK_TOOLS = ("find_visits", "activity_summary", "monitor_status", "analysis_health")
-ASK_LIMIT, ASK_MAX_LIMIT = 20, 50  # find_visits here: a default and a cap that keep answers (and cost) small
-VISIT_FIELDS = ("id", "camera", "started", "last_seen", "still_there", "label", "group", "score", "max_at_once",
-                "frames", "suppressed", "verdict")  # what a visit sent to Claude carries: metadata only
+# The history tools Claude may use here: the MCP server's metadata-only ones (no images or clips), from
+# a server built metadata-only, which also keeps find_visits' pages small and its visits trimmed.
+ASK_TOOLS = METADATA_TOOLS
 
 STYLE = """
 You answer questions about this visit log for its owner, from a box on their camera dashboard.
@@ -150,11 +148,55 @@ class Answer:
     seen: dict = field(default_factory=dict, repr=False)
 
 
+TOO_MANY_STEPS = "That took more steps than a quick question should; try asking more specifically."
+BUDGET_STOP = "(Stopped: today's ask budget is used up.)"
+REFUSED = "I can't help with that one."
+
+
+def guidance(history: History) -> str:
+    """The cameras and their watch hours, then how to answer: the prompt both backends add to the
+    MCP server's own instructions."""
+    def line(c) -> str:
+        hours = f"watched {c.active} local, paused otherwise" if c.active else "watched around the clock"
+        return f"- {c.name}: {hours}" + (f"; tags: {', '.join(c.tags)}" if c.tags else "")
+    cams = "\n".join(line(c) for c in history.cameras.values() if c.enabled)
+    return "Cameras:\n" + cams + "\n" + STYLE
+
+
+def opening(question: str, budget: Budget) -> str:
+    """The first message for a question, or AskError if it can't be asked now."""
+    question = (question or "").strip()
+    if not question:
+        raise AskError("ask a question")
+    if len(question) > MAX_QUESTION:
+        raise AskError(f"keep questions under {MAX_QUESTION} characters")
+    if budget.spent() >= budget.cap:
+        raise AskError(f"today's ask budget (${budget.cap:.2f}) is used up; it resets at midnight", 429)
+    now = datetime.now().astimezone().strftime("%A %Y-%m-%d %H:%M %Z")
+    return f"(It is now {now}.)\n\n{question}"
+
+
+def remember(found: dict, seen: dict) -> None:
+    """Keep the visits a find_visits answer listed, so an answer's [#id] references can be shown."""
+    for v in found.get("visits", []):
+        seen[v["id"]] = v
+
+
+def answer(text: str, seen: dict, cost: float, budget: Budget, rounds: int, refused: bool) -> Answer:
+    ids = []
+    for m in VISIT_REF.finditer(text):
+        vid = int(m.group(1))
+        if vid in seen and vid not in ids:
+            ids.append(vid)
+    return Answer(text=text or "(no answer)", visits=[seen[i] for i in ids], cost=round(cost, 4),
+                  spent_today=round(budget.spent(), 4), cap=budget.cap, rounds=rounds, refused=refused, seen=seen)
+
+
 class Asker:
     def __init__(self, history: History, budget: Budget, client=None):
         self.history, self.budget = history, budget
         self._client = client  # injected in tests; otherwise built from the API key on first use
-        self.server = build_server(history.cameras, history)  # the MCP tools, called in process
+        self.server = build_server(history.cameras, history, metadata_only=True)  # the MCP tools, in process
         self._tools: list[dict] | None = None
         self._wrapped: set[str] = set()  # tools whose result the server wraps as {"result": ...} (lists)
 
@@ -188,58 +230,38 @@ class Asker:
 
     def system(self) -> list[dict]:
         """The stable part of the prompt (cached): the MCP server's own guidance and the cameras."""
-        def line(c) -> str:
-            hours = f"watched {c.active} local, paused otherwise" if c.active else "watched around the clock"
-            return f"- {c.name}: {hours}" + (f"; tags: {', '.join(c.tags)}" if c.tags else "")
-        cams = "\n".join(line(c) for c in self.history.cameras.values() if c.enabled)
-        return [{"type": "text", "text": INSTRUCTIONS + "\nCameras:\n" + cams + "\n" + STYLE}]
+        return [{"type": "text", "text": INSTRUCTIONS + "\n" + guidance(self.history)}]
 
     def run_tool(self, name: str, args: dict, seen: dict) -> str:
-        """One read-only history call through the MCP server, as compact JSON. find_visits gets this
-        box's limit and is trimmed to metadata; the visits it returns are remembered (`seen`) so the
-        answer's [#id] references can be shown."""
+        """One read-only history call through the MCP server, as compact JSON. The visits find_visits
+        returns are remembered (`seen`) so the answer's [#id] references can be shown."""
         if name not in ASK_TOOLS:
             raise HistoryError(f"unknown tool {name!r}")
-        a = dict(args or {})
-        if name == "find_visits":
-            a["limit"] = max(1, min(int(a.get("limit") or ASK_LIMIT), ASK_MAX_LIMIT))
         self.tools()  # learns which results come wrapped
         try:
-            result = anyio.run(self.server.call_tool, name, a)
+            result = anyio.run(self.server.call_tool, name, dict(args or {}))
         except ToolError as e:  # the server's message, without its "Error executing tool …:" prefix
             raise HistoryError(str(e).removeprefix(f"Error executing tool {name}: ")) from None
         r = result.structured_content
         if name in self._wrapped:
             r = r["result"]
         if name == "find_visits":
-            trimmed = []
-            for v in r["visits"]:
-                meta = {k: v.get(k) for k in VISIT_FIELDS}
-                seen[meta["id"]] = meta | {"has_thumbnail": v.get("has_thumbnail"), "clip": bool(v.get("clip"))}
-                trimmed.append(meta)
-            r["visits"] = trimmed
+            remember(r, seen)
         return json.dumps(r, default=str, separators=(",", ":"))
 
     def ask(self, question: str) -> Answer:
-        question = (question or "").strip()
-        if not question:
-            raise AskError("ask a question")
-        if len(question) > MAX_QUESTION:
-            raise AskError(f"keep questions under {MAX_QUESTION} characters")
-        if self.budget.spent() >= self.budget.cap:
-            raise AskError(f"today's ask budget (${self.budget.cap:.2f}) is used up; it resets at midnight", 429)
+        prompt = opening(question, self.budget)
         client = self.client()
-        now = datetime.now().astimezone().strftime("%A %Y-%m-%d %H:%M %Z")
-        messages: list = [{"role": "user", "content": f"(It is now {now}.)\n\n{question}"}]
+        messages: list = [{"role": "user", "content": prompt}]
         seen: dict = {}
         cost, rounds, refused, text = 0.0, 0, False, ""
         self.budget.add(0.0, question=True)
         while True:
             if rounds >= MAX_ROUNDS:
-                text = text or "That took more steps than a quick question should; try asking more specifically."
+                text = text or TOO_MANY_STEPS
                 break
             if self.budget.spent() >= self.budget.cap:
-                text = (text + "\n\n" if text else "") + "(Stopped: today's ask budget is used up.)"
+                text = (text + "\n\n" if text else "") + BUDGET_STOP
                 break
             response = client.beta.messages.create(
                 model=MODEL, max_tokens=MAX_TOKENS, system=self.system(), tools=self.tools(), messages=messages,
@@ -252,7 +274,7 @@ class Asker:
             self.budget.add(spent)
             text = "".join(b.text for b in response.content if getattr(b, "type", "") == "text").strip()
             if response.stop_reason == "refusal":
-                refused, text = True, "I can't help with that one."
+                refused, text = True, REFUSED
                 break
             if response.stop_reason != "tool_use":
                 break
@@ -267,11 +289,106 @@ class Asker:
                     out, err = f"Error: {e}", True
                 results.append({"type": "tool_result", "tool_use_id": block.id, "content": out, "is_error": err})
             messages.append({"role": "user", "content": results})
-        ids = []
-        for m in VISIT_REF.finditer(text):
-            vid = int(m.group(1))
-            if vid in seen and vid not in ids:
-                ids.append(vid)
-        return Answer(text=text or "(no answer)", visits=[seen[i] for i in ids], cost=round(cost, 4),
-                      spent_today=round(self.budget.spent(), 4), cap=self.budget.cap, rounds=rounds,
-                      refused=refused, seen=seen)
+        return answer(text, seen, cost, self.budget, rounds, refused)
+
+
+class AgentAsker:
+    """The same ask box on the Claude Agent SDK (ASK_BACKEND=agent): the SDK runs the tool loop in a
+    Claude Code process, one per question, and the tools come over MCP from camera-mcp started
+    --metadata-only, so the four history tools are all it can call. No built-in tools, settings,
+    plugins, stored logins or saved sessions (--bare); the API key is ANTHROPIC_API_KEY. Spend goes
+    into the same daily ledger, and a question may spend at most what's left of today's cap."""
+
+    SERVER = "cameras"
+
+    def __init__(self, history: History, budget: Budget, config: Path, data_dir: Path, query=None):
+        self.history, self.budget = history, budget
+        self.config, self.data_dir = Path(config), Path(data_dir)
+        self._query = query  # injected in tests; otherwise claude_agent_sdk.query
+
+    @property
+    def enabled(self) -> bool:
+        return self._query is not None or api_key() is not None
+
+    @property
+    def tool_names(self) -> set[str]:
+        return {f"mcp__{self.SERVER}__{n}" for n in ASK_TOOLS}
+
+    def options(self):
+        from claude_agent_sdk import ClaudeAgentOptions
+
+        server = {"command": sys.executable, "args": ["-m", "camera_mcp.server", "--config", str(self.config),
+                                                      "--data-dir", str(self.data_dir), "--metadata-only"]}
+        return ClaudeAgentOptions(
+            model=MODEL, effort=EFFORT, system_prompt=guidance(self.history),  # the server sends its own guide
+            tools=[], mcp_servers={self.SERVER: server}, strict_mcp_config=True, setting_sources=[],
+            allowed_tools=sorted(self.tool_names), permission_mode="dontAsk",
+            max_turns=MAX_ROUNDS, max_budget_usd=max(0.0, self.budget.cap - self.budget.spent()),
+            cwd=str(self.data_dir), env={"ANTHROPIC_API_KEY": api_key() or ""},
+            extra_args={"bare": None, "no-session-persistence": None},
+        )
+
+    def ask(self, question: str) -> Answer:
+        prompt = opening(question, self.budget)
+        if not self.enabled:
+            raise AskError("asking is off: no ANTHROPIC_API_KEY on this host", 503)
+        self.budget.add(0.0, question=True)
+        return anyio.run(self._ask, prompt)
+
+    async def _ask(self, prompt: str) -> Answer:
+        try:
+            from claude_agent_sdk import AssistantMessage, ResultMessage, SystemMessage, UserMessage, query
+        except ImportError:
+            raise AskError("asking is off: install the agent extra (pip install 'camera-mcp[agent]')", 503) from None
+        query = self._query or query
+        seen: dict = {}
+        finds: set[str] = set()  # ids of find_visits calls, whose results list visits
+        result = None
+        async for m in query(prompt=prompt, options=self.options()):
+            if isinstance(m, SystemMessage) and m.subtype == "init":
+                if set(m.data.get("tools", [])) != self.tool_names:  # fail closed: exactly the four, nothing else
+                    raise AskError(f"asking is off: the agent was offered {sorted(m.data.get('tools', []))}", 503)
+            elif isinstance(m, AssistantMessage):
+                finds |= {b.id for b in m.content if getattr(b, "name", "") == f"mcp__{self.SERVER}__find_visits"}
+            elif isinstance(m, UserMessage) and isinstance(m.content, list):
+                for b in m.content:
+                    if getattr(b, "tool_use_id", None) in finds and not b.is_error:
+                        remember(tool_json(b.content), seen)
+            elif isinstance(m, ResultMessage):
+                result = m
+        if result is None:
+            raise RuntimeError("the agent ended without a result")
+        cost = result.total_cost_usd or 0.0
+        self.budget.add(cost)
+        text, refused = (result.result or "").strip(), result.stop_reason == "refusal"
+        if refused:
+            text = REFUSED
+        elif result.subtype == "error_max_turns":
+            text = text or TOO_MANY_STEPS
+        elif result.subtype == "error_max_budget_usd":
+            text = (text + "\n\n" if text else "") + BUDGET_STOP
+        elif result.is_error:
+            raise RuntimeError(f"the agent failed ({result.subtype}, {'; '.join(result.errors or []) or result.api_error_status})")
+        return answer(text, seen, cost, self.budget, result.num_turns, refused)
+
+
+def tool_json(content) -> dict:
+    """A tool result's JSON, from the text the MCP server sent ({} if it isn't JSON)."""
+    if isinstance(content, list):
+        content = "".join(c.get("text", "") for c in content if isinstance(c, dict))
+    try:
+        r = json.loads(content or "")
+    except ValueError:
+        return {}
+    return r if isinstance(r, dict) else {}
+
+
+def ask_backend() -> str:
+    """"api" (the hand-written loop, the default) or "agent" (the Agent SDK), from ASK_BACKEND."""
+    raw = os.environ.get("ASK_BACKEND") or read_credentials_file().get("ASK_BACKEND") or "api"
+    return "agent" if raw.strip().lower() == "agent" else "api"
+
+
+def make_asker(history: History, budget: Budget, config: Path, data_dir: Path):
+    """The ask box's backend, by ASK_BACKEND."""
+    return AgentAsker(history, budget, config, data_dir) if ask_backend() == "agent" else Asker(history, budget)
