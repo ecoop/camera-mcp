@@ -13,8 +13,8 @@ from camera_mcp.web import askbox, media, pages, tags, visits, zones
 from camera_mcp.web.context import Context
 
 
-def build_app(cameras: dict, data_dir: Path, site=None) -> Starlette:
-    ctx = Context(cameras, data_dir, site)
+def build_app(cameras: dict, data_dir: Path, site=None, config: Path | None = None) -> Starlette:
+    ctx = Context(cameras, data_dir, site, config)
     return Starlette(routes=[*pages.routes(ctx), *visits.routes(ctx), *askbox.routes(ctx), *zones.routes(ctx),
                              *media.routes(ctx), *tags.routes(ctx)])
 
@@ -37,5 +37,5 @@ def main(argv: list[str] | None = None) -> None:
         site = load_site(args.config)
     except ConfigError as e:
         raise SystemExit(f"web: {e}")
-    app = build_app(cameras, data_dir, site)
+    app = build_app(cameras, data_dir, site, Path(args.config))
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")

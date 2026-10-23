@@ -10,6 +10,7 @@ from pathlib import Path
 
 from starlette.responses import JSONResponse
 
+from camera_mcp.config import default_config_path
 from camera_mcp.history import History, HistoryError
 
 
@@ -18,11 +19,13 @@ class Context:
     cameras: dict  # name -> Camera; the zones route replaces entries in place after a save
     data_dir: Path
     site: object | None = None
+    config: Path | None = None  # the camera YAML, for anything that starts its own camera-mcp server
     history: History = field(init=False)
     editable: bool = field(init=False)  # CAMERA_MCP_WEB_READONLY=1 turns every write off
 
     def __post_init__(self):
         self.history = History(self.db_path, self.cameras, self.site)
+        self.config = Path(self.config) if self.config else Path(default_config_path())
         self.editable = os.environ.get("CAMERA_MCP_WEB_READONLY", "").lower() not in ("1", "true", "yes")
 
     @property

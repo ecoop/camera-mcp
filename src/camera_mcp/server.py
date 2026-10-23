@@ -4,10 +4,13 @@
 Live tools (list_cameras, snapshot) open the cameras directly. History tools (find_visits,
 activity_summary, visit_media, monitor_status, analysis_health) read the monitor's visit log,
 read-only. These are the one definition of the tools: the dashboard's ask box (ask.py) offers
-Claude the metadata-only ones by listing and calling this server in process, and an agent can
-connect to it over MCP.
+Claude the metadata-only ones, in process or over MCP, and any agent can connect over MCP.
 
-Run over stdio:  camera-mcp --config ~/projects/camera-mcp/cameras.yaml [--data-dir data]
+With --metadata-only the server offers just the history tools that send no images or clips
+(METADATA_TOOLS), and find_visits returns a small page of trimmed visits: for agents whose
+answers must never carry a picture off the machine.
+
+Run over stdio:  camera-mcp --config ~/projects/camera-mcp/cameras.yaml [--data-dir data] [--metadata-only]
 """
 
 from __future__ import annotations
@@ -32,6 +35,12 @@ from camera_mcp.config import (
 from camera_mcp.history import GROUP_BY, History, HistoryError
 
 READ_ONLY = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
+
+# --metadata-only: the tools offered, find_visits' default and largest page, and what a visit carries
+METADATA_TOOLS = ("find_visits", "activity_summary", "monitor_status", "analysis_health")
+METADATA_LIMIT, METADATA_MAX_LIMIT = 20, 50
+VISIT_FIELDS = ("id", "camera", "started", "last_seen", "still_there", "label", "group", "score", "max_at_once",
+                "frames", "suppressed", "verdict", "has_thumbnail")
 
 
 class CameraInfo(BaseModel):
@@ -72,8 +81,13 @@ asked about songbirds, mention them as possibly songbirds too.
 """
 
 
-def build_server(cameras: dict[str, Camera], history: History | None = None, data_dir: Path | None = None) -> MCPServer:
+def build_server(cameras: dict[str, Camera], history: History | None = None, data_dir: Path | None = None,
+                 metadata_only: bool = False) -> MCPServer:
     server = MCPServer(name="camera-mcp", instructions=INSTRUCTIONS)
+    tool = server.tool(annotations=READ_ONLY)
+
+    def full(register):  # live and image tools, and the resources: not offered with metadata_only
+        return (lambda fn: fn) if metadata_only else register
 
     def ask(fn, *args, **kwargs):
         if history is None:
@@ -105,13 +119,13 @@ def build_server(cameras: dict[str, Camera], history: History | None = None, dat
             for c in cameras.values()
         ]
 
-    @server.tool(annotations=READ_ONLY)
+    @full(tool)
     async def list_cameras() -> list[CameraInfo]:
         """List the configured cameras and whether each one answers right now (a quick network
         check, no video decode)."""
         return await anyio.to_thread.run_sync(info)
 
-    @server.tool(annotations=READ_ONLY)
+    @full(tool)
     async def snapshot(camera: str, max_width: int = 1024) -> list:
         """Take one current frame from a camera and return it as a JPEG image.
 
@@ -130,12 +144,12 @@ def build_server(cameras: dict[str, Camera], history: History | None = None, dat
         taken = datetime.fromtimestamp(frame.taken_at).astimezone().isoformat(timespec="seconds")
         return [Image(data=data, format="jpeg"), f"{cam.name} ({cam.label or 'no label'}) at {taken}, {w}x{h}{note}"]
 
-    @server.resource("cameras://list", mime_type="application/json")
+    @full(server.resource("cameras://list", mime_type="application/json"))
     def camera_list() -> str:
         """The configured cameras, as JSON."""
         return json.dumps([c.model_dump() for c in info()], indent=2)
 
-    @server.resource("cameras://{name}/latest.jpg", mime_type="image/jpeg")
+    @full(server.resource("cameras://{name}/latest.jpg", mime_type="image/jpeg"))
     def latest(name: str) -> bytes:
         """A current frame from the named camera, as JPEG (1024 px wide at most)."""
         try:
@@ -143,10 +157,10 @@ def build_server(cameras: dict[str, Camera], history: History | None = None, dat
         except CaptureError as e:
             raise ToolError(str(e)) from None
 
-    @server.tool(annotations=READ_ONLY)
+    @tool
     async def find_visits(since: str = "24h", until: str | None = None, cameras: list[str] | None = None,
                           tag: str | None = None, taxon: str | None = None, overlapping: str | None = None,
-                          min_score: float = 0.0, limit: int = 50,
+                          min_score: float = 0.0, limit: int = METADATA_LIMIT if metadata_only else 50,
                           include_suppressed: bool = False) -> dict[str, Any]:
         """Animal visits in a stretch of time, newest first, with how much of it each camera was watched.
         Use for which / when / show-me questions.
@@ -160,15 +174,21 @@ def build_server(cameras: dict[str, Camera], history: History | None = None, dat
             overlapping: only visits that overlapped a visit of this taxon on the same camera
                 (e.g. taxon=cat, overlapping=bird: cats at the feeder while birds were there)
             min_score: only visits whose label won at least this share of the vote (0-1)
-            limit: at most this many visits (1-500); `total` says how many matched
+            limit: at most this many visits (1-500, or 1-50 here when metadata-only); `total` says how many matched
             include_suppressed: also list unnamed visits the gate hid as likely leaves (each has a
                 `suppressed` reason); otherwise they're only counted in `hidden`
         """
-        return await anyio.to_thread.run_sync(lambda: ask(
+        if metadata_only:
+            limit = max(1, min(limit, METADATA_MAX_LIMIT))
+        found = await anyio.to_thread.run_sync(lambda: ask(
             history.find_visits, since, until, cameras, tag, taxon, overlapping, min_score, limit,
             include_suppressed))
+        if metadata_only:
+            found["visits"] = [{k: v.get(k) for k in VISIT_FIELDS} | {"clip": bool(v.get("clip"))}
+                               for v in found["visits"]]
+        return found
 
-    @server.tool(annotations=READ_ONLY)
+    @tool
     async def activity_summary(since: str = "7d", until: str | None = None,
                                group_by: Literal["species", "group", "camera", "hour", "day"] = "species",
                                cameras: list[str] | None = None, tag: str | None = None,
@@ -189,7 +209,7 @@ def build_server(cameras: dict[str, Camera], history: History | None = None, dat
         return await anyio.to_thread.run_sync(lambda: ask(
             history.activity_summary, since, until, group_by, cameras, tag, taxon))
 
-    @server.tool(annotations=READ_ONLY)
+    @full(tool)
     async def visit_media(visit_id: int) -> list:
         """The thumbnail of a visit's best sighting, as a JPEG image, with a caption.
 
@@ -201,13 +221,13 @@ def build_server(cameras: dict[str, Camera], history: History | None = None, dat
         data, caption = await anyio.to_thread.run_sync(lambda: ask(history.visit_thumbnail, visit_id, data_dir))
         return [Image(data=data, format="jpeg"), caption]
 
-    @server.tool(annotations=READ_ONLY)
+    @tool
     async def monitor_status() -> list[dict[str, Any]]:
         """Per camera: is the monitor watching it now, when it last saw a frame and motion, whether
         it looks moved (tilted, blocked), how many visits are happening now, and any error."""
         return await anyio.to_thread.run_sync(lambda: ask(history.monitor_status))
 
-    @server.tool(annotations=READ_ONLY)
+    @tool
     async def analysis_health(since: str = "24h", until: str | None = None) -> dict[str, Any]:
         """How the detector kept up over a window (one shared model on this machine): frames
         analysed and mean seconds per frame (throughput), peak queue depth and how far behind it
@@ -227,6 +247,8 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("--data-dir", type=Path, default=default_data_dir(),
                         help="the monitor's data directory, with monitor.db (default: $CAMERA_MCP_DATA, else data/)")
+    parser.add_argument("--metadata-only", action="store_true",
+                        help="offer only the history tools that send no images, with trimmed visits")
     args = parser.parse_args(argv)
     try:
         cameras = load_cameras(args.config, require_login=False)  # history needs no login; snapshot says so
@@ -235,7 +257,7 @@ def main(argv: list[str] | None = None) -> None:
         print(f"camera-mcp: {e}", file=sys.stderr)
         raise SystemExit(2) from None
     history = History(args.data_dir / "monitor.db", cameras, site)
-    build_server(cameras, history, args.data_dir).run()  # stdio
+    build_server(cameras, history, args.data_dir, args.metadata_only).run()  # stdio
 
 
 if __name__ == "__main__":
