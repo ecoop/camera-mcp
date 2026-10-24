@@ -1,6 +1,6 @@
 # Running the monitor on the Mac Studio
 
-_Last updated: 2026-10-22_
+_Last updated: 2026-10-24_
 
 The monitor identifies animals with SpeciesNet, which needs a GPU to keep up. On Apple Silicon
 (the Mac Studio M2) PyTorch uses the GPU (MPS); on the Intel MacBook it is CPU-only and far too
@@ -102,3 +102,16 @@ CAMERA_MCP_BRIEF_TIME=07:00 deploy/install-brief.sh
 
 Test it now: `deploy/morning-brief.sh` (writes `data/briefs/<date>.txt` and emails it). Port 587
 uses STARTTLS, 465 uses SSL.
+
+## Weekly digest by email
+
+A scheduled agent (see "Scheduled agents" in the main README) needs the agent extra, the API key and
+the mail settings above:
+
+```bash
+.venv/bin/pip install -e '.[agent]'
+.venv/bin/camera-agent weekly-digest            # try it once; add --email to mail it
+deploy/install-agent.sh weekly-digest           # every Sunday 08:00 (CAMERA_MCP_AGENT_DAY / _TIME)
+```
+
+Logs go to `data/agent.log`. `deploy/install-agent.sh --uninstall weekly-digest` removes it.
