@@ -31,6 +31,7 @@ camera-mcp = "camera_mcp.server:main"
 camera-monitor = "camera_mcp.monitor:main"
 camera-backtest = "camera_mcp.gate:main"
 camera-agent = "camera_mcp.agent:main"
+camera-watchdog = "camera_mcp.watchdog:main"
 
 [build-system]
 requires = ["hatchling"]

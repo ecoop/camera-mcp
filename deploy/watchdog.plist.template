@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- A launchd LaunchAgent that runs one health check beside the monitor (camera-watchdog <check>).
+     install-watchdog.sh fills LABEL, REPO, DATA, PATH, CHECK and the schedule in. -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>@@LABEL@@</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>@@REPO@@/.venv/bin/camera-watchdog</string>
+        <string>@@CHECK@@</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>@@REPO@@</string>
+    @@SCHEDULE@@
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>@@PATH@@</string>
+        <key>CAMERA_MCP_DATA</key>
+        <string>@@DATA@@</string>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>@@DATA@@/health.log</string>
+    <key>StandardErrorPath</key>
+    <string>@@DATA@@/health.log</string>
+</dict>
+</plist>

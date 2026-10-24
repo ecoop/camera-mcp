@@ -143,7 +143,9 @@ It exits non-zero if any stream fails.
 ## The monitor
 
 To run the monitor as an always-on service (its real home is the Mac Studio, where the GPU keeps
-SpeciesNet fast enough), see [deploy/README.md](deploy/README.md).
+SpeciesNet fast enough), see [deploy/README.md](deploy/README.md). Health checks run beside it
+(`camera-watchdog`): a text when a camera's video stops inside its watch hours, and a midday report
+on whether the detector kept up.
 
 
 ```bash

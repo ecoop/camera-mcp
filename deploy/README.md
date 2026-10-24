@@ -115,3 +115,20 @@ deploy/install-agent.sh weekly-digest           # every Sunday 08:00 (CAMERA_MCP
 ```
 
 Logs go to `data/agent.log`. `deploy/install-agent.sh --uninstall weekly-digest` removes it.
+
+## Health checks: offline alerts and the midday report
+
+Two checks run beside the monitor (not inside it, so they still report if the monitor stops), with
+the mail settings above and `SMS_ALERT_TO` for texts:
+
+- **offline**, every 5 minutes: a text when a camera has sent no video for 20 minutes inside its
+  watch hours (paused hours don't count), and one more when it's back. If every camera that should
+  be watched is silent, it says to check the monitor instead.
+- **midday**, at noon: an email on whether the detector kept up over the last 4 hours.
+
+```bash
+.venv/bin/camera-watchdog offline --dry-run     # what it would send right now (sends nothing)
+deploy/install-watchdog.sh                      # install both (CAMERA_MCP_LABEL_PREFIX for the names)
+```
+
+Logs go to `data/health.log`; `deploy/install-watchdog.sh --uninstall` removes both.
