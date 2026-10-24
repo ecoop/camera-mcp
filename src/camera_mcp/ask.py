@@ -17,7 +17,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import sys
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -26,6 +25,7 @@ from pathlib import Path
 import anyio
 from mcp.server.mcpserver.exceptions import ToolError
 
+from camera_mcp import agent
 from camera_mcp.credentials import read_credentials_file
 from camera_mcp.history import History, HistoryError
 from camera_mcp.server import INSTRUCTIONS, METADATA_TOOLS, build_server
@@ -156,11 +156,7 @@ REFUSED = "I can't help with that one."
 def guidance(history: History) -> str:
     """The cameras and their watch hours, then how to answer: the prompt both backends add to the
     MCP server's own instructions."""
-    def line(c) -> str:
-        hours = f"watched {c.active} local, paused otherwise" if c.active else "watched around the clock"
-        return f"- {c.name}: {hours}" + (f"; tags: {', '.join(c.tags)}" if c.tags else "")
-    cams = "\n".join(line(c) for c in history.cameras.values() if c.enabled)
-    return "Cameras:\n" + cams + "\n" + STYLE
+    return agent.cameras_text(history) + "\n" + STYLE
 
 
 def opening(question: str, budget: Budget) -> str:
@@ -293,71 +289,44 @@ class Asker:
 
 
 class AgentAsker:
-    """The same ask box on the Claude Agent SDK (ASK_BACKEND=agent): the SDK runs the tool loop in a
-    Claude Code process, one per question, and the tools come over MCP from camera-mcp started
-    --metadata-only, so the four history tools are all it can call. No built-in tools, settings,
-    plugins, stored logins or saved sessions (--bare); the API key is ANTHROPIC_API_KEY. Spend goes
-    into the same daily ledger, and a question may spend at most what's left of today's cap."""
-
-    SERVER = "cameras"
+    """The same ask box on the Claude Agent SDK (ASK_BACKEND=agent), locked down as every agent in
+    camera_mcp.agent is: one Claude Code process per question, whose only tools are the four history
+    tools of camera-mcp --metadata-only. Spend goes into the same daily ledger, and a question may
+    spend at most what's left of today's cap."""
 
     def __init__(self, history: History, budget: Budget, config: Path, data_dir: Path, query=None):
         self.history, self.budget = history, budget
         self.config, self.data_dir = Path(config), Path(data_dir)
         self._query = query  # injected in tests; otherwise claude_agent_sdk.query
+        self.tool_names = agent.TOOL_NAMES
 
     @property
     def enabled(self) -> bool:
         return self._query is not None or api_key() is not None
 
-    @property
-    def tool_names(self) -> set[str]:
-        return {f"mcp__{self.SERVER}__{n}" for n in ASK_TOOLS}
-
     def options(self):
-        from claude_agent_sdk import ClaudeAgentOptions
-
-        server = {"command": sys.executable, "args": ["-m", "camera_mcp.server", "--config", str(self.config),
-                                                      "--data-dir", str(self.data_dir), "--metadata-only"]}
-        return ClaudeAgentOptions(
-            model=MODEL, effort=EFFORT, system_prompt=guidance(self.history),  # the server sends its own guide
-            tools=[], mcp_servers={self.SERVER: server}, strict_mcp_config=True, setting_sources=[],
-            allowed_tools=sorted(self.tool_names), permission_mode="dontAsk",
-            max_turns=MAX_ROUNDS, max_budget_usd=max(0.0, self.budget.cap - self.budget.spent()),
-            cwd=str(self.data_dir), env={"ANTHROPIC_API_KEY": api_key() or ""},
-            extra_args={"bare": None, "no-session-persistence": None},
-        )
+        return agent.locked_options(self.config, self.data_dir, model=MODEL, effort=EFFORT,
+                                    system_prompt=guidance(self.history), max_turns=MAX_ROUNDS,
+                                    max_budget_usd=self.budget.cap - self.budget.spent(), api_key=api_key() or "")
 
     def ask(self, question: str) -> Answer:
         prompt = opening(question, self.budget)
         if not self.enabled:
             raise AskError("asking is off: no ANTHROPIC_API_KEY on this host", 503)
         self.budget.add(0.0, question=True)
-        return anyio.run(self._ask, prompt)
-
-    async def _ask(self, prompt: str) -> Answer:
-        try:
-            from claude_agent_sdk import AssistantMessage, ResultMessage, SystemMessage, UserMessage, query
-        except ImportError:
-            raise AskError("asking is off: install the agent extra (pip install 'camera-mcp[agent]')", 503) from None
-        query = self._query or query
         seen: dict = {}
         finds: set[str] = set()  # ids of find_visits calls, whose results list visits
-        result = None
-        async for m in query(prompt=prompt, options=self.options()):
-            if isinstance(m, SystemMessage) and m.subtype == "init":
-                if set(m.data.get("tools", [])) != self.tool_names:  # fail closed: exactly the four, nothing else
-                    raise AskError(f"asking is off: the agent was offered {sorted(m.data.get('tools', []))}", 503)
-            elif isinstance(m, AssistantMessage):
-                finds |= {b.id for b in m.content if getattr(b, "name", "") == f"mcp__{self.SERVER}__find_visits"}
-            elif isinstance(m, UserMessage) and isinstance(m.content, list):
-                for b in m.content:
-                    if getattr(b, "tool_use_id", None) in finds and not b.is_error:
-                        remember(tool_json(b.content), seen)
-            elif isinstance(m, ResultMessage):
-                result = m
-        if result is None:
-            raise RuntimeError("the agent ended without a result")
+
+        def watch(m) -> None:  # remember the visits find_visits returned, for the [#id] links
+            for b in m.content if isinstance(getattr(m, "content", None), list) else []:
+                if getattr(b, "name", "") == f"mcp__{agent.SERVER}__find_visits":
+                    finds.add(b.id)
+                elif getattr(b, "tool_use_id", None) in finds and not b.is_error:
+                    remember(tool_json(b.content), seen)
+        try:
+            result = anyio.run(agent.run, prompt, self.options(), self._query, watch)
+        except agent.AgentError as e:
+            raise AskError(f"asking is off: {e}", 503) from None
         cost = result.total_cost_usd or 0.0
         self.budget.add(cost)
         text, refused = (result.result or "").strip(), result.stop_reason == "refusal"

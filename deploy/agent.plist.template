@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- A launchd LaunchAgent that runs one scheduled agent job (camera-agent <job> --email) once a
+     week, local time. install-agent.sh fills LABEL, REPO, DATA, PATH, JOB and the schedule in. -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>@@LABEL@@</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>@@REPO@@/.venv/bin/camera-agent</string>
+        <string>@@JOB@@</string>
+        <string>--email</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>@@REPO@@</string>
+    <key>StartCalendarInterval</key>
+    <dict><key>Weekday</key><integer>@@WEEKDAY@@</integer><key>Hour</key><integer>@@HOUR@@</integer><key>Minute</key><integer>@@MINUTE@@</integer></dict>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>@@PATH@@</string>
+        <key>CAMERA_MCP_DATA</key>
+        <string>@@DATA@@</string>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>@@DATA@@/agent.log</string>
+    <key>StandardErrorPath</key>
+    <string>@@DATA@@/agent.log</string>
+</dict>
+</plist>

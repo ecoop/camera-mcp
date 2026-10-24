@@ -68,10 +68,11 @@ def test_skills_name_only_real_tools_and_arguments(tmp_path):
 
 def test_skill_frontmatter():
     meta = {p.parent.name: frontmatter(p) for p in SKILLS}
-    assert set(meta) == {"camera-history", "overnight", "yard-check"}
+    assert set(meta) == {"camera-history", "overnight", "yard-check", "weekly-digest"}
     for name, m in meta.items():
         assert m["name"] == name and len(m["description"]) > 20
-    assert meta["overnight"]["disable-model-invocation"] == "true" == meta["yard-check"]["disable-model-invocation"]
+    for name in ("overnight", "yard-check", "weekly-digest"):  # run only when asked (or scheduled)
+        assert meta[name]["disable-model-invocation"] == "true"
     assert "disable-model-invocation" not in meta["camera-history"]  # Claude loads this one when it fits
 
 

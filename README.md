@@ -4,7 +4,7 @@
 ![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13-blue)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
-_Last updated: 2026-10-22_
+_Last updated: 2026-10-24_
 
 An MCP server and an always-on monitor for home IP cameras, built to watch for wildlife on one
 machine without saturating it.
@@ -342,6 +342,24 @@ Spend is capped per day (`ASK_DAILY_USD`, default $1.00), tracked in `data/ask_u
 checked before every model call; the box shows each answer's cost and the day's total. A typical
 question costs a few cents (the box shows the real figure). If Claude declines a question, it's retried server-side on
 another model (`fallbacks: "default"`).
+
+**Agent SDK backend.** With `ASK_BACKEND=agent` in the credentials file (and `pip install '.[agent]'`),
+the box answers through the Claude Agent SDK instead of its own tool loop: a locked-down Claude Code
+process per question whose only tools are those four, from `camera-mcp --metadata-only` over MCP.
+Same answers, cap and ledger; a few seconds' startup. Delete the line to go back.
+
+## Scheduled agents
+
+`camera-agent <job>` runs one job with the same lock-down and writes `data/agent/<job>/<date>.md`
+(`--email` also mails it). A job's prompt is the plugin skill of the same name, so
+`/camera-mcp:weekly-digest` in Claude Code runs the same text. Jobs use `claude-sonnet-5-5`, at most
+$0.25 a run and `AGENT_DAILY_USD` (default $0.50) a day, tracked in `data/agent_usage.json`.
+
+| job | what it writes |
+|---|---|
+| `weekly-digest` | the last 7 days against the 7 before: what changed, firsts, coverage gaps |
+
+`deploy/install-agent.sh weekly-digest` schedules it weekly (Sunday 08:00 by default, by email).
 
 ## Benchmark
 
