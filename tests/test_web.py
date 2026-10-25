@@ -742,3 +742,17 @@ def test_pages_are_html_files_shipped_with_the_package(client):
         html = (pages / name).read_text(encoding="utf-8")
         assert html.startswith("<!-- Copyright") and html.splitlines()[1].startswith("<!doctype html>")
         assert client.get(route).text == html
+
+
+def test_no_page_defines_a_function_twice():
+    """In a page's script a second `function f` silently replaces the first (the species menu went
+    empty that way when the tag picker's loader took its name)."""
+    import re
+    from collections import Counter
+    from pathlib import Path
+
+    import camera_mcp.web
+    pages = Path(camera_mcp.web.__file__).parent / "pages"
+    for page in sorted(pages.glob("*.html")):
+        names = Counter(re.findall(r"\bfunction\s+(\w+)\s*\(", page.read_text()))
+        assert not [n for n, k in names.items() if k > 1], f"{page.name} defines {[n for n, k in names.items() if k > 1]} twice"
