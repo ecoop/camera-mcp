@@ -427,7 +427,7 @@ async function postLabel(v,species){const res=await fetch('/api/visit/'+curVisit
   if(res.ok){curLabel={verdict:v,species:v==='false'?null:species||null}; if(species)SPP=false;
     if(curClip){boxData=null; loadBoxData().then(drawBoxes);} refreshBoxQueue();}  // inherited box tags follow the visit's
   return res.ok;}
-$('#vsp').addEventListener('change',()=>{if(labelEditable&&curVisit&&curLabel)postLabel(curLabel.verdict,$('#vsp').value.trim()).then(()=>loadSpecies());});
+$('#vsp').addEventListener('change',()=>{if(labelEditable&&curVisit&&curLabel)postLabel(curLabel.verdict,$('#vsp').value.trim()).then(()=>loadPickerSpecies());});
 async function setLabel(v){if(!labelEditable||!curVisit)return;
   try{const keep=v!=='false'?$('#vsp').value.trim():'';
     if(await postLabel(v,keep)){markLabel(v); const t=tileOf(curVisit);
@@ -483,7 +483,7 @@ function openVisit(t){const id=t.dataset.id; curVisit=id; curClip=t.dataset.clip
   $('#clipmeta').textContent=t.querySelector('.sp').firstChild.textContent+' — '+t.querySelector('.sub').textContent+
     (t.dataset.sup?' · hidden: '+t.dataset.sup.replace('_',' '):'');
   $('#cliplink').href='/visit/'+id+'/image';  // full window, scroll-zoom (the clip has "watch clip")
-  loadLabel(id); loadSpecies(); refreshBoxQueue(); if(!$('#clip').open)$('#clip').showModal();
+  loadLabel(id); loadPickerSpecies(); refreshBoxQueue(); if(!$('#clip').open)$('#clip').showModal();
   if(curClip) loadBoxData().then(drawBoxes);
   if(curClip&&t.dataset.fav==='clip'){seekTo=t.dataset.favat!==''?+t.dataset.favat:null; playClip();}}  // a favourite clip opens at its moment
 async function loadBoxData(){if(boxData)return; try{boxData=await (await fetch('/api/visit/'+curVisit+'/boxes')).json();}catch(e){boxData={frames:[]};}}
@@ -521,12 +521,12 @@ async function setBoxTag(v,species){if(!labelEditable||!selBox||!curVisit)return
     if(!r.ok)return;
     // a visit with no tag yet becomes real when one of its boxes is tagged real
     if(v==='real'&&!curLabel&&await postLabel('real','')){markLabel('real'); const t=tileOf(curVisit); if(t)t.dataset.verdict='real';}
-    if(species)SPP=false; boxData=null; await loadBoxData(); drawBoxes(); refreshBoxQueue(); loadSpecies();}catch(e){}}
+    if(species)SPP=false; boxData=null; await loadBoxData(); drawBoxes(); refreshBoxQueue(); loadPickerSpecies();}catch(e){}}
 $('#boxtagset').querySelectorAll('.lblbtn').forEach(x=>x.onclick=()=>setBoxTag(x.dataset.v,x.dataset.v==='false'?'':$('#boxsp').value.trim()));
 $('#boxsp').addEventListener('change',()=>{const {boxes}=stillBoxes(), b=selBox&&boxes.find(x=>x.i===selBox.i);
   if(b&&b.tag)setBoxTag(b.tag.verdict,$('#boxsp').value.trim());});  // naming an inherited tag makes it the box's own
 $('#boxclear').onclick=()=>setBoxTag(null,'');
-async function loadSpecies(){if(SPP)return; SPP=true;
+async function loadPickerSpecies(){if(SPP)return; SPP=true;
   try{const d=await (await fetch('/api/labels/species')).json();
     $('#spplist').innerHTML=(d.species||[]).map(n=>'<option value="'+esc(n)+'">').join('');}catch(e){SPP=false;}}
 async function refreshBoxQueue(){const b=$('#boxqbtn');
