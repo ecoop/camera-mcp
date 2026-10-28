@@ -756,3 +756,15 @@ def test_no_page_defines_a_function_twice():
     for page in sorted(pages.glob("*.html")):
         names = Counter(re.findall(r"\bfunction\s+(\w+)\s*\(", page.read_text()))
         assert not [n for n, k in names.items() if k > 1], f"{page.name} defines {[n for n, k in names.items() if k > 1]} twice"
+
+
+def test_tagged_thumbnails_are_not_dimmed():
+    """A tagged visit is marked by its outline and badge; its picture stays clear (dimming it made
+    the visits the owner had looked at hardest to see)."""
+    import re
+    from pathlib import Path
+
+    import camera_mcp.web
+    css = (Path(camera_mcp.web.__file__).parent / "pages" / "dashboard.html").read_text()
+    assert ".tile[data-verdict=real]{outline" in css
+    assert not re.search(r"data-verdict[^{]*img\s*\{[^}]*(opacity|filter)", css)
