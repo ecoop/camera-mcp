@@ -63,8 +63,8 @@ means it kept up. Motion it was too far behind to analyse shows up per camera as
 - **The owner's tags.** A visit's `verdict` is the owner's own check: `real`, `false` (not an animal
   at all: leaves, a shadow, a bolt in the wind) or `wrong_species` (an animal, wrongly named).
   Trust it over the label. Leave `false` visits out of what you report, and don't repeat a label the
-  owner marked `wrong_species`. `activity_summary` counts don't know about tags; when a count is
-  small enough to matter, check it against `find_visits`.
+  owner marked `wrong_species`. `activity_summary` already counts this way: `false` visits are
+  left out (counted in `tagged_false`), and a visit the owner named counts under their name.
 - **Thin names.** `animal` means the detector found something it couldn't name. A plain `bird`
   couldn't be put in a group: when asked about songbirds, mention those as possibly songbirds too.
   `score` is the share of the vote the label won; a low score is a guess.

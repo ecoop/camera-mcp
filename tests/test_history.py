@@ -192,6 +192,40 @@ def test_visit_labels_and_counts(log):
         Store(data / "monitor.db").set_visit_label(999999, "real")
 
 
+def test_counts_follow_the_owners_tags(log):
+    """Counts leave out visits tagged false (counted in tagged_false), and a visit the owner named
+    counts under that name and its group, in the taxon filter too, for activity_summary and the
+    Analytics timeline alike."""
+    history, data = log
+    by_label = {(v["camera"], v["label"]): v["id"] for v in history.find_visits("48h")["visits"]}
+    store = Store(data / "monitor.db")
+    store.set_visit_label(by_label["backyard", "house finch"], "false")
+    # a name the log knows, a group, a new name; and a tag with no name, which counts as logged
+    store.set_visit_label(by_label["backyard", "domestic cat"], "wrong_species", species="northern raccoon")
+    store.set_visit_label(by_label["backyard", "bird"], "real", species="jays")
+    store.set_visit_label(by_label["east_fence", "brown rat"], "wrong_species", species="fox squirrel")
+    store.set_visit_label(by_label["east_deck", "northern raccoon"], "real")
+    store.close()
+
+    by_species = history.activity_summary("48h", group_by="species")
+    assert by_species["total_visits"] == 6 and by_species["tagged_false"] == 1
+    assert {r["key"]: r["visits"] for r in by_species["rows"]} == {
+        "northern raccoon": 2, "jays": 1, "bird": 1, "fox squirrel": 1, "striped skunk": 1}
+    by_group = {r["key"]: r["visits"] for r in history.activity_summary("48h", group_by="group")["rows"]}
+    assert by_group == {"raccoon": 2, "jays": 2, "fox squirrel": 1, "skunk": 1}
+    assert history.activity_summary("48h", taxon="cat")["total_visits"] == 0
+    assert history.activity_summary("48h", taxon="raccoon")["total_visits"] == 2
+    assert history.activity_summary("48h", taxon="night-critters")["total_visits"] == 3
+    assert history.activity_summary("48h", taxon="songbirds")["tagged_false"] == 1
+
+    timeline = history.visits_timeline(since="30h", bins=30)
+    assert timeline["visits"] == 6 and timeline["tagged_false"] == 1
+    assert timeline["total"] == {"raccoon": 2, "jays": 2, "fox squirrel": 1, "skunk": 1}
+    assert history.visits_timeline(since="30h", taxon="raccoon")["visits"] == 2
+
+    assert len(history.find_visits("48h")["visits"]) == 7  # find_visits still lists them all, with their tags
+
+
 def test_monitor_status(log):
     history, _ = log
     status = {s["camera"]: s for s in history.monitor_status()}
