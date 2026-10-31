@@ -88,6 +88,29 @@ def test_a_question_is_answered_with_the_history_tools_and_its_visits_linked(log
     assert "media/" not in result["content"]  # metadata only: no thumbnail or clip paths leave the machine
 
 
+def test_the_prompts_are_markdown_files_shipped_with_the_package(log):
+    """The server's instructions and the ask box's style are Markdown files in camera_mcp/prompts/
+    (package data, so they ship in the wheel): copyright line first, which the model never sees.
+    The server sends the one, and the ask box's cached prompt carries both."""
+    from importlib import resources
+
+    from camera_mcp.ask import STYLE, guidance
+    from camera_mcp.server import INSTRUCTIONS, build_server
+
+    history, _, _ = log
+    prompts = resources.files("camera_mcp") / "prompts"
+    for name, text in (("server_instructions.md", INSTRUCTIONS), ("ask_style.md", STYLE)):
+        raw = (prompts / name).read_text(encoding="utf-8")
+        assert raw.startswith("<!-- Copyright") and raw.endswith(text) and text.strip()
+        assert "Copyright" not in text and not text.startswith("\n")
+    assert INSTRUCTIONS.startswith("Home cameras watched") and STYLE.startswith("You answer questions")
+    assert build_server(history.cameras, history).instructions == INSTRUCTIONS
+    assert guidance(history).endswith("tags: feeder\n\n" + STYLE)  # the camera list, a blank line, then the style
+    client = FakeClient(answer("Nothing yet."))
+    asker(log, client).ask("anything?")
+    assert client.calls[0]["system"][0]["text"] == INSTRUCTIONS + "\n" + guidance(history)
+
+
 def test_cost_is_counted_and_the_daily_cap_stops_a_question(log):
     one_call = cost_of(usage(write=3000), MODEL)
     assert one_call == pytest.approx((1000 * 4 + 100 * 20 + 3000 * 5) / 1e6)
