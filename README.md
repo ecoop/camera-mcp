@@ -4,7 +4,7 @@
 ![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13-blue)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
-_Last updated: 2026-10-24_
+_Last updated: 2026-10-30_
 
 An MCP server and an always-on monitor for home IP cameras, built to watch for wildlife on one
 machine without saturating it.
@@ -36,7 +36,7 @@ The design is in [docs/phase2-design.md](docs/phase2-design.md), backed by the
 | `list_cameras` | name, label, tags, aliases, and whether each camera answers right now (a TCP check, no decode) |
 | `snapshot(camera, max_width=1024)` | one current frame as a JPEG image, downscaled to `max_width`; from the low-res stream if the camera's main stream is busy (Tapo cameras allow only a couple of main-stream clients) |
 | `find_visits(since, until, cameras, tag, taxon, overlapping, min_score, limit)` | animal visits in a stretch of time, newest first; `still_there` marks one happening now |
-| `activity_summary(since, until, group_by, cameras, tag, taxon)` | visit counts by `species`, `group`, `camera`, local `hour` or `day` |
+| `activity_summary(since, until, group_by, cameras, tag, taxon)` | visit counts by `species`, `group`, `camera`, local `hour` or `day`, following your tags |
 | `visit_media(visit_id)` | the thumbnail of a visit's best sighting |
 | `monitor_status()` | per camera: watched now?, last frame and motion, looks moved?, visits in progress, errors |
 
@@ -235,6 +235,10 @@ real. A real or wrong-species tag has a **what was it?** field, suggesting names
 groups seen here; a wrong-species tag waits for it instead of moving on. **next box to tag ›**
 walks the real visits whose still still has an untagged box (narrowed to the camera filter): the
 ones to revisit before the stills are used as training data.
+
+Counts follow the tags, in Analytics' timeline and in `activity_summary` (so in Claude's answers
+too): a visit tagged false is left out, and one you named counts under that name and its group
+(a group or class name as itself, otherwise the group the log files that name under).
 
 **Favourites.** Separate from tags, **☆ favourite** in the viewer stars a visit as a keeper. Starred
 while its clip plays, it keeps that moment and reopens there (paused); starred on the image, it

@@ -194,7 +194,9 @@ def build_server(cameras: dict[str, Camera], history: History | None = None, dat
                                cameras: list[str] | None = None, tag: str | None = None,
                                taxon: str | None = None) -> dict[str, Any]:
         """Count visits in a stretch of time, grouped, with how much of it each camera was watched.
-        Use for how-many / when-most / busiest questions.
+        Use for how-many / when-most / busiest questions. Counts follow the owner's tags: visits
+        tagged false are left out (counted in `tagged_false`), and one the owner named counts under
+        that name.
 
         Args:
             since: start: ISO time or a duration ago (15m, 4h, 3d, 2w), today, yesterday

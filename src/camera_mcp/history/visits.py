@@ -90,6 +90,9 @@ class VisitQueries:
     def activity_summary(self, since: str = "7d", until: str | None = None, group_by: str = "species",
                          cameras: list[str] | None = None, tag: str | None = None,
                          taxon: str | None = None) -> dict:
+        """Visits in the window counted by `group_by`, as the owner tagged them: hidden ones are
+        counted in `hidden`, ones tagged false in `tagged_false`, and one the owner named counts
+        under that name (see _as_tagged)."""
         if group_by not in GROUP_BY:
             raise HistoryError(f"group_by must be one of {', '.join(GROUP_BY)}")
         now = time.time()
@@ -99,8 +102,10 @@ class VisitQueries:
             where, params = self._where(t0, t1, names, taxon, 0.0)
             hidden = self._hidden(db, where, params)
             where = self._shown(db, where)
-            rows = db.execute(f"SELECT label, grp, camera, started_at, max_count FROM visits WHERE {where} LIMIT 100000",
-                              params).fetchall()
+            tagged_false = self._tagged_false(db, where, params)
+            tagged, tagged_params = self._as_tagged(db)
+            rows = db.execute(f"SELECT label, grp, camera, started_at, max_count FROM {tagged} WHERE {where}"
+                              " LIMIT 100000", (*tagged_params, *params)).fetchall()
 
             def key(r) -> str:
                 if group_by in ("hour", "day"):
@@ -120,25 +125,35 @@ class VisitQueries:
                 a["first"], a["last"] = self._local(a["first"]), self._local(a["last"])
             return {
                 "from": self._local(self._iso(t0)), "to": self._local(self._iso(t1)), "group_by": group_by,
-                "total_visits": len(rows), "hidden": hidden, "rows": out, "coverage": self.coverage(names, t0, t1, db),
+                "total_visits": len(rows), "hidden": hidden, "tagged_false": tagged_false, "rows": out,
+                "coverage": self.coverage(names, t0, t1, db),
             }
 
     def visits_timeline(self, since: str = "24h", until: str | None = None,
                         cameras: list[str] | None = None, taxon: str | None = None, bins: int = 48) -> dict:
         """Visit counts over the window, binned into `bins` time buckets and split by group (grp),
-        for a stacked timeline of what visited and when. The web layer maps groups to display
-        classes/colors."""
+        for a stacked timeline of what visited and when. Counted as the owner tagged them, like
+        activity_summary: ones tagged false are left out (`tagged_false`), and a named one counts in
+        its name's group. The web layer maps groups to display classes/colors."""
         now = time.time()
         t0, t1 = parse_when(since, now, self.tz), parse_when(until, now, self.tz)
         window = {"from": self._local(self._iso(t0)), "to": self._local(self._iso(t1))}
         names = [find_camera(self.cameras, c).name for c in (cameras or []) if find_camera(self.cameras, c)]
-        q = "SELECT started_at, grp FROM visits WHERE started_at >= ? AND started_at <= ?"
+        where = "started_at >= ? AND started_at <= ?"
         params: list = [self._iso(t0), self._iso(t1)]
         if names:
-            q += f" AND camera IN ({','.join('?' * len(names))})"
+            where += f" AND camera IN ({','.join('?' * len(names))})"
             params += names
+        if taxon:
+            clause, p = self._taxon(taxon)
+            where += f" AND {clause}"
+            params += p
         with closing(self._db()) as db:
-            rows = db.execute(self._shown(db, q), params).fetchall()
+            where = self._shown(db, where)
+            tagged_false = self._tagged_false(db, where, params)
+            tagged, tagged_params = self._as_tagged(db)
+            rows = db.execute(f"SELECT started_at, grp FROM {tagged} WHERE {where}",
+                              (*tagged_params, *params)).fetchall()
         span = max(1e-6, t1 - t0)
         width = span / max(1, bins)
         buckets: list[dict] = [defaultdict(int) for _ in range(bins)]
@@ -152,7 +167,8 @@ class VisitQueries:
             buckets[bi][r["grp"]] += 1
             total[r["grp"]] += 1
         out = [{"t": self._local(self._iso(t0 + (i + 0.5) * width)), "grps": dict(b)} for i, b in enumerate(buckets)]
-        return {**window, "bins": out, "bin_seconds": round(width), "total": dict(total), "visits": len(rows)}
+        return {**window, "bins": out, "bin_seconds": round(width), "total": dict(total), "visits": len(rows),
+                "tagged_false": tagged_false}
 
     def observed_taxa(self, restrict: tuple[str, ...] = ()) -> list[str]:
         """The taxon filter values worth offering in the UI, as taxa `find_visits` accepts.

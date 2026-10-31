@@ -23,6 +23,5 @@ Write plain text for an email, at most about 12 lines:
 - One line on coverage only if a camera wasn't fully watched in its watch hours or detections were
   dropped, naming the camera.
 
-Leave out visits the owner tagged `false`, and don't repeat a label they marked `wrong_species`.
-Counts from `activity_summary` don't know about those tags: when a small count drives a headline,
-check it with `find_visits`. No headings, tables or visit ids.
+Leave out visits the owner tagged `false`, and don't repeat a label they marked `wrong_species`
+(`activity_summary` counts already do both). No headings, tables or visit ids.

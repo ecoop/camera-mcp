@@ -58,6 +58,21 @@ def _gated(db: sqlite3.Connection) -> bool:
     return "suppressed" in {r[1] for r in db.execute("PRAGMA table_info(visits)")}
 
 
+def _named_as(db: sqlite3.Connection, name: str) -> tuple[str, str]:
+    """The group and taxonomy a name the owner gave stands for: a group ("rat") or a class ("bird")
+    as itself, else what the log files a visit of that name under, else just the name (no taxonomy)."""
+    q = name.strip().lower()
+    for group, prefixes in GROUPS:
+        if q == group:
+            return group, prefixes[0]
+    for cls, class_name in CLASS_NAMES.items():
+        if q == class_name:
+            return class_name, f"{cls};;;;"
+    r = db.execute("SELECT grp, taxonomy FROM visits WHERE lower(label) = ? GROUP BY grp, taxonomy"
+                   " ORDER BY COUNT(*) DESC LIMIT 1", (q,)).fetchone()
+    return (r["grp"], r["taxonomy"]) if r else (name, "")
+
+
 class LogReader:
     """The shared plumbing; History adds the query mixins on top."""
 
@@ -145,6 +160,36 @@ class LogReader:
         alias = f" {col.rstrip('.')}" if col else ""
         return db.execute(f"SELECT COUNT(*) FROM visits{alias} WHERE {where} AND {col}suppressed IS NOT NULL",
                           params).fetchone()[0]
+
+    @staticmethod
+    def _as_tagged(db: sqlite3.Connection) -> tuple[str, list]:
+        """The visits as the owner tagged them, for counting (`FROM {sql}`, its params first): visits
+        tagged 'false' are left out, and one the owner named (the right name for a 'wrong_species'
+        visit, or a name for an unnamed 'real' one) carries that name, with the name's group and
+        taxonomy, so counts and the taxon filter follow the owner. Untagged visits are as logged."""
+        if "visit_labels" not in _tables(db):
+            return "visits", []
+        sup = ", v.suppressed" if _gated(db) else ""
+        names = ([r[0] for r in db.execute("SELECT DISTINCT species FROM visit_labels WHERE species IS NOT NULL")]
+                 if "species" in {r[1] for r in db.execute("PRAGMA table_info(visit_labels)")} else [])
+        cols, join, params = "v.label, v.grp, v.taxonomy", "", []
+        if names:
+            named = [(n, *_named_as(db, n)) for n in names]
+            join = f" LEFT JOIN (VALUES {', '.join(['(?, ?, ?)'] * len(named))}) n ON n.column1 = l.species"
+            params = [x for row in named for x in row]
+            cols = ("COALESCE(l.species, v.label) AS label, COALESCE(n.column2, v.grp) AS grp,"
+                    " COALESCE(n.column3, v.taxonomy) AS taxonomy")
+        return (f"(SELECT v.id, v.camera, v.started_at, v.ended_at, v.score, v.max_count{sup}, {cols}"
+                f" FROM visits v LEFT JOIN visit_labels l ON l.visit_id = v.id{join}"
+                " WHERE l.verdict IS NOT 'false') AS visits", params)
+
+    @staticmethod
+    def _tagged_false(db: sqlite3.Connection, where: str, params: list) -> int:
+        """How many visits matching `where` the owner tagged 'false' (0 for a log with no tags)."""
+        if "visit_labels" not in _tables(db):
+            return 0
+        return db.execute(f"SELECT COUNT(*) FROM visits WHERE {where} AND id IN"
+                          " (SELECT visit_id FROM visit_labels WHERE verdict = 'false')", params).fetchone()[0]
 
     def coverage(self, names: list[str], t0: float, t1: float, db: sqlite3.Connection | None = None) -> list[dict]:
         """For each camera: the share of [t0, t1] the monitor was receiving its frames."""
