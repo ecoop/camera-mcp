@@ -209,8 +209,10 @@ def build_server(cameras: dict[str, Camera], history: History | None = None, dat
     async def analysis_health(since: str = "24h", until: str | None = None) -> dict[str, Any]:
         """How the detector kept up over a window (one shared model on this machine): frames
         analysed and mean seconds per frame (throughput), peak queue depth and how far behind it
-        fell (backlog/lag), and segments dropped on sustained overload (loss). `since`/`until` take
-        durations ago (2h, 24h) or ISO times. 0 dropped with low peak lag means it kept up."""
+        fell (backlog/lag), segments analysed at one frame each while behind (thinned: watched, but
+        brief visitors were easier to miss), and segments dropped on sustained overload (loss).
+        `since`/`until` take durations ago (2h, 24h) or ISO times. 0 dropped with low peak lag means
+        it kept up."""
         return await anyio.to_thread.run_sync(lambda: ask(history.analysis_health, since, until))
 
     return server

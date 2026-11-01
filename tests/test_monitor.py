@@ -390,16 +390,70 @@ def test_analyzer_persists_stats(tmp_path):
     a._last_stats = time.time() - 61        # pretend an interval has elapsed
     a._analyzed.update(east_fence=10, backyard=4)
     a._dropped["east_fence"] = 2
+    a._thinned["east_fence"] = 3
     a._infer_seconds.update(east_fence=1.5, backyard=0.5)
     a._max_lag.update(east_fence=42.0, backyard=5.0)
     a._flush_stats(force=True)
     db = sqlite3.connect(tmp_path / "monitor.db")
-    agg = db.execute("SELECT queue_depth, max_lag, analyzed, dropped, infer_seconds FROM analysis_stats").fetchone()
-    assert agg == (0, 42.0, 14, 2, 2.0)  # the aggregate is the sum (max for lag) across cameras
-    percam = {r[0]: (r[1], r[2], r[3]) for r in
-              db.execute("SELECT camera, analyzed, dropped, max_lag FROM analysis_camera_stats")}
-    assert percam == {"east_fence": (10, 2, 42.0), "backyard": (4, 0, 5.0)}
-    assert not (a._analyzed or a._dropped or a._max_lag or a._infer_seconds)  # all reset after flush
+    agg = db.execute("SELECT queue_depth, max_lag, analyzed, dropped, infer_seconds, thinned"
+                     " FROM analysis_stats").fetchone()
+    assert agg == (0, 42.0, 14, 2, 2.0, 3)  # the aggregate is the sum (max for lag) across cameras
+    percam = {r[0]: (r[1], r[2], r[3], r[4]) for r in
+              db.execute("SELECT camera, analyzed, dropped, max_lag, thinned FROM analysis_camera_stats")}
+    assert percam == {"east_fence": (10, 2, 42.0, 3), "backyard": (4, 0, 5.0, 0)}
+    assert not (a._analyzed or a._dropped or a._thinned or a._max_lag or a._infer_seconds)  # all reset after flush
+
+
+def test_analysis_behind_the_backlog_is_counted_as_thinned(tmp_path):
+    # Past BACKLOG queued segments, each segment gets one frame; the stats sample and
+    # analysis_health say so (they used to reach only the log).
+    from camera_mcp.config import Site
+    from camera_mcp.history import History
+    from camera_mcp.monitor import Analyzer
+    from camera_mcp.ringbuffer import Segment
+    from camera_mcp.store import Store
+    store = Store(tmp_path / "monitor.db")
+    a = Analyzer(detector=None, stop=threading.Event(), store=store)
+    camera = SimpleNamespace(name="east_fence", tags=(), roi=None, settings_at=lambda now: MonitorSettings())
+    worker = SimpleNamespace(camera=camera, tz=None, frame_size=lambda seg: (160, 90))
+    seg = Segment(tmp_path / "missing.mp4", time.time() - 4, time.time() - 2)  # decodes to no frames
+    depth = [a.BACKLOG]
+    a.sched.qsize = lambda: depth[0]
+    a._analyze(worker, seg)  # at the backlog: every frame
+    depth[0] = a.BACKLOG + 1
+    a._analyze(worker, seg)  # past it: one frame per segment
+    a._analyze(worker, seg)
+    a._last_stats = time.time() - 61
+    a._flush_stats(force=True)
+    store.close()
+    db = sqlite3.connect(tmp_path / "monitor.db")
+    assert db.execute("SELECT thinned FROM analysis_stats").fetchone() == (2,)
+    assert db.execute("SELECT camera, thinned FROM analysis_camera_stats").fetchall() == [("east_fence", 2)]
+    history = History(tmp_path / "monitor.db", {"east_fence": Camera("east_fence", "x")}, Site())
+    assert history.analysis_health(since="1h")["segments_thinned"] == 2
+    assert [p["thinned"] for p in history.analysis_series(since="1h")["points"]] == [2]
+
+
+def test_a_log_from_before_thinning_reads_as_none_thinned(tmp_path):
+    # The server opens the log read-only and never adds columns: until the monitor restarts on
+    # this build, the stats tables have no `thinned`, and every answer reads it as 0.
+    from camera_mcp.config import Site
+    from camera_mcp.history import History
+    from camera_mcp.store import Store
+    store = Store(tmp_path / "monitor.db")
+    store.add_analysis_stats(time.time() - 60, 1, 5.0, 10, 0, 2.0)
+    store.add_camera_stats(time.time() - 60, [("east_fence", 1, 5.0, 10, 0, 2.0, 0)])
+    store.close()
+    db = sqlite3.connect(tmp_path / "monitor.db")
+    db.execute("ALTER TABLE analysis_stats DROP COLUMN thinned")
+    db.execute("ALTER TABLE analysis_camera_stats DROP COLUMN thinned")
+    db.commit()
+    db.close()
+    history = History(tmp_path / "monitor.db", {"east_fence": Camera("east_fence", "x")}, Site())
+    assert history.analysis_health(since="1h")["segments_thinned"] == 0
+    assert [p["thinned"] for p in history.analysis_series(since="1h")["points"]] == [0]
+    assert [p["thinned"] for p in history.analysis_series(since="1h", camera="east_fence")["points"]] == [0]
+    assert [p["thinned"] for p in history.analysis_series_all(since="1h")["cameras"]["east_fence"]] == [0]
 
 
 def test_alerter_fires_once_per_cooldown_for_alert_species(monkeypatch):

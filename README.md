@@ -4,7 +4,7 @@
 ![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13-blue)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
-_Last updated: 2026-10-30_
+_Last updated: 2026-10-31_
 
 An MCP server and an always-on monitor for home IP cameras, built to watch for wildlife on one
 machine without saturating it.
@@ -175,7 +175,8 @@ Without SpeciesNet installed, or with `--detector none`, the monitor watches for
 keeps a clip of every motion window. With it, clips are kept for visits, so leaves, shadows and
 insects in the infrared light don't fill the disk; set `training_capture: true` on a camera to
 keep motion clips too. On a slow machine analysis thins to one frame per segment when it falls
-behind; SpeciesNet takes about 4 s per frame on an Intel MacBook Pro's CPU.
+behind (counted as thinned in `analysis_health`, on the dashboard's health line and as a faint band
+on the Analytics lag charts); SpeciesNet takes about 4 s per frame on an Intel MacBook Pro's CPU.
 
 Where the cameras are goes under `site:` in `cameras.yaml`. SpeciesNet drops species not found
 there, and an `allowlist` turns any other species into its class ("mammal", "bird"). `timezone`

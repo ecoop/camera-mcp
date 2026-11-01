@@ -9,7 +9,12 @@ from contextlib import closing
 from datetime import datetime
 
 from camera_mcp.config import find_camera
-from camera_mcp.history.base import _tables, parse_when
+from camera_mcp.history.base import _get, _tables, parse_when
+
+
+def _thinned(db, table: str) -> str:
+    """SQL for a stats row's thinned count: 0 in a log written before thinning was recorded."""
+    return "thinned" if "thinned" in {r[1] for r in db.execute(f"PRAGMA table_info({table})")} else "0"
 
 
 class HealthQueries:
@@ -17,7 +22,8 @@ class HealthQueries:
 
     def analysis_health(self, since: str = "24h", until: str | None = None) -> dict:
         """How the shared analyzer kept up over the window: throughput (frames analysed and mean
-        cost), backlog (peak queue depth and lag), and loss (segments dropped on overload)."""
+        cost), backlog (peak queue depth and lag), thinning (segments analysed at one frame while
+        behind), and loss (segments dropped on overload)."""
         now = time.time()
         t0, t1 = parse_when(since, now, self.tz), parse_when(until, now, self.tz)
         window = {"from": self._local(self._iso(t0)), "to": self._local(self._iso(t1))}
@@ -34,6 +40,7 @@ class HealthQueries:
             **window,
             "samples": len(rows),
             "frames_analyzed": frames,
+            "segments_thinned": sum(_get(r, "thinned", 0) for r in rows),  # one frame each, while behind
             "segments_dropped": sum(r["dropped"] for r in rows),  # dropped on sustained overload
             "mean_seconds_per_frame": round(sum(r["infer_seconds"] for r in rows) / frames, 3) if frames else None,
             "peak_lag_seconds": round(worst["max_lag"], 1),  # furthest the analyzer fell behind
@@ -58,7 +65,8 @@ class HealthQueries:
                 if "analysis_camera_stats" not in tables:
                     return {**window, "points": []}
                 rows = db.execute(
-                    "SELECT at, queue_depth, max_lag, analyzed, dropped FROM analysis_camera_stats "
+                    f"SELECT at, queue_depth, max_lag, analyzed, dropped, {_thinned(db, 'analysis_camera_stats')}"
+                    " thinned FROM analysis_camera_stats "
                     "WHERE camera = ? AND at >= ? AND at <= ? ORDER BY at",
                     (name, self._iso(t0), self._iso(t1))).fetchall()
             else:
@@ -66,12 +74,12 @@ class HealthQueries:
                     return {**window, "points": []}
                 # sum across cameras per sample, so legacy single rows and new per-camera rows both read right
                 rows = db.execute(
-                    "SELECT at, SUM(queue_depth) queue_depth, MAX(max_lag) max_lag, "
-                    "SUM(analyzed) analyzed, SUM(dropped) dropped FROM analysis_stats "
+                    "SELECT at, SUM(queue_depth) queue_depth, MAX(max_lag) max_lag, SUM(analyzed) analyzed, "
+                    f"SUM(dropped) dropped, SUM({_thinned(db, 'analysis_stats')}) thinned FROM analysis_stats "
                     "WHERE at >= ? AND at <= ? GROUP BY at ORDER BY at", (self._iso(t0), self._iso(t1))).fetchall()
         step = max(1, len(rows) // max_points)
         points = [{"at": self._local(r["at"]), "depth": r["queue_depth"], "lag": round(r["max_lag"]),
-                   "frames": r["analyzed"], "dropped": r["dropped"]} for r in rows[::step]]
+                   "frames": r["analyzed"], "dropped": r["dropped"], "thinned": r["thinned"]} for r in rows[::step]]
         return {**window, "points": points}
 
     def analysis_series_all(self, since: str = "24h", until: str | None = None, max_points: int = 200) -> dict:
@@ -84,8 +92,9 @@ class HealthQueries:
         with closing(self._db()) as db:
             if "analysis_camera_stats" not in _tables(db):
                 return {**window, "cameras": {}}
-            rows = db.execute("SELECT camera, at, queue_depth, max_lag, analyzed, dropped "
-                              "FROM analysis_camera_stats WHERE at >= ? AND at <= ? ORDER BY camera, at",
+            rows = db.execute("SELECT camera, at, queue_depth, max_lag, analyzed, dropped, "
+                              f"{_thinned(db, 'analysis_camera_stats')} thinned FROM analysis_camera_stats"
+                              " WHERE at >= ? AND at <= ? ORDER BY camera, at",
                               (self._iso(t0), self._iso(t1))).fetchall()
         by: dict[str, list] = defaultdict(list)
         for r in rows:
@@ -94,7 +103,8 @@ class HealthQueries:
         for cam, rs in by.items():
             step = max(1, len(rs) // max_points)
             cameras[cam] = [{"at": self._local(r["at"]), "depth": r["queue_depth"], "lag": round(r["max_lag"]),
-                             "frames": r["analyzed"], "dropped": r["dropped"]} for r in rs[::step]]
+                             "frames": r["analyzed"], "dropped": r["dropped"], "thinned": r["thinned"]}
+                            for r in rs[::step]]
         return {**window, "cameras": cameras}
 
     def stats_heatmap(self, since: str = "7d", until: str | None = None) -> dict:

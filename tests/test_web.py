@@ -132,7 +132,7 @@ def test_stats_endpoint_takes_a_camera(tmp_path):
     store = Store(tmp_path / "monitor.db")
     now = time.time()
     store.add_analysis_stats(now - 60, 3, 20.0, 70, 0, 30.0)
-    store.add_camera_stats(now - 60, [("backyard", 1, 8.0, 50, 0, 10.0), ("alley", 2, 20.0, 20, 0, 20.0)])
+    store.add_camera_stats(now - 60, [("backyard", 1, 8.0, 50, 0, 10.0, 0), ("alley", 2, 20.0, 20, 0, 20.0, 0)])
     store.close()
     cams = {"backyard": Camera("backyard", "b.mp4"), "alley": Camera("alley", "a.mp4")}
     c = starlette_testclient.TestClient(build_app(cams, tmp_path, None))
@@ -262,7 +262,7 @@ def test_stats_all_returns_each_camera(tmp_path):
     from camera_mcp.web import build_app
     store = Store(tmp_path / "monitor.db")
     now = time.time()
-    store.add_camera_stats(now - 60, [("backyard", 1, 8.0, 50, 0, 10.0), ("alley", 3, 90.0, 20, 2, 20.0)])
+    store.add_camera_stats(now - 60, [("backyard", 1, 8.0, 50, 0, 10.0, 0), ("alley", 3, 90.0, 20, 2, 20.0, 0)])
     store.close()
     cams = {"backyard": Camera("backyard", "b.mp4"), "alley": Camera("alley", "a.mp4")}
     c = starlette_testclient.TestClient(build_app(cams, tmp_path, None))
@@ -296,7 +296,7 @@ def test_heatmap_hour_by_camera(tmp_path):
     from camera_mcp.web import build_app
     store = Store(tmp_path / "monitor.db")
     now = time.time()
-    store.add_camera_stats(now - 60, [("east_fence", 2, 100.0, 40, 5, 10.0), ("backyard", 0, 5.0, 10, 0, 2.0)])
+    store.add_camera_stats(now - 60, [("east_fence", 2, 100.0, 40, 5, 10.0, 0), ("backyard", 0, 5.0, 10, 0, 2.0, 0)])
     store.close()
     cams = {"east_fence": Camera("east_fence", "e.mp4"), "backyard": Camera("backyard", "b.mp4")}
     c = starlette_testclient.TestClient(build_app(cams, tmp_path, None))
