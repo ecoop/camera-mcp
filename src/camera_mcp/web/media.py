@@ -166,7 +166,7 @@ def routes(ctx: Context) -> list[Route]:
         ok, jpeg = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 80])
         if not ok:
             return Response(status_code=500)
-        return Response(jpeg.tobytes(), media_type="image/jpeg")
+        return Response(jpeg.tobytes(), media_type="image/jpeg", headers={"Cache-Control": "no-store"})  # it's "now"
 
     return [
         Route("/api/snapshot/{camera}", api_snapshot),
