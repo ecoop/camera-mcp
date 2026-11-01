@@ -294,8 +294,23 @@ async function loadCameras(){const cs=await (await fetch('/api/cameras')).json()
   const opts=cs.filter(c=>c.enabled).map(c=>`<option value="${c.name}">${c.name}</option>`).join('');
   $('#camera').insertAdjacentHTML('beforeend',opts);
   $('#chartcam').insertAdjacentHTML('beforeend',opts);
-  $('#live').innerHTML=cs.filter(c=>c.enabled&&c.stream).map(c=>`<a class="tile"><img loading="lazy" `+
-    `src="/api/snapshot/${c.name}?w=480" alt="${c.name}"><div class="meta"><span class="sp">${c.name}</span></div></a>`).join('');}
+  $('#live').innerHTML=cs.filter(c=>c.enabled&&c.stream).map(c=>`<a class="tile" data-cam="${c.name}"><img src="${BLANK}" alt="${c.name}">`+
+    `<div class="meta"><span class="sp">${c.name}</span> <span class="sub"></span></div></a>`).join('');
+  liveDue();}
+// LIVE: each camera's picture now, refreshed every LIVE_EVERY while the feeds view is on screen (it used
+// to load once, so a page opened by day kept showing daylight at night). Each refresh opens every
+// camera's stream once, so not more often. A picture is swapped in only once the new one has loaded.
+const LIVE_EVERY=120000, BLANK='data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';  // until the first picture
+let liveAt=0;
+function refreshLive(){const tiles=document.querySelectorAll('#live .tile'); if(!tiles.length)return;
+  liveAt=Date.now();
+  tiles.forEach(t=>{const pic=new Image(), sub=t.querySelector('.sub');
+    pic.onload=()=>{t.querySelector('img').src=pic.src; sub.dataset.at=new Date().toTimeString().slice(0,5);
+      sub.textContent='\u00b7 '+sub.dataset.at;};
+    pic.onerror=()=>{sub.innerHTML=(sub.dataset.at?'&middot; '+sub.dataset.at+' ':'')+'&middot; <span class="bad">no picture now</span>';};
+    pic.src='/api/snapshot/'+encodeURIComponent(t.dataset.cam)+'?w=480&t='+Date.now();});}
+function liveDue(){if(VIEW==='feeds'&&document.visibilityState==='visible'&&Date.now()-liveAt>=LIVE_EVERY-1000)refreshLive();}
+document.addEventListener('visibilitychange',liveDue);
 async function loadSpecies(){try{const r=await (await fetch('/api/species')).json();
   $('#taxon').insertAdjacentHTML('beforeend',(r.species||[]).map(s=>`<option value="${s}">${s}</option>`).join(''));
   }catch(e){}}
@@ -696,7 +711,7 @@ $('#featsel').onchange=()=>{try{localStorage.setItem('feat',$('#featsel').value)
 
 // ---- two views (feeds / analytics), bookmarkable at / and /analytics ----
 let VIEW='feeds';
-function renderView(){if(VIEW==='analytics'){loadStats();loadTimeline();loadHeatmap();}else if(VIEW==='map'){loadMap();}else{loadVisits();loadFeatured();}}
+function renderView(){if(VIEW==='analytics'){loadStats();loadTimeline();loadHeatmap();}else if(VIEW==='map'){loadMap();}else{loadVisits();loadFeatured();liveDue();}}
 const viewOf=path=>path.indexOf('analytics')>=0?'analytics':path.indexOf('/map')>=0?'map':'feeds';
 function setView(v,push){VIEW=['analytics','map'].includes(v)?v:'feeds';
   $('#view-feeds').hidden=VIEW!=='feeds'; $('#view-analytics').hidden=VIEW!=='analytics'; $('#view-map').hidden=VIEW!=='map';

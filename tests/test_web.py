@@ -156,6 +156,20 @@ def _one_visit(tmp_path):
     store.close()
 
 
+def test_a_live_snapshot_is_never_cached(tmp_path):
+    # The LIVE tiles refresh by re-requesting the snapshot: a cached picture would show daylight at night.
+    import subprocess
+    from camera_mcp.config import Camera
+    from camera_mcp.web import build_app
+    clip = tmp_path / "f.mp4"
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+                    "testsrc=size=640x360:rate=5:d=1", "-c:v", "libx264", "-pix_fmt", "yuv420p", str(clip)], check=True)
+    c = starlette_testclient.TestClient(build_app({"fence": Camera("fence", str(clip))}, tmp_path, None))
+    r = c.get("/api/snapshot/fence?w=480&t=1")
+    assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg"
+    assert r.headers["cache-control"] == "no-store"
+
+
 def test_visit_label_stores_and_reads_back(tmp_path):
     from camera_mcp.config import Camera
     from camera_mcp.web import build_app
