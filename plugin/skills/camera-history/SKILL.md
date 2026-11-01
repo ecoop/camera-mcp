@@ -47,7 +47,8 @@ Hours are local.
 **Cats at the feeder while birds were there?** `find_visits(since="7d", taxon="cat", overlapping="bird")`.
 
 **Is the monitor keeping up?** `analysis_health(since="24h")`: no dropped work and a low peak lag
-means it kept up. Motion it was too far behind to analyse shows up per camera as
+means it kept up. `segments_thinned` counts segments it analysed at one frame each while behind:
+watched, but brief visitors were easier to miss. Motion it was too far behind to analyse shows up per camera as
 `unanalyzed_motion_seconds` in every history answer's `coverage`.
 
 **What does a camera see now?** `snapshot(camera="backyard")`. Camera names match loosely

@@ -548,8 +548,8 @@ class Analyzer:
 
     Each segment is decoded at one frame per `detect_every_seconds`; when the queue backs up
     (a slow machine, many busy cameras), only one frame per segment is analysed until it
-    catches up. A burst is absorbed rather than dropped: motion segments are retained and
-    queued, worked off as the machine catches up in the quiet that follows (the ring buffer
+    catches up (counted as thinned in the stats). A burst is absorbed rather than dropped: motion
+    segments are retained and queued, worked off as the machine catches up in the quiet that follows (the ring buffer
     keeps their footage while they wait). The queue (`_Scheduler`) drains the highest-priority
     camera's backlog first (`priority`, settable by time of day) while keeping each camera in
     its own time order. Only a segment deferred past `max_defer_seconds` — sustained overload
@@ -576,6 +576,7 @@ class Analyzer:
         # analyzer thread). The aggregate written to analysis_stats is the sum/max across cameras.
         self._analyzed: dict[str, int] = defaultdict(int)
         self._dropped: dict[str, int] = defaultdict(int)
+        self._thinned: dict[str, int] = defaultdict(int)  # segments analysed at one frame (behind)
         self._infer_seconds: dict[str, float] = defaultdict(float)
         self._max_lag: dict[str, float] = defaultdict(float)
         self._last_stats = 0.0
@@ -621,7 +622,7 @@ class Analyzer:
                     worker.queued.pop(seg.path, None)
 
     def _flush_stats(self, force: bool = False) -> None:
-        """Write one analysis-stats sample per STATS_EVERY (throughput, backlog, loss), then reset."""
+        """Write one analysis-stats sample per STATS_EVERY (throughput, backlog, thinning, loss), then reset."""
         now = time.time()
         if self._last_stats == 0.0:  # first tick: set the baseline, don't write an empty interval
             self._last_stats = now
@@ -629,14 +630,17 @@ class Analyzer:
         if self.store is None or (not force and now - self._last_stats < self.STATS_EVERY):
             return
         depth = self.sched.depth()  # per-camera backlog: segments waiting, by camera
-        cams = set(self._analyzed) | set(self._dropped) | set(self._infer_seconds) | set(self._max_lag) | set(depth)
+        cams = (set(self._analyzed) | set(self._dropped) | set(self._thinned) | set(self._infer_seconds)
+                | set(self._max_lag) | set(depth))
         self.store.add_analysis_stats(now, sum(depth.values()), max(self._max_lag.values(), default=0.0),
                                       sum(self._analyzed.values()), sum(self._dropped.values()),
-                                      sum(self._infer_seconds.values()))
+                                      sum(self._infer_seconds.values()), sum(self._thinned.values()))
         self.store.add_camera_stats(now, [(c, depth.get(c, 0), self._max_lag[c], self._analyzed[c],
-                                           self._dropped[c], self._infer_seconds[c]) for c in sorted(cams)])
+                                           self._dropped[c], self._infer_seconds[c], self._thinned[c])
+                                          for c in sorted(cams)])
         self._analyzed.clear()
         self._dropped.clear()
+        self._thinned.clear()
         self._infer_seconds.clear()
         self._max_lag.clear()
         self._last_stats = now
@@ -676,6 +680,8 @@ class Analyzer:
             self._behind = behind
             log.warning("analysis is %s", "falling behind: one frame per segment until it catches up"
                         if behind else "caught up")
+        if behind:
+            self._thinned[worker.camera.name] += 1
         every = max(seg.end - seg.start, s.segment_seconds) if behind else s.detect_every_seconds
         native_w, native_h = worker.frame_size(seg)
         # Full frames are decoded once; the detector's input is cut from each in-process, and the very

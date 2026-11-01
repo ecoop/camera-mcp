@@ -141,6 +141,12 @@ ADDED_COLUMNS = {
         "species": "TEXT",  # what it actually was, if the human said: the right name for 'wrong_species',
         # or a name for an unnamed 'real' visit (an "animal" that was a rat); never for 'false'
     },
+    "analysis_stats": {
+        "thinned": "INTEGER NOT NULL DEFAULT 0",  # segments analysed at one frame because the queue was behind
+    },
+    "analysis_camera_stats": {
+        "thinned": "INTEGER NOT NULL DEFAULT 0",  # this camera's segments analysed at one frame (behind)
+    },
     "camera_status": {
         "view_score": "REAL",  # last moved-camera check: how well the view matched its reference, 0-1
         "view_moved_since": "TEXT",  # set while the camera looks moved; NULL otherwise
@@ -230,23 +236,28 @@ class Store:
                 self._db.execute("INSERT INTO analysis_skipped VALUES (?, ?, ?)", (camera, iso(start), iso(end)))
 
     def add_analysis_stats(self, at: float, queue_depth: int, max_lag: float, analyzed: int,
-                           dropped: int, infer_seconds: float) -> None:
-        """One sample of how the shared analyzer is keeping up (throughput, backlog, loss)."""
+                           dropped: int, infer_seconds: float, thinned: int = 0) -> None:
+        """One sample of how the shared analyzer is keeping up (throughput, backlog, thinning, loss)."""
         with self._lock:
-            self._db.execute("INSERT OR REPLACE INTO analysis_stats VALUES (?, ?, ?, ?, ?, ?)",
-                             (iso(at), queue_depth, round(max_lag, 1), analyzed, dropped, round(infer_seconds, 3)))
+            self._db.execute("INSERT OR REPLACE INTO analysis_stats"
+                             " (at, queue_depth, max_lag, analyzed, dropped, infer_seconds, thinned)"
+                             " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                             (iso(at), queue_depth, round(max_lag, 1), analyzed, dropped, round(infer_seconds, 3),
+                              thinned))
 
     def add_camera_stats(self, at: float, rows: list[tuple]) -> None:
         """Per-camera analyzer samples for one interval: rows of
-        (camera, queue_depth, max_lag, analyzed, dropped, infer_seconds). Shares `at` with the
+        (camera, queue_depth, max_lag, analyzed, dropped, infer_seconds, thinned). Shares `at` with the
         aggregate analysis_stats row, so the two line up on a chart."""
         if not rows:
             return
         at_iso = iso(at)
-        values = [(at_iso, cam, depth, round(lag, 1), an, dr, round(inf, 3))
-                  for cam, depth, lag, an, dr, inf in rows]
+        values = [(at_iso, cam, depth, round(lag, 1), an, dr, round(inf, 3), th)
+                  for cam, depth, lag, an, dr, inf, th in rows]
         with self._lock:
-            self._db.executemany("INSERT OR REPLACE INTO analysis_camera_stats VALUES (?, ?, ?, ?, ?, ?, ?)", values)
+            self._db.executemany("INSERT OR REPLACE INTO analysis_camera_stats"
+                                 " (at, camera, queue_depth, max_lag, analyzed, dropped, infer_seconds, thinned)"
+                                 " VALUES (?, ?, ?, ?, ?, ?, ?, ?)", values)
 
     def add_visit(self, visit, *, model: str, thumbnail: str | None, clip: str | None,
                   still: str | None = None, suppressed: str | None = None, night: bool | None = None) -> int:

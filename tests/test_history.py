@@ -242,13 +242,13 @@ def test_analysis_health(log):
     history, data = log
     db = sqlite3.connect(data / "monitor.db")
     now = time.time()
-    db.execute("INSERT INTO analysis_stats VALUES (?, ?, ?, ?, ?, ?)", (iso(now - 120), 3, 10.0, 50, 0, 20.0))
-    db.execute("INSERT INTO analysis_stats VALUES (?, ?, ?, ?, ?, ?)", (iso(now - 60), 12, 45.0, 30, 2, 18.0))
+    db.execute("INSERT INTO analysis_stats VALUES (?, ?, ?, ?, ?, ?, ?)", (iso(now - 120), 3, 10.0, 50, 0, 20.0, 0))
+    db.execute("INSERT INTO analysis_stats VALUES (?, ?, ?, ?, ?, ?, ?)", (iso(now - 60), 12, 45.0, 30, 2, 18.0, 9))
     db.commit()
     db.close()
     h = history.analysis_health(since="1h")
     assert h["samples"] == 2
-    assert h["frames_analyzed"] == 80 and h["segments_dropped"] == 2
+    assert h["frames_analyzed"] == 80 and h["segments_dropped"] == 2 and h["segments_thinned"] == 9
     assert h["peak_lag_seconds"] == 45.0 and h["peak_queue_depth"] == 12
     assert h["mean_seconds_per_frame"] == round(38.0 / 80, 3)
     assert history.analysis_health(since="1s")["samples"] == 0  # window excludes both samples
@@ -257,12 +257,12 @@ def test_analysis_health(log):
 def test_analysis_series_aggregate_and_per_camera(tmp_path):
     store = Store(tmp_path / "monitor.db")
     now = time.time()
-    store.add_analysis_stats(now - 120, 5, 30.0, 80, 1, 40.0)  # interval 1 aggregate
-    store.add_camera_stats(now - 120, [("east_fence", 4, 30.0, 20, 1, 30.0),
-                                       ("backyard", 1, 10.0, 60, 0, 10.0)])
+    store.add_analysis_stats(now - 120, 5, 30.0, 80, 1, 40.0, 3)  # interval 1 aggregate
+    store.add_camera_stats(now - 120, [("east_fence", 4, 30.0, 20, 1, 30.0, 3),
+                                       ("backyard", 1, 10.0, 60, 0, 10.0, 0)])
     store.add_analysis_stats(now - 60, 2, 12.0, 50, 0, 20.0)   # interval 2 aggregate
-    store.add_camera_stats(now - 60, [("east_fence", 2, 12.0, 10, 0, 12.0),
-                                      ("backyard", 0, 5.0, 40, 0, 8.0)])
+    store.add_camera_stats(now - 60, [("east_fence", 2, 12.0, 10, 0, 12.0, 0),
+                                      ("backyard", 0, 5.0, 40, 0, 8.0, 0)])
     store.close()
     cams = {"east_fence": Camera("east_fence", "x"), "backyard": Camera("backyard", "x")}
     history = History(tmp_path / "monitor.db", cams, Site(timezone="America/Los_Angeles"))
@@ -271,6 +271,8 @@ def test_analysis_series_aggregate_and_per_camera(tmp_path):
     ef = history.analysis_series(since="1h", camera="east fence")  # loose camera match
     assert ef["camera"] == "east fence"
     assert [p["frames"] for p in ef["points"]] == [20, 10] and [p["depth"] for p in ef["points"]] == [4, 2]
+    assert [p["thinned"] for p in allpts] == [3, 0] and [p["thinned"] for p in ef["points"]] == [3, 0]
+    assert [p["thinned"] for p in history.analysis_series_all(since="1h")["cameras"]["east_fence"]] == [3, 0]
     assert history.analysis_series(since="1h", camera="nope")["points"] == []  # unknown camera: empty
 
 

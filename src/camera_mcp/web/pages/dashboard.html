@@ -277,7 +277,8 @@ async function loadHealth(){try{const win=$('#since').value;
   const st=await (await fetch('/api/status')).json();
   const watching=st.filter(c=>c.watching_now).length, total=st.filter(c=>c.state!=='never seen by the monitor').length;
   let s;
-  if(h.samples){const dr=h.segments_dropped; s=`<b>Analysis (${win}):</b> ${h.frames_analyzed.toLocaleString()} frames &middot; `+
+  if(h.samples){const dr=h.segments_dropped, th=h.segments_thinned||0; s=`<b>Analysis (${win}):</b> ${h.frames_analyzed.toLocaleString()} frames &middot; `+
+    (th?`<span title="segments analysed at one frame while the queue was behind">${th.toLocaleString()} thinned</span> &middot; `:'')+
     `<span class="${dr?'bad':'ok'}">${dr?dr+' dropped':'none dropped'}</span> &middot; peak lag ${Math.round(h.peak_lag_seconds)}s`;}
   else s='<b>Analysis:</b> no stats yet';
   st.forEach(c=>CAMSTATE[c.camera]=c.state);
@@ -588,13 +589,17 @@ function lagSVG(pts,W,H,maxLag,grid){const pad=4,n=pts.length,cap=1800;
     act='<polyline fill="none" stroke="var(--good)" stroke-width="1.2" opacity=".85" points="'+
         pts.map((p,i)=>X(i).toFixed(1)+','+YF(p.frames||0).toFixed(1)).join(' ')+'"/>';}
   const dh=Math.max(5,H*0.06);
+  // thinned: the queue was behind, so segments got one frame each (a faint, shorter band under the drops,
+  // a sample wide, so a thinned stretch reads as one band)
+  const sw=Math.max(2,(W-2*pad)/(n-1||1));
+  const thin=pts.map((p,i)=>p.thinned>0?`<rect x="${Math.max(0,X(i)-sw/2).toFixed(1)}" y="${(H-dh*0.6).toFixed(1)}" width="${sw.toFixed(1)}" height="${(dh*0.6).toFixed(1)}" fill="var(--warn)" opacity=".4"/>`:'').join('');
   const drops=pts.map((p,i)=>p.dropped>0?`<rect x="${X(i).toFixed(1)}" y="${(H-dh).toFixed(1)}" width="2" height="${dh.toFixed(1)}" fill="var(--warn)"/>`:'').join('');
   let g='';
   if(grid){const tix=[0,.25,.5,.75,1].map(f=>Math.round(f*(n-1)));
     g=tix.map(i=>`<line x1="${X(i).toFixed(1)}" y1="0" x2="${X(i).toFixed(1)}" y2="${(H-9).toFixed(1)}" stroke="var(--line)" stroke-width="1" opacity=".45"/>`).join('');}
   const capLine=cap<=maxLag?`<line x1="0" y1="${Y(cap).toFixed(1)}" x2="${W}" y2="${Y(cap).toFixed(1)}" stroke="var(--warn)" stroke-dasharray="5 5" stroke-width="1" opacity=".55"/>`:'';
   return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">`+g+capLine+
-    `<path d="${area}" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.5"/>${act}${drops}</svg>`;}
+    `<path d="${area}" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.5"/>${act}${thin}${drops}</svg>`;}
 const peakFrames=pts=>pts.reduce((m,p)=>Math.max(m,p.frames||0),0);
 const sumFrames=pts=>pts.reduce((s,p)=>s+(p.frames||0),0);
 const fmtK=n=>n>=1000?(n/1000).toFixed(n>=10000?0:1)+'k':''+n;
@@ -609,7 +614,7 @@ async function loadStats(sel='#chart',forceAll=false){const el=$(sel); try{const
   const maxLag=Math.max(30,peakLag(pts));  // fit the data; the 30-min cap line shows only when neared
   el.innerHTML=lagSVG(pts,1000,132,maxLag,true)+
     `<div class="xax">${xAxis(pts)}</div>`+
-    `<div class="clabel"><span>${d.camera?'<b>'+d.camera+'</b> &middot; ':''}<b style="color:var(--accent)">lag</b> (area) &middot; <b style="color:var(--good)">activity</b> (line) &middot; <span class="bad">drops</span> (ticks)${peakLag(pts)>=1800?' &middot; dashed = 30-min cap':''}</span>`+
+    `<div class="clabel"><span>${d.camera?'<b>'+d.camera+'</b> &middot; ':''}<b style="color:var(--accent)">lag</b> (area) &middot; <b style="color:var(--good)">activity</b> (line) &middot; <span class="bad">drops</span> (ticks)${pts.some(p=>p.thinned)?' &middot; <span class="bad" style="opacity:.6">thinned</span> (faint band)':''}${peakLag(pts)>=1800?' &middot; dashed = 30-min cap':''}</span>`+
     `<span>${fmtK(sumFrames(pts))} frames &middot; ${(d.from||'').slice(0,10)}</span></div>`;
 }catch(e){el.innerHTML='<div class="empty" style="padding:1rem">stats unavailable</div>';}}
 async function loadStatsGrid(el){const d=await (await fetch('/api/stats/all?since='+$('#since').value)).json();
@@ -617,17 +622,17 @@ async function loadStatsGrid(el){const d=await (await fetch('/api/stats/all?sinc
   const idle=idleOn()?CAMS.filter(n=>!names.includes(n)):[];
   if(!names.length&&!idle.length){el.innerHTML='<div class="empty" style="padding:1rem">no per-camera stats yet (recorded from the latest build on)</div>';return;}
   let maxLag=30; names.forEach(n=>{const p=peakLag(cams[n]); if(p>maxLag)maxLag=p;});  // shared lag scale, fit to data
-  const totDrop=n=>cams[n].reduce((s,p)=>s+p.dropped,0);
+  const totDrop=n=>cams[n].reduce((s,p)=>s+p.dropped,0), totThin=n=>cams[n].reduce((s,p)=>s+(p.thinned||0),0);
   const busy=n=>totDrop(n)*1e7+sumFrames(cams[n]);  // worst first: drops, then total activity
   names.sort((a,b)=>busy(b)-busy(a));
   let html='<div class="cgrid">';
-  names.forEach(n=>{const pts=cams[n], pk=Math.round(peakLag(pts)), dr=totDrop(n);
-    html+=`<div class="cmini"><div class="cmh"><b>${n}</b><span>${fmtK(sumFrames(pts))}f &middot; peak ${pk}s${dr?' &middot; <span class="bad">'+dr+' drop</span>':''}</span></div>`+
+  names.forEach(n=>{const pts=cams[n], pk=Math.round(peakLag(pts)), dr=totDrop(n), th=totThin(n);
+    html+=`<div class="cmini"><div class="cmh"><b>${n}</b><span>${fmtK(sumFrames(pts))}f &middot; peak ${pk}s${th?' &middot; '+th+' thin':''}${dr?' &middot; <span class="bad">'+dr+' drop</span>':''}</span></div>`+
       lagSVG(pts,500,52,maxLag,false)+'</div>';});
   idle.forEach(n=>{html+=`<div class="cmini idle"><div class="cmh"><b>${n}</b><span>${idleLabel(n)} &middot; no data in window</span></div>`+
     `<svg viewBox="0 0 500 52" preserveAspectRatio="none"></svg></div>`;});
   const capNote=maxLag>=1800?' &middot; dashed = 30-min cap':'';
-  html+=`</div><div class="clabel"><span><b style="color:var(--accent)">lag</b> (area, shared scale) &middot; <b style="color:var(--good)">activity</b> (line, per-camera) &middot; <span class="bad">drops</span>${capNote}</span>`+
+  html+=`</div><div class="clabel"><span><b style="color:var(--accent)">lag</b> (area, shared scale) &middot; <b style="color:var(--good)">activity</b> (line, per-camera) &middot; <span class="bad">drops</span>${names.some(n=>totThin(n))?' &middot; <span class="bad" style="opacity:.6">thinned</span> (faint band)':''}${capNote}</span>`+
     `<span>${(d.from||'').slice(0,10)} &middot; ${(d.from||'').slice(11,16)}&ndash;${(d.to||'').slice(11,16)}</span></div>`;
   el.innerHTML=html;}
 // ---- visits timeline (what visited, when) ----
