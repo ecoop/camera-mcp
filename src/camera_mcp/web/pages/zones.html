@@ -57,6 +57,8 @@ button:disabled{opacity:.5;cursor:default}
 .hd{position:absolute;width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:50%;background:var(--frame);
   border:2px solid var(--ink);pointer-events:auto;cursor:move;transform-origin:50% 50%}
 .hd.first{background:var(--ink)}
+.hd.sq{border-radius:2px;width:10px;height:10px;margin:-5px 0 0 -5px}
+.hd.grip{width:16px;height:16px;margin:-8px 0 0 -8px;background:var(--ink);border-color:var(--frame);cursor:grab}
 .zoombar{position:absolute;right:.5rem;bottom:.5rem;display:flex;gap:.25rem;z-index:2}
 .zoombar button{padding:.15rem .5rem;font-size:.8rem;opacity:.9}
 .zoombar button.on{background:var(--ink);color:var(--frame)}
@@ -142,7 +144,7 @@ const bboxOf=s=>{if(!isPoly(s))return s;const xs=s.poly.map(p=>p[0]),ys=s.poly.m
 function status(msg,cls){const s=$('#status');s.textContent=msg;s.className='status'+(cls?' '+cls:'');}
 function hint(){$('#hint').innerHTML=shapeMode==='poly'
   ?'<b>Polygon:</b> click to add points; close by clicking the first point, double-clicking or pressing <b>Enter</b>. <b>Backspace</b> removes the last point, <b>Esc</b> cancels. Drag a point to move it; <b>Alt-click</b> a point to delete it.'
-  :'<b>Rect:</b> drag on the frame to draw. Drag any polygon point to adjust it.';
+  :'<b>Rect:</b> drag on the frame to draw. Drag a rectangle&rsquo;s corner or edge to resize it, a polygon&rsquo;s point to adjust it, and any zone&rsquo;s dark centre dot to move it.';
   $('#hint').innerHTML+=' Zoom with the wheel / pinch or the buttons; pan with <b>Space</b>-drag, middle-drag or &#9995;. <b>Analysis ROI</b> and <b>motion ROI</b> are single zones (a new one replaces); <b>motion mask</b>, <b>exclude</b> and <b>alert area</b> are lists.';}
 
 // ---- zoom & pan: the snapshot, zones, tags and handles all live in #pz, transformed together ----
@@ -183,7 +185,7 @@ function render(){
   const ov=$('#ov'); ov.innerHTML=''; $('#tags').innerHTML=''; $('#handles').innerHTML='';
   each((s,cls,tag,holder,key)=>{ov.appendChild(svgShape(s,cls)); const b=bboxOf(s), t=document.createElement('div');
     t.className='tag '+cls.split(' ')[0]; t.textContent=tag; t.style.left=b[0]*100+'%'; t.style.top=b[1]*100+'%'; $('#tags').appendChild(t);
-    if(isPoly(s))s.poly.forEach((p,i)=>handle(p[0],p[1],s,i));});
+    if(isPoly(s))s.poly.forEach((p,i)=>handle(p[0],p[1],s,i)); else rectHandles(s); grip(s);});
   drawDraft();
   const desc=s=>isPoly(s)?`polygon &middot; ${s.poly.length} pts`:`[${s.map(f3).join(', ')}]`;
   const li=(s,cls,label,idx)=>`<li><span class="k">${label}</span><span>${desc(s)} <button data-cls="${cls}" data-i="${idx}">&times;</button></span></li>`;
@@ -227,6 +229,34 @@ function handle(x,y,s,i){const h=document.createElement('div');h.className='hd';
     const up=()=>{h.removeEventListener('pointermove',move);h.removeEventListener('pointerup',up);render();};
     h.addEventListener('pointermove',move);h.addEventListener('pointerup',up);});
   $('#handles').appendChild(h);}
+
+// ---- rectangles: drag a corner or an edge to resize; any zone: drag its centre grip to move it ----
+const redrawShapes=()=>{$('#ov').innerHTML='';each((sh,cls)=>$('#ov').appendChild(svgShape(sh,cls)));};
+function dragHandle(h,onMove){  // a handle that follows the pointer; the whole editor re-renders when let go
+  h.addEventListener('pointerdown',ev=>{if(!editable||ev.button!==0||draft)return;ev.stopPropagation();ev.preventDefault();
+    h.setPointerCapture(ev.pointerId); const start=pt(ev);
+    const move=e=>{onMove(pt(e),start);redrawShapes();};
+    const up=()=>{h.removeEventListener('pointermove',move);h.removeEventListener('pointerup',up);render();};
+    h.addEventListener('pointermove',move);h.addEventListener('pointerup',up);});
+  $('#handles').appendChild(h); return h;}
+const place2=(h,x,y)=>{h.style.left=x*100+'%';h.style.top=y*100+'%';};
+const RH=[[0,0,'nwse'],[.5,0,'ns'],[1,0,'nesw'],[1,.5,'ew'],[1,1,'nwse'],[.5,1,'ns'],[0,1,'nesw'],[0,.5,'ew']];
+function rectHandles(s){  // eight handles; a rect is edited in place, so whatever holds it sees the change
+  const hs=RH.map(([fx,fy,cur])=>{const h=document.createElement('div');h.className='hd sq';h.style.cursor=cur+'-resize';
+    h.title='drag to resize';place2(h,s[0]+fx*s[2],s[1]+fy*s[3]);
+    return dragHandle(h,p=>{let l=s[0],t=s[1],r=s[0]+s[2],b=s[1]+s[3];
+      if(fx===0)l=p[0]; if(fx===1)r=p[0]; if(fy===0)t=p[1]; if(fy===1)b=p[1];
+      const x=Math.min(l,r),y=Math.min(t,b),w=Math.max(Math.abs(r-l),0.005),hh=Math.max(Math.abs(b-t),0.005);
+      s[0]=r4(Math.min(x,1-w));s[1]=r4(Math.min(y,1-hh));s[2]=r4(w);s[3]=r4(hh);
+      hs.forEach((o,i)=>place2(o,s[0]+RH[i][0]*s[2],s[1]+RH[i][1]*s[3]));});});}
+function grip(s){  // move the whole zone, kept inside the frame
+  const g=document.createElement('div');g.className='hd grip';g.title='drag to move this zone';
+  const b0=bboxOf(s);place2(g,b0[0]+b0[2]/2,b0[1]+b0[3]/2);let orig=null;
+  g.addEventListener('pointerdown',()=>{orig=isPoly(s)?s.poly.map(p=>p.slice()):s.slice();},true);
+  dragHandle(g,(p,start)=>{const b=isPoly(s)?bboxOf({poly:orig}):orig;
+    const dx=clamp(p[0]-start[0],-b[0],1-b[0]-b[2]),dy=clamp(p[1]-start[1],-b[1],1-b[1]-b[3]);
+    if(isPoly(s))orig.forEach((q,i)=>{s.poly[i]=[r4(q[0]+dx),r4(q[1]+dy)];});else{s[0]=r4(orig[0]+dx);s[1]=r4(orig[1]+dy);}
+    place2(g,b[0]+b[2]/2+dx,b[1]+b[3]/2+dy);});}
 
 // ---- drawing ----
 let drag=null, draft=null, cursor=null;  // drag: a rect being dragged; draft: polygon points so far
