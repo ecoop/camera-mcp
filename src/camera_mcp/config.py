@@ -26,11 +26,13 @@ from camera_mcp.errors import (
     ConfigError,  # also re-exported: callers import it from config
 )
 from camera_mcp.zones import (
+    AlertArea,
     Exclude,
     Rect,
     Shape,
     apply_zone_overlay,
     load_zone_overlay,
+    parse_alerts,
     parse_excludes,
     parse_rect,
     parse_shape,
@@ -137,6 +139,7 @@ class Camera:
     motion_roi: Shape | None = None  # if set, only motion inside this zone counts
     roi: Rect | None = None  # tier-2 analysis crop: inference runs on this region of the frame only
     exclude: tuple[Exclude, ...] = ()  # exclusion zones: a visit whose boxes all sit in them is hidden (gate.py)
+    alert: tuple[AlertArea, ...] = ()  # alert areas: anything boxed in one sends a text (alerts.py); opt-in
     schedule: tuple[tuple[int, int, dict], ...] = ()  # time-of-day monitor overrides (from `when:`)
 
     @property
@@ -353,6 +356,7 @@ def load_cameras(
             motion_roi=parse_shape(raw["motion_roi"], where, "motion_roi") if raw.get("motion_roi") else None,
             roi=parse_rect(raw["roi"], where, "roi") if raw.get("roi") else None,
             exclude=parse_excludes(raw.get("exclude"), where),
+            alert=parse_alerts(raw.get("alert"), where),
             schedule=_schedule(raw, where),
             monitor=_settings(site, raw, where, strict=False),
         )

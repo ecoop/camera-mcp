@@ -471,7 +471,72 @@ def test_alerter_fires_once_per_cooldown_for_alert_species(monkeypatch):
     assert len(sent) == 1
     assert sent[0][1] == "15551234567@txt.att.net" and sent[0][0].startswith("coyote at backyard")
     assert not Alerter({"coyote"}, {"SMTP_TO": "x"}, None, ZoneInfo("UTC")).active  # no recipient -> inactive
-    assert not Alerter(set(), {"SMTP_TO": "x"}, "r", ZoneInfo("UTC")).active        # no species -> inactive
+    a = Alerter(set(), {"SMTP_TO": "x"}, "r", ZoneInfo("UTC"))  # no species: active for alert areas only
+    a.maybe_alert("backyard", "coyote", 1_700_000_000.0)
+    assert len(sent) == 1
+
+
+def test_alerter_texts_once_per_cooldown_per_alert_area(monkeypatch):
+    from zoneinfo import ZoneInfo
+    import camera_mcp.mailer as mailer
+    from camera_mcp.alerts import Alerter
+    sent = []
+    monkeypatch.setattr(mailer, "send_email", lambda subj, body, settings: sent.append(body))
+    a = Alerter({"cat"}, {"SMTP_HOST": "h"}, "r", ZoneInfo("America/Los_Angeles"))
+    a.maybe_area_alert("west_alley", "cat on fence", "bird", 1_700_000_000.0)    # fires, whatever the label
+    a.maybe_area_alert("west_alley", "cat on fence", "animal", 1_700_000_060.0)  # same area, within cooldown
+    a.maybe_area_alert("west_alley", "branch", "animal", 1_700_000_060.0)        # another area has its own
+    a.maybe_alert("west_alley", "cat", 1_700_000_060.0)                          # so does the species alert
+    assert sent == ["cat on fence: bird at west_alley, 2:13pm", "branch: animal at west_alley, 2:14pm",
+                    "cat at west_alley, 2:14pm"]
+    a._last = {k: v - Alerter.COOLDOWN for k, v in a._last.items()}  # the cooldown passes
+    a.maybe_area_alert("west_alley", "cat on fence", "domestic cat", 1_700_000_400.0)
+    assert sent[-1].startswith("cat on fence: domestic cat")
+
+
+def _det(x, y, w, h, name="animal", key=None):
+    from camera_mcp.taxa import Label
+    from camera_mcp.visits import Box, Detection
+    return Detection(Box(x, y, w, h, 0.8), Label(name, "", 0.8), key or name)
+
+
+def test_alert_areas_trust_place_and_size_not_the_label():
+    from camera_mcp.config import Camera
+    from camera_mcp.zones import AlertArea, alert_hits
+    fence = AlertArea((0.1, 0.45, 0.2, 0.12), "cat on fence", 0.06, ("squirrel", "rodent"))
+    cam = Camera("west_alley", "rtsp://x", alert=(fence,))
+    hits = alert_hits(cam, [
+        _det(0.15, 0.47, 0.08, 0.06, "bird", "songbirds"),   # a cat called a bird: alerts
+        _det(0.15, 0.47, 0.08, 0.06, "person"),               # ... or a person: alerts
+        _det(0.15, 0.47, 0.03, 0.02, "bird", "songbirds"),   # songbird-sized: no
+        _det(0.15, 0.47, 0.08, 0.06, "eastern gray squirrel", "squirrel"),  # skipped by group
+        _det(0.15, 0.47, 0.08, 0.06, "rodent"),               # skipped by label
+        _det(0.60, 0.20, 0.10, 0.10, "domestic cat", "cat"),  # outside the area: no
+    ])
+    assert [d.label.name for _, d in hits] == ["bird", "person"]
+    assert alert_hits(Camera("b", "rtsp://x"), [_det(0.15, 0.47, 0.08, 0.06)]) == []  # opt-in: none drawn
+    # Boxes are fractions of the roi crop; the area is in full-frame fractions.
+    cropped = Camera("west_alley", "rtsp://x", roi=(0.08, 0.13, 0.48, 0.43), alert=(fence,))
+    centre_x, centre_y = (0.20 - 0.08) / 0.48, (0.51 - 0.13) / 0.43  # full frame (0.20, 0.51): on the fence
+    assert len(alert_hits(cropped, [_det(centre_x - 0.08, centre_y - 0.07, 0.16, 0.14)])) == 1  # 0.077 of the frame
+    assert alert_hits(cropped, [_det(centre_x - 0.04, centre_y - 0.03, 0.08, 0.06)]) == []      # 0.038: too small
+
+
+def test_alert_areas_load_from_the_zone_overlay(tmp_path):
+    import json
+    from camera_mcp.zones import AlertArea, alert_json
+    cfg = write(tmp_path, "cameras: [{name: a, source: a.mp4}]")
+    zones = tmp_path / "zones.json"
+    area = {"poly": [[0.1, 0.4], [0.3, 0.4], [0.3, 0.6]], "name": "cat on fence", "min_size": 0.06,
+            "skip": ["Squirrel", "rodent"]}
+    zones.write_text(json.dumps({"cameras": {"a": {"alert": [area]}}}))
+    (got,) = load_cameras(cfg, zones=zones)["a"].alert
+    assert got == AlertArea(((0.1, 0.4), (0.3, 0.4), (0.3, 0.6)), "cat on fence", 0.06, ("squirrel", "rodent"))
+    assert alert_json(got) == {**area, "skip": ["squirrel", "rodent"]}
+    assert load_cameras(cfg)["a"].alert == ()
+    zones.write_text(json.dumps({"cameras": {"a": {"alert": [{**area, "min_size": 3}]}}}))
+    with pytest.raises(ConfigError):
+        load_cameras(cfg, zones=zones)
 
 
 def test_segments_are_listed_selected_and_pruned(tmp_path):

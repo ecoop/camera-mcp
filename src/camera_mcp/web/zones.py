@@ -15,8 +15,8 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from camera_mcp.config import ConfigError, find_camera
-from camera_mcp.zones import (exclude_json, load_zone_overlay, parse_excludes, parse_rect, parse_shape, parse_shapes,
-                              save_zone_overlay, shape_json)
+from camera_mcp.zones import (alert_json, exclude_json, load_zone_overlay, parse_alerts, parse_excludes, parse_rect,
+                              parse_shape, parse_shapes, save_zone_overlay, shape_json)
 from camera_mcp.web.context import Context
 
 
@@ -59,7 +59,8 @@ def zone_state(cam) -> dict:
             "roi": list(cam.roi) if cam.roi else None,
             "motion_roi": shape_json(cam.motion_roi) if cam.motion_roi else None,
             "motion_mask": [shape_json(z) for z in cam.motion_mask],
-            "exclude": [exclude_json(z) for z in cam.exclude]}
+            "exclude": [exclude_json(z) for z in cam.exclude],
+            "alert": [alert_json(a) for a in cam.alert]}
 
 
 def routes(ctx: Context) -> list[Route]:
@@ -83,6 +84,8 @@ def routes(ctx: Context) -> list[Route]:
             motion_roi = parse_shape(body["motion_roi"], where, "motion_roi") if body.get("motion_roi") else None
             motion_mask = parse_shapes(body.get("motion_mask"), where, "motion_mask")
             exclude = parse_excludes(body.get("exclude"), where)
+            # a page from before alert areas sends none: keep the camera's rather than wiping them
+            alert = parse_alerts(body["alert"], where) if "alert" in body else cam.alert
         except ConfigError as e:
             return JSONResponse({"error": str(e)}, status_code=400)
         new_roi = tuple(roi) if roi else None
@@ -101,13 +104,16 @@ def routes(ctx: Context) -> list[Route]:
                                     "motion_roi": shape_json(motion_roi) if motion_roi else None,
                                     "motion_mask": [shape_json(z) for z in motion_mask],
                                     "exclude": [exclude_json(z) for z in exclude]}
+        if alert or cam.alert:  # a camera that never had an alert area keeps its entry as it was
+            raw["cameras"][cam.name]["alert"] = [alert_json(a) for a in alert]
         try:
             save_zone_overlay(ctx.zones_path, raw)
             load_zone_overlay(ctx.zones_path)  # re-validate the file as written
         except (OSError, ConfigError) as e:
             return JSONResponse({"error": f"could not save: {e}"}, status_code=500)
 
-        ctx.cameras[cam.name] = replace(cam, roi=roi, motion_roi=motion_roi, motion_mask=motion_mask, exclude=exclude)
+        ctx.cameras[cam.name] = replace(cam, roi=roi, motion_roi=motion_roi, motion_mask=motion_mask, exclude=exclude,
+                                        alert=alert)
         reloaded, detail = _reload_monitor()
         return JSONResponse({"ok": True, "reloaded": reloaded, "reload_detail": detail,
                              "scenery_reset": bool(scenery_reset), "zones": zone_state(ctx.cameras[cam.name])})
