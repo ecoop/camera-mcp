@@ -28,11 +28,12 @@ class VisitQueries:
     def find_visits(self, since: str = "24h", until: str | None = None, cameras: list[str] | None = None,
                     tag: str | None = None, taxon: str | None = None, overlapping: str | None = None,
                     min_score: float = 0.0, limit: int = 50, include_suppressed: bool = False,
-                    favorites_only: bool = False) -> dict:
+                    favorites_only: bool = False, before_id: int | None = None) -> dict:
         """Visits overlapping the window, newest first. Visits the unnamed-visit gate hid (likely
         leaves, see gate.py) are left out and counted in `hidden`, unless `include_suppressed`.
         `favorites_only`: just the starred ones, from any time (the window is ignored) and hidden
-        or not: a favourite is a keeper wherever it is."""
+        or not: a favourite is a keeper wherever it is. `before_id`: the next page, the visits
+        listed after that one (`total` and `hidden` still count the whole window)."""
         now = time.time()
         t0, t1 = parse_when(since, now, self.tz), parse_when(until, now, self.tz)
         if favorites_only:
@@ -51,10 +52,13 @@ class VisitQueries:
             if not include_suppressed:
                 where = self._shown(db, where, "v.")
             total = db.execute(f"SELECT COUNT(*) FROM visits v WHERE {where}", params).fetchone()[0]
+            if before_id is not None:  # keyset paging: stable while new visits arrive at the top
+                where += " AND (v.started_at, v.id) < (SELECT started_at, id FROM visits WHERE id = ?)"
+                params = [*params, before_id]
             verdict = ("(SELECT verdict FROM visit_labels l WHERE l.visit_id = v.id)"  # a human's label, if any
                        if "visit_labels" in _tables(db) else "NULL")
             rows = db.execute(f"SELECT v.*, {verdict} AS verdict, {_fav_cols(db)} FROM visits v WHERE {where}"
-                              " ORDER BY v.started_at DESC LIMIT ?",
+                              " ORDER BY v.started_at DESC, v.id DESC LIMIT ?",
                               (*params, max(1, min(limit, 500)))).fetchall()
             return {
                 "from": self._local(self._iso(t0)), "to": self._local(self._iso(t1)),

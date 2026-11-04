@@ -4,7 +4,7 @@
 ![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13-blue)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
-_Last updated: 2026-10-31_
+_Last updated: 2026-11-03_
 
 An MCP server and an always-on monitor for home IP cameras, built to watch for wildlife on one
 machine without saturating it.
@@ -194,6 +194,10 @@ The web dashboard's species filter is built from what's actually been seen (most
 with `night-critters` once one has shown up). To pin it to a fixed menu instead, set
 `menu_species: [night-critters, cat, raccoon, …]` under `site:` — then only those show, in that
 order.
+
+The time filter takes "last 2h" … "30 days", or **from–to…** for a range between two local times
+(an empty "to" means now); every view uses it. The feeds grid lists the window's newest 60 visits,
+with "N of M visits · load more" underneath for the next 60.
 
 Settings, site-wide under `monitor:` or per camera: `pre_seconds`, `post_seconds`,
 `quiet_seconds`, `motion_fps`, `pixel_threshold`, `min_changed`, `detect_every_seconds`,
