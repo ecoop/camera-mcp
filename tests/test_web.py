@@ -847,3 +847,11 @@ def test_range_dates_show_only_for_from_to(client):
     page = client.get("/").text
     assert '<span class="range" id="range" hidden>' in page and ".range[hidden]{display:none}" in page
     assert page.count("$('#range').hidden=!ranged()") == 2  # on every change, and once at load
+
+
+def test_zone_editor_resizes_rectangles_and_moves_any_zone(client):
+    """Rectangles get corner and edge handles (polygons already had point handles), and every zone a
+    centre grip that moves it whole, kept inside the frame; all of it edits in place until apply."""
+    page = client.get("/zones").text
+    assert "function rectHandles(s)" in page and "else rectHandles(s); grip(s);" in page
+    assert "function grip(s)" in page and "clamp(p[0]-start[0],-b[0],1-b[0]-b[2])" in page
