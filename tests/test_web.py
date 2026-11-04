@@ -782,3 +782,42 @@ def test_tagged_thumbnails_are_not_dimmed():
     css = (Path(camera_mcp.web.__file__).parent / "pages" / "dashboard.html").read_text()
     assert ".tile[data-verdict=real]{outline" in css
     assert not re.search(r"data-verdict[^{]*img\s*\{[^}]*(opacity|filter)", css)
+
+
+def test_visits_page_back_and_take_a_from_to_range(tmp_path):
+    """The feeds grid shows LIMIT visits at a time: ?before=<id> is the next page (no repeats, none
+    skipped, `total` still the whole window), and ?until= closes the window at a time in the past."""
+    import time
+    from datetime import datetime
+
+    from camera_mcp.config import Camera
+    from camera_mcp.store import Store
+    from camera_mcp.visits import Visit
+    from camera_mcp.web import build_app
+    store = Store(tmp_path / "monitor.db")
+    now = time.time()
+    for i in range(7):  # one a minute, i minutes ago (two share a start, so id breaks the tie)
+        vis = Visit("alley", "cat", start=now - 60 * min(i, 5) - 30, last_seen=now - 60 * min(i, 5) - 25, frames=3)
+        vis.votes[("domestic cat", "")] = 1.0
+        store.add_visit(vis, model="m", thumbnail=None, clip=None)
+    store.close()
+    c = starlette_testclient.TestClient(build_app({"alley": Camera("alley", "a.mp4")}, tmp_path, None))
+    seen, before = [], ""
+    while True:
+        r = c.get("/api/visits?since=1h&limit=3" + before).json()
+        assert r["total"] == 7
+        if not r["visits"]:
+            break
+        seen += [v["id"] for v in r["visits"]]
+        before = f"&before={seen[-1]}"
+    assert sorted(seen) == list(range(1, 8)) and len(seen) == 7
+    until = datetime.fromtimestamp(now - 120).isoformat(timespec="seconds")  # local, as the page sends it
+    r = c.get(f"/api/visits?since=1h&until={until}").json()
+    assert r["total"] == 5 and r["to"].startswith(until[:16])  # the 2 newest started after `until`
+
+
+def test_the_feeds_window_can_be_a_range_with_load_more(client):
+    html = client.get("/").text
+    assert '<option value="range">' in html and 'type="datetime-local" id="from"' in html
+    assert 'id="morebtn"' in html and "p.set('before',lastId)" in html
+    assert "?since='+" not in html and "since:$('#since').value" not in html  # every view asks via win()

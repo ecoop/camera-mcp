@@ -101,6 +101,9 @@ dialog .vmeta a{color:var(--accent);cursor:pointer}
 .tile[data-verdict=false] .vpill,.tile[data-verdict=wrong_species] .vpill{display:block;color:var(--warn)}
 .tile[data-verdict=false] .vpill::after{content:"\2717  false"} .tile[data-verdict=wrong_species] .vpill::after{content:"\2717  wrong sp."}
 #hidnote{text-transform:none;letter-spacing:0}
+/* the time window as a from-to range, and "load more" under the visits grid (it shows LIMIT at a time) */
+.range{display:inline-flex;align-items:center;gap:.25rem;font-family:var(--mono);font-size:.78rem;color:var(--muted)}
+.more{display:flex;align-items:center;justify-content:center;gap:.6rem;margin:.8rem 0;font-family:var(--mono);font-size:.74rem;color:var(--muted)}
 /* the labels map: one dot per visit over the camera's picture */
 .mapctl{display:inline-flex;gap:.7rem;flex-wrap:wrap;text-transform:none;letter-spacing:0;font-family:var(--mono);font-size:.72rem}
 .mapctl label{display:inline-flex;align-items:center;gap:.25rem;cursor:pointer}
@@ -168,7 +171,9 @@ dialog .boxtag[hidden],.spin[hidden],.lblset[hidden],.boxbtn[hidden]{display:non
 <div class="health" id="health">loading&hellip;</div>
 <div class="filters">
   <select id="since"><option value="2h">last 2h</option><option value="12h">12h</option>
-    <option value="24h" selected>24h</option><option value="3d">3 days</option><option value="7d">7 days</option><option value="30d">30 days</option></select>
+    <option value="24h" selected>24h</option><option value="3d">3 days</option><option value="7d">7 days</option><option value="30d">30 days</option><option value="range">from&ndash;to&hellip;</option></select>
+  <span class="range" id="range" hidden><input type="datetime-local" id="from" title="from (local time)">&ndash;<input
+    type="datetime-local" id="until" title="until (local time); empty means now"></span>
   <select id="taxon"><option value="">all species</option></select>
   <select id="camera"><option value="">all cameras</option></select>
   <label class="hidtog" id="hidtoglbl" title="also show visits hidden as likely junk (by the unrecognized-visit gate, a zone, or by hand), to review, label or un-hide">
@@ -188,6 +193,7 @@ dialog .boxtag[hidden],.spin[hidden],.lblset[hidden],.boxbtn[hidden]{display:non
   <div class="sect" style="margin-top:0">Visits <span id="hidnote"></span></div>
   <div class="grid" id="grid"></div>
   <div class="empty" id="empty" style="display:none">No visits in this window.</div>
+  <div class="more" id="more" hidden><span id="morenote"></span> <button class="lblbtn" id="morebtn">load more</button></div>
   <div class="sect">Live</div>
   <div class="grid" id="live"></div>
   <div class="sect" style="display:flex;justify-content:space-between;align-items:center;gap:1rem">
@@ -267,17 +273,23 @@ dialog .boxtag[hidden],.spin[hidden],.lblset[hidden],.boxbtn[hidden]{display:non
     <button class="boxbtn" id="boxclear" hidden title="remove this box's own tag (it takes the visit's again, where that holds)">clear</button></div>
 </dialog><div id="queuegrid" hidden></div><datalist id="spplist"></datalist>
 <script>
-const $=s=>document.querySelector(s), params=()=>{const p=new URLSearchParams();
-  p.set('since',$('#since').value); if($('#taxon').value)p.set('taxon',$('#taxon').value);
+// The time window: a "last ..." choice, or a from-to range (from&ndash;to&hellip;; an empty "to" means now).
+// win() puts it on a request's query; every view asks for the same window.
+const $=s=>document.querySelector(s), ranged=()=>$('#since').value==='range';
+const win=(p=new URLSearchParams())=>{if(!ranged())p.set('since',$('#since').value);
+  else{p.set('since',$('#from').value||'24h'); if($('#until').value)p.set('until',$('#until').value);} return p;};
+const winLabel=()=>ranged()?`${$('#from').value.replace('T',' ')} \u2192 ${$('#until').value.replace('T',' ')||'now'}`:$('#since').value;
+const params=()=>{const p=win();
+  if($('#taxon').value)p.set('taxon',$('#taxon').value);
   if($('#camera').value)p.set('camera',$('#camera').value);
   if($('#showhidden').checked)p.set('suppressed','1'); if($('#favonly').checked)p.set('favorites','1'); return p.toString();};
 function tick(){$('#clock').textContent=new Date().toLocaleString();}
-async function loadHealth(){try{const win=$('#since').value;
-  const h=await (await fetch('/api/health?since='+win)).json();
+async function loadHealth(){try{const label=winLabel();
+  const h=await (await fetch('/api/health?'+win())).json();
   const st=await (await fetch('/api/status')).json();
   const watching=st.filter(c=>c.watching_now).length, total=st.filter(c=>c.state!=='never seen by the monitor').length;
   let s;
-  if(h.samples){const dr=h.segments_dropped, th=h.segments_thinned||0; s=`<b>Analysis (${win}):</b> ${h.frames_analyzed.toLocaleString()} frames &middot; `+
+  if(h.samples){const dr=h.segments_dropped, th=h.segments_thinned||0; s=`<b>Analysis (${label}):</b> ${h.frames_analyzed.toLocaleString()} frames &middot; `+
     (th?`<span title="segments analysed at one frame while the queue was behind">${th.toLocaleString()} thinned</span> &middot; `:'')+
     `<span class="${dr?'bad':'ok'}">${dr?dr+' dropped':'none dropped'}</span> &middot; peak lag ${Math.round(h.peak_lag_seconds)}s`;}
   else s='<b>Analysis:</b> no stats yet';
@@ -314,12 +326,23 @@ document.addEventListener('visibilitychange',liveDue);
 async function loadSpecies(){try{const r=await (await fetch('/api/species')).json();
   $('#taxon').insertAdjacentHTML('beforeend',(r.species||[]).map(s=>`<option value="${s}">${s}</option>`).join(''));
   }catch(e){}}
-async function loadVisits(){const r=await (await fetch('/api/visits?'+params())).json();
-  const v=(r.visits||[]).filter(x=>x.has_thumbnail);
-  $('#empty').style.display=v.length?'none':'block';
+// The grid shows the window's newest LIMIT visits; "load more" adds the next LIMIT after the last
+// one listed. Once more is loaded, the minute's refresh leaves the grid alone (it would reset it).
+const LIMIT=60; let listed=0, lastId=null, visitSeq=0;
+async function loadVisits(more){if(!more&&listed>LIMIT)return;
+  const seq=++visitSeq, p=new URLSearchParams(params()); p.set('limit',LIMIT); if(more)p.set('before',lastId);
+  const r=await (await fetch('/api/visits?'+p)).json(), got=r.visits||[];
+  if(seq!==visitSeq)return;  // a newer request (another filter) has taken over
+  const v=got.filter(x=>x.has_thumbnail);
+  listed=(more?listed:0)+got.length; if(got.length)lastId=got[got.length-1].id;
+  $('#empty').style.display=(more||v.length)?'none':'block';
   $('#hidnote').textContent=r.hidden?`· ${r.hidden} hidden as likely leaves`:'';
-  $('#grid').innerHTML=v.map(tileHTML).join('');
+  if(more)$('#grid').insertAdjacentHTML('beforeend',v.map(tileHTML).join('')); else $('#grid').innerHTML=v.map(tileHTML).join('');
+  const total=r.total||0; $('#more').hidden=!total||(listed>=total&&listed<=LIMIT);
+  $('#morenote').textContent=`${Math.min(listed,total).toLocaleString()} of ${total.toLocaleString()} visits`;
+  $('#morebtn').hidden=listed>=total;
   document.querySelectorAll('#grid .tile').forEach(t=>t.onclick=ev=>{ev.preventDefault();openVisit(t);});}
+$('#morebtn').onclick=()=>loadVisits(true);
 function tileHTML(x){return `<a class="tile${x.suppressed?' sup':''}" href="#" data-id="${x.id}" data-clip="${x.clip?1:0}"`+
     ` data-verdict="${x.verdict||''}" data-sup="${x.suppressed||''}" data-fav="${x.favorite?x.favorite.kind:''}"`+
     ` data-favat="${x.favorite&&x.favorite.clip_at!=null?x.favorite.clip_at:''}">`+
@@ -341,7 +364,7 @@ async function loadMap(){const cam=$('#camera').value, dots=$('#mapdots'), stage
   const key=cam+'|'+only, newPic=key!==mapCam;
   if(newPic){mapCam=key;dots.innerHTML='';$('#maplegend').textContent='';stage.classList.add('loading');}
   const want=[...document.querySelectorAll('.mv:checked')].map(c=>c.value);
-  const p=new URLSearchParams({camera:cam,since:$('#since').value}); if($('#taxon').value)p.set('taxon',$('#taxon').value);
+  const p=win(new URLSearchParams({camera:cam})); if($('#taxon').value)p.set('taxon',$('#taxon').value);
   if(want.includes('none'))p.set('unlabelled','1');
   let d; try{d=await (await fetch('/api/labels/map?'+p)).json();}catch(e){d={error:'map unavailable'};}
   if(seq!==mapSeq)return;  // a newer request (another camera or filter) has taken over
@@ -623,7 +646,7 @@ function xAxis(pts){const n=pts.length,tix=[0,.25,.5,.75,1].map(f=>Math.round(f*
 const peakLag=pts=>pts.reduce((m,p)=>Math.max(m,p.lag),0);
 async function loadStats(sel='#chart',forceAll=false){const el=$(sel); try{const cc=forceAll?'':$('#chartcam').value;
   if(cc==='__each__') return loadStatsGrid(el);
-  const d=await (await fetch('/api/stats?since='+$('#since').value+(cc?'&camera='+encodeURIComponent(cc):''))).json();
+  const d=await (await fetch('/api/stats?'+win()+(cc?'&camera='+encodeURIComponent(cc):''))).json();
   const pts=d.points||[];
   if(!pts.length){el.innerHTML='<div class="empty" style="padding:1rem">'+(d.camera?'no per-camera stats for '+d.camera+' yet (recorded from this build on)':'no stats yet')+'</div>';return;}
   const maxLag=Math.max(30,peakLag(pts));  // fit the data; the 30-min cap line shows only when neared
@@ -632,7 +655,7 @@ async function loadStats(sel='#chart',forceAll=false){const el=$(sel); try{const
     `<div class="clabel"><span>${d.camera?'<b>'+d.camera+'</b> &middot; ':''}<b style="color:var(--accent)">lag</b> (area) &middot; <b style="color:var(--good)">activity</b> (line) &middot; <span class="bad">drops</span> (ticks)${pts.some(p=>p.thinned)?' &middot; <span class="bad" style="opacity:.6">thinned</span> (faint band)':''}${peakLag(pts)>=1800?' &middot; dashed = 30-min cap':''}</span>`+
     `<span>${fmtK(sumFrames(pts))} frames &middot; ${(d.from||'').slice(0,10)}</span></div>`;
 }catch(e){el.innerHTML='<div class="empty" style="padding:1rem">stats unavailable</div>';}}
-async function loadStatsGrid(el){const d=await (await fetch('/api/stats/all?since='+$('#since').value)).json();
+async function loadStatsGrid(el){const d=await (await fetch('/api/stats/all?'+win())).json();
   const cams=d.cameras||{}, names=Object.keys(cams).filter(n=>cams[n].length);
   const idle=idleOn()?CAMS.filter(n=>!names.includes(n)):[];
   if(!names.length&&!idle.length){el.innerHTML='<div class="empty" style="padding:1rem">no per-camera stats yet (recorded from the latest build on)</div>';return;}
@@ -661,7 +684,7 @@ function showTip(e,html){const t=$('#vtip');t.innerHTML=html;t.style.opacity='1'
   t.style.left=Math.min(e.clientX+12,innerWidth-230)+'px';t.style.top=(e.clientY+14)+'px';}
 function hideTip(){$('#vtip').style.opacity='0';}
 async function loadTimeline(sel='#vtl'){const el=$(sel); try{
-  const p=new URLSearchParams();p.set('since',$('#since').value);if($('#camera').value)p.set('camera',$('#camera').value);
+  const p=win();if($('#camera').value)p.set('camera',$('#camera').value);
   const d=await (await fetch('/api/visits/timeline?'+p.toString())).json();
   const bins=d.bins||[];
   if(!d.visits){el.innerHTML='<div class="empty" style="padding:1rem">no visits in this window</div>';return;}
@@ -686,7 +709,7 @@ async function loadTimeline(sel='#vtl'){const el=$(sel); try{
 }catch(e){el.innerHTML='<div class="empty" style="padding:1rem">timeline unavailable</div>';}}
 // ---- hourly load heatmap (hour-of-day x camera) ----
 async function loadHeatmap(sel='#hmap',forceMode=null){const el=$(sel),mode=forceMode||($('.hmode .on')&&$('.hmode .on').dataset.m)||'dropped'; try{
-  const d=await (await fetch('/api/stats/heatmap?since='+$('#since').value)).json();
+  const d=await (await fetch('/api/stats/heatmap?'+win())).json();
   const cams=(d.cameras||[]).slice(), blank=Array.from({length:24},()=>({frames:0,dropped:0}));
   if(idleOn())CAMS.filter(n=>!cams.includes(n)).forEach(n=>{cams.push(n);d.cells[n]=blank;});
   if(!cams.length){el.innerHTML='<div class="empty" style="padding:1rem">no per-camera stats yet (recorded from the latest build on)</div>';return;}
@@ -725,7 +748,10 @@ addEventListener('popstate',()=>setView(viewOf(location.pathname),false));
 
 $('.hmode').querySelectorAll('button').forEach(b=>b.onclick=()=>{$('.hmode .on').classList.remove('on');b.classList.add('on');loadHeatmap();});
 // filters are global; a change refreshes the header and whichever view is showing
-['since','taxon','camera','showhidden','favonly'].forEach(id=>$('#'+id).addEventListener('change',()=>{loadHealth();renderView();}));
+['since','from','until','taxon','camera','showhidden','favonly'].forEach(id=>$('#'+id).addEventListener('change',()=>{
+  if(id==='since'&&ranged()&&!$('#from').value){const at=d=>new Date(d-new Date().getTimezoneOffset()*6e4).toISOString().slice(0,16);
+    $('#from').value=at(Date.now()-864e5); $('#until').value=at(Date.now());}  // starts as the last 24h
+  $('#range').hidden=!ranged(); listed=0; loadHealth();renderView();}));
 $('#chartcam').onchange=()=>{if(VIEW==='analytics')loadStats();};
 try{$('#showidle').checked=localStorage.getItem('showIdle')==='1';}catch(e){}
 $('#showidle').onchange=()=>{try{localStorage.setItem('showIdle',idleOn()?'1':'0');}catch(e){} if(VIEW==='analytics'){loadStats();loadHeatmap();}};
