@@ -103,6 +103,7 @@ dialog .vmeta a{color:var(--accent);cursor:pointer}
 #hidnote{text-transform:none;letter-spacing:0}
 /* the time window as a from-to range, and "load more" under the visits grid (it shows LIMIT at a time) */
 .range{display:inline-flex;align-items:center;gap:.25rem;font-family:var(--mono);font-size:.78rem;color:var(--muted)}
+.range[hidden]{display:none}  /* the display above would otherwise beat `hidden`: dates showing, but unused */
 .more{display:flex;align-items:center;justify-content:center;gap:.6rem;margin:.8rem 0;font-family:var(--mono);font-size:.74rem;color:var(--muted)}
 /* the labels map: one dot per visit over the camera's picture */
 .mapctl{display:inline-flex;gap:.7rem;flex-wrap:wrap;text-transform:none;letter-spacing:0;font-family:var(--mono);font-size:.72rem}
@@ -752,6 +753,7 @@ $('.hmode').querySelectorAll('button').forEach(b=>b.onclick=()=>{$('.hmode .on')
   if(id==='since'&&ranged()&&!$('#from').value){const at=d=>new Date(d-new Date().getTimezoneOffset()*6e4).toISOString().slice(0,16);
     $('#from').value=at(Date.now()-864e5); $('#until').value=at(Date.now());}  // starts as the last 24h
   $('#range').hidden=!ranged(); listed=0; loadHealth();renderView();}));
+$('#range').hidden=!ranged();  // a reload can bring the dropdown back on from–to…, so match it from the start
 $('#chartcam').onchange=()=>{if(VIEW==='analytics')loadStats();};
 try{$('#showidle').checked=localStorage.getItem('showIdle')==='1';}catch(e){}
 $('#showidle').onchange=()=>{try{localStorage.setItem('showIdle',idleOn()?'1':'0');}catch(e){} if(VIEW==='analytics'){loadStats();loadHeatmap();}};

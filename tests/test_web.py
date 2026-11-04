@@ -839,3 +839,11 @@ def test_the_feeds_window_can_be_a_range_with_load_more(client):
     assert '<option value="range">' in html and 'type="datetime-local" id="from"' in html
     assert 'id="morebtn"' in html and "p.set('before',lastId)" in html
     assert "?since='+" not in html and "since:$('#since').value" not in html  # every view asks via win()
+
+
+def test_range_dates_show_only_for_from_to(client):
+    """The from/until fields are hidden unless the window is "from–to…": their own display rule
+    mustn't beat `hidden` (it did, so they showed, unused, beside "24h")."""
+    page = client.get("/").text
+    assert '<span class="range" id="range" hidden>' in page and ".range[hidden]{display:none}" in page
+    assert page.count("$('#range').hidden=!ranged()") == 2  # on every change, and once at load
