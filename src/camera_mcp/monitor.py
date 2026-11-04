@@ -54,7 +54,7 @@ from camera_mcp.scenery import Scenery
 from camera_mcp.store import Store
 from camera_mcp.view import ViewCheck, is_colour, is_infrared
 from camera_mcp.visits import Visit, VisitTracker
-from camera_mcp.zones import zone_drop
+from camera_mcp.zones import alert_hits, zone_drop
 
 log = logging.getLogger("camera_mcp.monitor")
 
@@ -725,6 +725,9 @@ class Analyzer:
                 detections = [d for d in detections if not drop(d.box)]
                 self._note_zoned(worker.camera.name, zoned[0])
             detections, learned = worker.scenery.filter(t, detections, frame)
+            if self.alerter is not None:  # anything in an alert area texts, whatever it's labelled
+                for area, d in alert_hits(worker.camera, detections):
+                    self.alerter.maybe_area_alert(worker.camera.name, area.name, d.label.name, t)
             for spot in learned:
                 log.info("%s: learned scenery at x=%.2f y=%.2f (%.0f%% x %.0f%% of the frame): a \"%s\" that "
                          "keeps appearing in exactly the same place; ignoring it from now on",
@@ -862,13 +865,15 @@ def main(argv: list[str] | None = None) -> None:
             log.info("SpeciesNet isn't installed: watching for motion only")
     site = load_site(args.config)
     monitor = Monitor(chosen, args.data_dir, detector, tz=site.tz())
-    if monitor.analyzer is not None and site.alert_species:  # real-time alerts (email->SMS)
+    areas = [f"{c.name}: {a.name}" for c in chosen for a in c.alert]
+    if monitor.analyzer is not None and (site.alert_species or areas):  # real-time alerts (email->SMS)
         from camera_mcp.mailer import alert_recipient, email_settings
         monitor.analyzer.alerter = Alerter(site.alert_species, email_settings(), alert_recipient(), site.tz())
+        what = ", ".join([*site.alert_species, *(f"alert area {a}" for a in areas)])
         if monitor.analyzer.alerter.active:
-            log.info("alerts on for %s -> %s", ", ".join(site.alert_species), monitor.analyzer.alerter.recipient)
+            log.info("alerts on for %s -> %s", what, monitor.analyzer.alerter.recipient)
         else:
-            log.warning("alert_species set but alerts inactive (missing mail settings or SMS_ALERT_TO)")
+            log.warning("alerts set (%s) but inactive (missing mail settings or SMS_ALERT_TO)", what)
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: monitor.stop.set())
     log.info("watching %s; data in %s", ", ".join(c.name for c in chosen), args.data_dir)

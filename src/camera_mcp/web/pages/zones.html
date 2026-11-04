@@ -3,12 +3,12 @@
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Zones &middot; Yard Sentry</title>
 <style>
 :root{--paper:#f5f4ef;--frame:#fff;--ink:#2c2b27;--muted:#6d6a60;--line:#d3d0c6;--chrome:#eceae2;
-  --accent:#5b6b8c;--accent-soft:#dde3ee;--good:#4f7a52;--warn:#a5514a;--excl:#9a6a12;
+  --accent:#5b6b8c;--accent-soft:#dde3ee;--good:#4f7a52;--warn:#a5514a;--excl:#9a6a12;--alert:#9c3d7a;
   --mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
   --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
 @media(prefers-color-scheme:dark){:root:not([data-theme=light]){--paper:#12141a;--frame:#191c22;
   --ink:#d6d9e0;--muted:#868b95;--line:#353a45;--chrome:#20242c;--accent:#8fa6cf;--accent-soft:#28324a;
-  --good:#7fae82;--warn:#d98b83;--excl:#d9a441;}}
+  --good:#7fae82;--warn:#d98b83;--excl:#d9a441;--alert:#d58bbd;}}
 *{box-sizing:border-box}body{background:var(--paper);color:var(--ink);font-family:var(--sans);
   margin:0;line-height:1.5;-webkit-font-smoothing:antialiased}
 .wrap{max-width:1180px;margin:0 auto;padding:1.4rem 20px 3rem}
@@ -29,6 +29,7 @@ button:disabled{opacity:.5;cursor:default}
 .tools label.motion_roi.on{color:var(--good);border-color:var(--good)}
 .tools label.motion_mask.on{color:var(--warn);border-color:var(--warn)}
 .tools label.exclude.on{color:var(--excl);border-color:var(--excl)}
+.tools label.alert.on{color:var(--alert);border-color:var(--alert)}
 .tools label.shape.on{color:var(--ink);border-color:var(--ink)}
 .tools label.dis{opacity:.4;cursor:default}
 .stage{position:relative;border:1px solid var(--line);border-radius:11px;overflow:hidden;background:var(--chrome);
@@ -47,11 +48,12 @@ button:disabled{opacity:.5;cursor:default}
 #ov .motion_mask{stroke:var(--warn);fill:rgba(165,81,74,.16)}
 #ov .exclude{stroke:var(--excl);fill:rgba(154,106,18,.16);stroke-dasharray:calc(6px / var(--z)) calc(4px / var(--z))}
 #ov .exclude.ignore{stroke-dasharray:none;fill:rgba(154,106,18,.3)}
+#ov .alert{stroke:var(--alert);fill:rgba(156,61,122,.16)}
 #ov .draft{fill:none;stroke:var(--ink);stroke-dasharray:calc(4px / var(--z)) calc(3px / var(--z))}
 .tags,.handles{position:absolute;inset:0;pointer-events:none}
 .tag{position:absolute;font-family:var(--mono);font-size:.6rem;padding:0 .25rem;color:#fff;background:var(--accent);
   transform-origin:0 0;white-space:nowrap}
-.tag.motion_roi{background:var(--good)} .tag.motion_mask{background:var(--warn)} .tag.exclude{background:var(--excl)}
+.tag.motion_roi{background:var(--good)} .tag.motion_mask{background:var(--warn)} .tag.exclude{background:var(--excl)} .tag.alert{background:var(--alert)}
 .hd{position:absolute;width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:50%;background:var(--frame);
   border:2px solid var(--ink);pointer-events:auto;cursor:move;transform-origin:50% 50%}
 .hd.first{background:var(--ink)}
@@ -61,9 +63,10 @@ button:disabled{opacity:.5;cursor:default}
 .zoombar .lvl{font-family:var(--mono);font-size:.68rem;color:var(--muted);background:var(--frame);border:1px solid var(--line);
   border-radius:7px;padding:.15rem .4rem;min-width:3.2rem;text-align:center}
 .list button.mode{color:var(--excl);border-color:var(--excl)}
-.list input.minsz,.list input.maxsz{width:4.6rem;font-family:var(--mono);font-size:.66rem;padding:.05rem .25rem;background:var(--frame);
+.list input.minsz,.list input.maxsz,.list input.aname,.list input.askip{width:4.6rem;font-family:var(--mono);font-size:.66rem;padding:.05rem .25rem;background:var(--frame);
   color:var(--ink);border:1px solid var(--line);border-radius:5px}
 .list li.zx{flex-wrap:wrap}
+.list input.aname{width:8rem} .list input.askip{width:9rem}
 .side{font-family:var(--mono);font-size:.72rem}
 .zdesc{font-family:var(--sans);font-size:.72rem;color:var(--muted);line-height:1.4;margin:.2rem 0 .1rem}
 .list{margin:.3rem 0 0;padding:0;list-style:none}
@@ -84,6 +87,7 @@ button:disabled{opacity:.5;cursor:default}
     <label class="motion_roi"><input type="radio" name="tool" value="motion_roi">motion ROI</label>
     <label class="motion_mask"><input type="radio" name="tool" value="motion_mask">motion mask</label>
     <label class="exclude"><input type="radio" name="tool" value="exclude">exclude</label>
+    <label class="alert"><input type="radio" name="tool" value="alert">alert area</label>
   </div>
   <div class="tools">
     <label class="shape on" data-s="rect"><input type="radio" name="shape" value="rect" checked>&#9645; rect</label>
@@ -115,6 +119,9 @@ button:disabled{opacity:.5;cursor:default}
     <div style="margin-top:.6rem"><b>Exclude</b> <span class="k">per-zone mode</span>
       <div class="zdesc">For spots that only ever produce junk (a feeder roof&rsquo;s underside, a hedge). Click a zone&rsquo;s mode to switch it.<br><b>Ignore</b>: anything boxed here is dropped as soon as it&rsquo;s found, before it&rsquo;s classified &mdash; it never becomes a visit and can&rsquo;t keep the detector busy. For spots no animal can be.<br><b>Hide unrecognized</b>: a visit here that SpeciesNet couldn&rsquo;t identify is hidden when it ends (an identified bird stays) &mdash; kept, and shown again with one click in the viewer.<br><b>Min size</b> (optional): only boxes whose larger side is at least this fraction of the frame count, so a fixed object can be excluded while a small bird passing the same spot isn&rsquo;t (a feeder roof boxes ~0.05&ndash;0.08; a small bird in flight can be ~0.01). Empty: any size.<br>Applies to new visits.</div>
       <ul class="list" id="l-exclude"></ul></div>
+    <div style="margin-top:.6rem"><b>Alert area</b> <span class="k">text me</span>
+      <div class="zdesc">A text (to SMS_ALERT_TO) as soon as anything is boxed here, <i>whatever it&rsquo;s labelled</i> &mdash; a cat on a fence is often called a bird, an animal or even a person. Then quiet for 5 minutes per area.<br><b>Name</b> starts the text (&ldquo;cat on fence: animal at west_alley, 9:02am&rdquo;).<br><b>Min size</b>: only boxes whose larger side is at least this fraction of the frame count (a songbird boxes ~0.03&ndash;0.05, a cat ~0.06 and up).<br><b>Skip</b>: labels or groups that never alert here, comma-separated (e.g. squirrel, rodent).<br>None unless you draw one.</div>
+      <ul class="list" id="l-alert"></ul></div>
     <div class="row" style="margin-top:1rem">
       <button id="apply" class="primary">apply &amp; reload</button>
       <button id="revert">revert</button>
@@ -124,8 +131,9 @@ button:disabled{opacity:.5;cursor:default}
 </div>
 <script>
 const $=s=>document.querySelector(s);
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 // A zone shape is [x,y,w,h] (a rect) or {poly:[[x,y],...]}; all coordinates are fractions of the frame.
-let all={}, editable=true, name=null, zones={roi:null,motion_roi:null,motion_mask:[],exclude:[]}, tool='roi', shapeMode='rect';
+let all={}, editable=true, name=null, zones={roi:null,motion_roi:null,motion_mask:[],exclude:[],alert:[]}, tool='roi', shapeMode='rect';
 const MODE={hide_unrecognized:'hide unrecognized',ignore:'ignore'}, VW=1600, VH=900, NS='http://www.w3.org/2000/svg';
 const f3=v=>(+v).toFixed(3), r4=v=>+(+v).toFixed(4), clamp=(v,a,b)=>Math.min(b,Math.max(a,v));
 const isPoly=s=>s&&!Array.isArray(s), copy=s=>isPoly(s)?{poly:s.poly.map(p=>p.slice())}:s.slice();
@@ -135,7 +143,7 @@ function status(msg,cls){const s=$('#status');s.textContent=msg;s.className='sta
 function hint(){$('#hint').innerHTML=shapeMode==='poly'
   ?'<b>Polygon:</b> click to add points; close by clicking the first point, double-clicking or pressing <b>Enter</b>. <b>Backspace</b> removes the last point, <b>Esc</b> cancels. Drag a point to move it; <b>Alt-click</b> a point to delete it.'
   :'<b>Rect:</b> drag on the frame to draw. Drag any polygon point to adjust it.';
-  $('#hint').innerHTML+=' Zoom with the wheel / pinch or the buttons; pan with <b>Space</b>-drag, middle-drag or &#9995;. <b>Analysis ROI</b> and <b>motion ROI</b> are single zones (a new one replaces); <b>motion mask</b> and <b>exclude</b> are lists.';}
+  $('#hint').innerHTML+=' Zoom with the wheel / pinch or the buttons; pan with <b>Space</b>-drag, middle-drag or &#9995;. <b>Analysis ROI</b> and <b>motion ROI</b> are single zones (a new one replaces); <b>motion mask</b>, <b>exclude</b> and <b>alert area</b> are lists.';}
 
 // ---- zoom & pan: the snapshot, zones, tags and handles all live in #pz, transformed together ----
 let zs=1, tx=0, ty=0, panMode=false, spaceDown=false, pan=null;
@@ -169,7 +177,8 @@ function svgShape(s,cls){const el=document.createElementNS(NS,isPoly(s)?'polygon
 function each(fn){  // every drawn zone: (shape, css class, tag, the object holding it, key)
   if(zones.roi)fn(zones.roi,'roi','ROI',zones,'roi'); if(zones.motion_roi)fn(zones.motion_roi,'motion_roi','mROI',zones,'motion_roi');
   zones.motion_mask.forEach((s,i)=>fn(s,'motion_mask','m'+(i+1),zones.motion_mask,i));
-  zones.exclude.forEach((z,i)=>fn(z.shape,'exclude'+(z.mode==='ignore'?' ignore':''),'x'+(i+1)+(z.mode==='ignore'?' ignore':''),z,'shape'));}
+  zones.exclude.forEach((z,i)=>fn(z.shape,'exclude'+(z.mode==='ignore'?' ignore':''),'x'+(i+1)+(z.mode==='ignore'?' ignore':''),z,'shape'));
+  zones.alert.forEach((a,i)=>fn(a.shape,'alert','a'+(i+1)+' '+a.name,a,'shape'));}
 function render(){
   const ov=$('#ov'); ov.innerHTML=''; $('#tags').innerHTML=''; $('#handles').innerHTML='';
   each((s,cls,tag,holder,key)=>{ov.appendChild(svgShape(s,cls)); const b=bboxOf(s), t=document.createElement('div');
@@ -188,10 +197,21 @@ function render(){
     `A 'from' keeps small birds out of a zone around a big fixed object; a 'below' keeps a rat out of a zone around a small one. Empty: any size.">box size `+
     `<input class="minsz" data-i="${i}" type="number" min="0" max="0.5" step="0.005" placeholder="from any" value="${z.min_size||''}"> `+
     `<input class="maxsz" data-i="${i}" type="number" min="0" max="0.5" step="0.005" placeholder="below any" value="${z.max_size||''}"></span></li>`).join(''):'<li class="k">none</li>';
-  document.querySelectorAll('.list input.minsz,.list input.maxsz').forEach(inp=>inp.onchange=()=>{const v=parseFloat(inp.value);
+  $('#l-alert').innerHTML=zones.alert.length?zones.alert.map((a,i)=>`<li class="zx"><span class="k">a${i+1}</span><span>${isPoly(a.shape)?a.shape.poly.length+' pts':'rect'} `+
+    `<button data-cls="alert" data-i="${i}">&times;</button></span>`+
+    `<span class="k">name <input class="aname" data-i="${i}" maxlength="40" value="${esc(a.name)}"></span>`+
+    `<span class="k" title="only boxes whose larger side (a fraction of the frame) is at least this count. Empty: any size.">min size `+
+    `<input class="minsz" data-a="${i}" type="number" min="0" max="0.5" step="0.005" placeholder="any" value="${a.min_size||''}"></span>`+
+    `<span class="k" title="labels or groups that never alert here, comma-separated">skip <input class="askip" data-i="${i}" value="${esc(a.skip.join(', '))}"></span></li>`).join(''):'<li class="k">none</li>';
+  document.querySelectorAll('#l-alert input.minsz').forEach(inp=>inp.onchange=()=>{const v=parseFloat(inp.value);
+    zones.alert[+inp.dataset.a].min_size=(v>0&&v<1)?+v.toFixed(4):0;});
+  document.querySelectorAll('#l-alert input.aname').forEach(inp=>inp.onchange=()=>{zones.alert[+inp.dataset.i].name=inp.value.trim()||'alert area';render();});
+  document.querySelectorAll('#l-alert input.askip').forEach(inp=>inp.onchange=()=>{
+    zones.alert[+inp.dataset.i].skip=inp.value.split(',').map(x=>x.trim().toLowerCase()).filter(Boolean);});
+  document.querySelectorAll('#l-exclude input.minsz,#l-exclude input.maxsz').forEach(inp=>inp.onchange=()=>{const v=parseFloat(inp.value);
     zones.exclude[+inp.dataset.i][inp.classList.contains('maxsz')?'max_size':'min_size']=(v>0&&v<1)?+v.toFixed(4):0;});
   document.querySelectorAll('.list button[data-cls]').forEach(b=>b.onclick=()=>{const c=b.dataset.cls,i=+b.dataset.i;
-    if(c==='motion_mask'||c==='exclude')zones[c].splice(i,1);else zones[c]=null;render();});
+    if(c==='motion_mask'||c==='exclude'||c==='alert')zones[c].splice(i,1);else zones[c]=null;render();});
   document.querySelectorAll('.list button.mode').forEach(b=>b.onclick=()=>{const z=zones.exclude[+b.dataset.i];
     z.mode=z.mode==='ignore'?'hide_unrecognized':'ignore';render();});
   applyZoom();}
@@ -214,6 +234,7 @@ function pt(ev){const r=$('#ov').getBoundingClientRect();  // the transformed bo
   return [clamp((ev.clientX-r.left)/r.width,0,1),clamp((ev.clientY-r.top)/r.height,0,1)];}
 function place(shape){if(tool==='motion_mask')zones.motion_mask.push(shape);
   else if(tool==='exclude')zones.exclude.push({shape,mode:'hide_unrecognized'});  // the cautious mode first
+  else if(tool==='alert')zones.alert.push({shape,name:'alert area',min_size:0.06,skip:['squirrel','rodent']});  // bigger than a songbird
   else zones[tool]=shape; render();}
 function drawDraft(){const ov=$('#ov'); ov.querySelectorAll('.draft').forEach(e=>e.remove()); $('#handles').querySelectorAll('.dh').forEach(e=>e.remove());
   if(drag&&drag.cur){const s=drag.start,p=drag.cur;ov.appendChild(Object.assign(svgShape([Math.min(s[0],p[0]),Math.min(s[1],p[1]),
@@ -265,11 +286,14 @@ function snapURL(){return '/api/snapshot/'+name+'?w=1920&t='+Date.now();}  // fu
 function loadCam(n){name=n;const c=all[n];
   zones={roi:c.roi?c.roi.slice():null,motion_roi:c.motion_roi?copy(c.motion_roi):null,
     motion_mask:(c.motion_mask||[]).map(copy),
-    exclude:(c.exclude||[]).map(z=>({shape:z.poly?{poly:z.poly.map(p=>p.slice())}:z.rect.slice(),mode:z.mode,min_size:z.min_size||0,max_size:z.max_size||0}))};
+    exclude:(c.exclude||[]).map(z=>({shape:z.poly?{poly:z.poly.map(p=>p.slice())}:z.rect.slice(),mode:z.mode,min_size:z.min_size||0,max_size:z.max_size||0})),
+    alert:(c.alert||[]).map(a=>({shape:a.poly?{poly:a.poly.map(p=>p.slice())}:a.rect.slice(),name:a.name,min_size:a.min_size||0,skip:(a.skip||[]).slice()}))};
   draft=null;drag=null;$('#shot').src=snapURL();zs=1;tx=0;ty=0;render();status('');}
 function payload(){return {roi:zones.roi,motion_roi:zones.motion_roi,motion_mask:zones.motion_mask,
   exclude:zones.exclude.map(z=>Object.assign(isPoly(z.shape)?{poly:z.shape.poly,mode:z.mode}:{rect:z.shape,mode:z.mode},
-    z.min_size?{min_size:z.min_size}:{},z.max_size?{max_size:z.max_size}:{}))};}
+    z.min_size?{min_size:z.min_size}:{},z.max_size?{max_size:z.max_size}:{})),
+  alert:zones.alert.map(a=>Object.assign(isPoly(a.shape)?{poly:a.shape.poly}:{rect:a.shape},
+    {name:a.name,skip:a.skip},a.min_size?{min_size:a.min_size}:{}))};}
 $('#shot').onerror=()=>$('#stage').classList.add('noshot');
 $('#shot').onload=()=>$('#stage').classList.remove('noshot');
 $('#camera').onchange=()=>loadCam($('#camera').value);

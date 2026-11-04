@@ -6,7 +6,7 @@ against, and the zone overlay file the dashboard's editor writes (data/zones.jso
 from __future__ import annotations
 
 import json
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -155,6 +155,66 @@ def exclude_json(zone: Exclude) -> dict:
     return out
 
 
+@dataclass(frozen=True)
+class AlertArea:
+    """An alert area: a text (see alerts.Alerter) as soon as anything is boxed with its centre in the
+    shape, its larger side at least min_size of the frame, and neither its label nor its group in `skip`.
+    The label isn't trusted to say what it is (a cat on a fence is often boxed "bird", "animal" or
+    even "person"); the place and size are, and `skip` keeps out what's reliably told apart there
+    (squirrels, mostly)."""
+    shape: Shape
+    name: str = "alert area"  # starts the text: "cat on fence: animal at west_alley, 9:02am"
+    min_size: float = 0.0
+    skip: tuple[str, ...] = ()
+
+    def holds(self, cx: float, cy: float, w: float, h: float) -> bool:
+        return max(w, h) >= self.min_size and shape_contains(self.shape, cx, cy)
+
+
+def parse_alerts(value, where: str) -> tuple[AlertArea, ...]:
+    """A list of alert areas, each {"rect": [x, y, w, h]} or {"poly": [[x, y], ...]}, with an optional
+    "name", "min_size" (0..1, a fraction of the frame) and "skip" (labels or groups that never alert)."""
+    if value is None:
+        return ()
+    if not isinstance(value, list) or not all(isinstance(z, dict) for z in value):
+        raise ConfigError(f"{where}: alert must be a list of {{rect|poly, name, min_size, skip}}")
+    out = []
+    for z in value:
+        shape = parse_poly(z["poly"], where, "alert") if "poly" in z else parse_rect(z.get("rect"), where, "alert")
+        skip = z.get("skip") or []
+        if not isinstance(skip, list) or not all(isinstance(s, str) for s in skip):
+            raise ConfigError(f"{where}: alert skip must be a list of labels or groups")
+        out.append(AlertArea(shape, str(z.get("name") or "alert area").strip(), _size(z, "min_size", where),
+                             tuple(s.strip().lower() for s in skip if s.strip())))
+    return tuple(out)
+
+
+def alert_json(area: AlertArea) -> dict:
+    out = {"poly": [list(p) for p in area.shape]} if is_poly(area.shape) else {"rect": list(area.shape)}
+    out["name"] = area.name
+    if area.min_size:
+        out["min_size"] = area.min_size
+    out["skip"] = list(area.skip)
+    return out
+
+
+def alert_hits(camera: Camera, detections) -> list[tuple[AlertArea, object]]:
+    """(area, detection) for each detection that sets off one of the camera's alert areas. Boxes are
+    fractions of the analysis frame (the roi crop); areas, like zones, are fractions of the full frame."""
+    if not camera.alert:
+        return []
+    rx, ry, rw, rh = camera.roi or (0.0, 0.0, 1.0, 1.0)
+    hits = []
+    for d in detections:
+        b = d.box
+        cx, cy = rx + (b.x + b.w / 2) * rw, ry + (b.y + b.h / 2) * rh
+        for area in camera.alert:
+            if (d.label.name.lower() not in area.skip and d.key.lower() not in area.skip
+                    and area.holds(cx, cy, b.w * rw, b.h * rh)):
+                hits.append((area, d))
+    return hits
+
+
 def parse_shapes(value, where: str, key: str) -> tuple[Shape, ...]:
     """A list of zone shapes, rectangles and/or polygons (empty if omitted)."""
     if value is None:
@@ -167,13 +227,13 @@ def parse_shapes(value, where: str, key: str) -> tuple[Shape, ...]:
 parse_rects = parse_shapes  # the old name: motion masks were rectangles only
 
 
-ZONE_FIELDS = ("roi", "motion_roi", "motion_mask", "exclude")  # per-camera zones the web editor owns
+ZONE_FIELDS = ("roi", "motion_roi", "motion_mask", "exclude", "alert")  # per-camera zones the web editor owns
 
 
 def load_zone_overlay(path: str | Path) -> dict[str, dict]:
     """The app-owned zone overrides (data/zones.json), parsed and validated. Maps a camera name to
     the zone fields it overrides: `roi`/`motion_roi` as a Rect (or None to clear), `motion_mask`
-    as a tuple of Rects and `exclude` as a tuple of (Rect, mode). A missing file is no overrides ({}); a malformed one fails loudly, the way
+    as a tuple of Rects, `exclude` as a tuple of (Rect, mode) and `alert` as a tuple of AlertArea. A missing file is no overrides ({}); a malformed one fails loudly, the way
     a bad cameras.yaml does. The web editor is the sole writer."""
     path = Path(path).expanduser()
     if not path.exists():
@@ -199,13 +259,15 @@ def load_zone_overlay(path: str | Path) -> dict[str, dict]:
             over["motion_mask"] = parse_shapes(raw["motion_mask"], where, "motion_mask")
         if "exclude" in raw:
             over["exclude"] = parse_excludes(raw["exclude"], where)
+        if "alert" in raw:
+            over["alert"] = parse_alerts(raw["alert"], where)
         if over:
             overlay[name] = over
     return overlay
 
 
 def apply_zone_overlay(cameras: dict[str, Camera], overlay: dict[str, dict]) -> dict[str, Camera]:
-    """Merge a zone overlay into `cameras` in place, overriding roi/motion_roi/motion_mask/exclude where the
+    """Merge a zone overlay into `cameras` in place, overriding roi/motion_roi/motion_mask/exclude/alert where the
     overlay sets them. Overlay names matching no camera are ignored. Returns the same dict."""
     for name, over in overlay.items():
         if name in cameras:

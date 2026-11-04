@@ -586,6 +586,24 @@ def test_zone_editor_saves_min_size_and_leaves_zones_without_it_alone(tmp_path, 
     assert client.post("/api/zones/backyard", json=inverted).status_code == 400
 
 
+def test_zone_editor_saves_alert_areas_and_an_older_page_keeps_them(tmp_path, client, no_reload):
+    import json
+    area = {"rect": [0.1, 0.45, 0.2, 0.12], "name": "cat on fence", "min_size": 0.06, "skip": ["squirrel", "rodent"]}
+    zones = {"roi": None, "motion_roi": None, "motion_mask": [], "exclude": [], "alert": [area]}
+    r = client.post("/api/zones/backyard", json=zones)
+    assert r.status_code == 200 and r.json()["zones"]["alert"] == [area]
+    assert json.loads((tmp_path / "zones.json").read_text())["cameras"]["backyard"]["alert"] == [area]
+    # a page loaded before alert areas existed sends none: the drawn areas stay
+    older = {k: v for k, v in zones.items() if k != "alert"}
+    assert client.post("/api/zones/backyard", json=older).json()["zones"]["alert"] == [area]
+    assert client.post("/api/zones/backyard", json={**zones, "alert": [{**area, "skip": "squirrel"}]}).status_code == 400
+    # deleting the last one is saved as none, not left out (left out would mean "keep cameras.yaml's")
+    assert client.post("/api/zones/backyard", json={**zones, "alert": []}).json()["zones"]["alert"] == []
+    assert json.loads((tmp_path / "zones.json").read_text())["cameras"]["backyard"]["alert"] == []
+    assert "alert" not in json.loads((tmp_path / "zones.json").read_text())["cameras"].get("alley", {})
+    assert 'value="alert"' in client.get("/zones").text and 'id="l-alert"' in client.get("/zones").text
+
+
 def test_zone_outlines_stay_thin_at_any_zoom(client):
     """The zoom scales the whole drawing layer, so outline width (and dashes) divide by the zoom
     level the editor sets on it: 2px on screen whether at 100% or 750%."""

@@ -4,7 +4,7 @@
 ![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13-blue)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
-_Last updated: 2026-11-03_
+_Last updated: 2026-11-04_
 
 An MCP server and an always-on monitor for home IP cameras, built to watch for wildlife on one
 machine without saturating it.
@@ -290,9 +290,23 @@ Any visit can be shown or hidden by hand from the viewer (**show** / **hide**), 
 by the gate or a zone. Zones apply to new visits. In `zones.json` the modes are `ignore` and
 `hide_unrecognized` (the earlier `all` / `unnamed` are still read).
 
+**Alert areas.** `alert_species: [coyote, owls, …]` under `site:` texts `SMS_ALERT_TO` the first
+time one of those is seen on any camera, then stays quiet for 5 minutes per species. That only
+works when the label is right, and labels on small or partly hidden animals often aren't: a cat on
+a fence can be logged as a bird, a rodent, an animal or even a person. An **alert area** goes by
+place and size instead. Draw one with the **alert area** tool in the zones editor, and anything
+boxed with its centre inside, at least **min size** of the frame across and not labelled one of its
+**skip** labels or groups, sends a text, whatever its label: `cat on fence: bird at west_alley,
+9:02am`. The text starts with the area's **name** and carries the label, so you can judge it.
+Each area then stays quiet for 5 minutes. New areas start at min size 0.06 (most songbirds box
+smaller; a cat on a fence boxed 0.04–0.21) and skip `squirrel, rodent`, which sit in the same places
+at the same sizes as a cat but are usually labelled right. Areas are opt-in, per camera, and need
+the same mail settings and `SMS_ALERT_TO`. In `zones.json` they're under `alert`:
+`{"rect" | "poly", "name", "min_size", "skip": [...]}`.
+
 **Drawing zones.** The editor zooms (wheel, trackpad pinch, or **+ / − / fit**) and pans
-(**Space**-drag, middle-drag or **✋**), on a full-resolution snapshot. Motion ROI, motion mask and
-exclusion zones can be **polygons** as well as rectangles: pick **polygon**, click points, close
+(**Space**-drag, middle-drag or **✋**), on a full-resolution snapshot. Motion ROI, motion mask,
+exclusion zones and alert areas can be **polygons** as well as rectangles: pick **polygon**, click points, close
 with **Enter**, a double-click or a click on the first point; drag a point to move it, **Alt**-click
 to delete one. The analysis ROI is always a rectangle (the detector needs one). Polygons cost no
 throughput: motion zones are rasterised into a pixel mask once at startup (per frame it's one
