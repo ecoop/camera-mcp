@@ -739,7 +739,7 @@ def test_the_viewer_tags_single_boxes_and_names_species(client):
     assert "if(moved>5||mode!=='image'||!boxesOn||!boxData)return;" in page
     assert ".sort((a,b)=>a.w*a.h-b.w*b.h)[0]" in page
     assert ".boxov rect.inh{stroke-dasharray:6 4}" in page and "t.source==='visit'?' inh'" in page
-    assert "if(!had&&v!=='wrong_species')setTimeout(nextUnlabelled,350)" in page
+    assert "if(v!=='wrong_species'||keep)setTimeout(nextUnlabelled,350)" in page
     assert "if(v==='real'&&!curLabel&&await postLabel('real',''))" in page  # a box tagged real makes an untagged visit real
     assert '<datalist id="spplist">' in page and client.get("/api/labels/species").json() == {"species": []}
 
@@ -855,3 +855,11 @@ def test_zone_editor_resizes_rectangles_and_moves_any_zone(client):
     page = client.get("/zones").text
     assert "function rectHandles(s)" in page and "else rectHandles(s); grip(s);" in page
     assert "function grip(s)" in page and "clamp(p[0]-start[0],-b[0],1-b[0]-b[2])" in page
+
+
+def test_every_visit_tag_moves_on_to_the_next_visit(client):
+    """Real and false move on at once, even when the visit was already tagged (a real box tag makes
+    it real first); wrong sp. moves on once it's named."""
+    html = client.get("/").text
+    assert "if(v!=='wrong_species'||keep)setTimeout(nextUnlabelled" in html and "!had&&" not in html
+    assert "v==='wrong_species'&&sp&&VIEW!=='map')setTimeout(nextUnlabelled" in html

@@ -467,14 +467,16 @@ async function postLabel(v,species){const res=await fetch('/api/visit/'+curVisit
   if(res.ok){curLabel={verdict:v,species:v==='false'?null:species||null}; if(species)SPP=false;
     if(curClip){boxData=null; loadBoxData().then(drawBoxes);} refreshBoxQueue();}  // inherited box tags follow the visit's
   return res.ok;}
-$('#vsp').addEventListener('change',()=>{if(labelEditable&&curVisit&&curLabel)postLabel(curLabel.verdict,$('#vsp').value.trim()).then(()=>loadPickerSpecies());});
+$('#vsp').addEventListener('change',()=>{if(!(labelEditable&&curVisit&&curLabel))return; const v=curLabel.verdict, sp=$('#vsp').value.trim();
+  postLabel(v,sp).then(ok=>{loadPickerSpecies();
+    if(ok&&v==='wrong_species'&&sp&&VIEW!=='map')setTimeout(nextUnlabelled,350);});});  // wrong sp., once named: move on
 async function setLabel(v){if(!labelEditable||!curVisit)return;
   try{const keep=v!=='false'?$('#vsp').value.trim():'';
     if(await postLabel(v,keep)){markLabel(v); const t=tileOf(curVisit);
       const md=document.querySelector('.mdot[data-id="'+curVisit+'"]'); if(md){md.className='mdot v-'+v; MAPV[curVisit]&&(MAPV[curVisit].verdict=v);}
       if(VIEW==='map'){if(t)t.dataset.verdict=v;}  // map view: recolour only; never auto-advance through another view's grid
-      else if(t){const had=t.dataset.verdict; t.dataset.verdict=v;  // CSS restyles the tile from this
-        if(!had&&v!=='wrong_species')setTimeout(nextUnlabelled,350);}}}catch(e){}}  // first label: move on (wrong sp. waits for its species)
+      else if(t){t.dataset.verdict=v;  // CSS restyles the tile from this
+        if(v!=='wrong_species'||keep)setTimeout(nextUnlabelled,350);}}}catch(e){}}  // a tag moves on (wrong sp. once it's named)
 function tileOf(id){return document.querySelector('#grid .tile[data-id="'+id+'"]')||document.querySelector('#askgrid .tile[data-id="'+id+'"]')
   ||document.querySelector('#mapgrid .tile[data-id="'+id+'"]')||document.querySelector('#queuegrid .tile[data-id="'+id+'"]');}
 function nextUnlabelled(){const ts=[...document.querySelectorAll('#grid .tile')], i=ts.indexOf(tileOf(curVisit));
