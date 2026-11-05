@@ -4,7 +4,7 @@
 ![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13-blue)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
-_Last updated: 2026-11-04_
+_Last updated: 2026-11-05_
 
 An MCP server and an always-on monitor for home IP cameras, built to watch for wildlife on one
 machine without saturating it.
@@ -224,7 +224,8 @@ against the camera's own history first (read-only):
 
 To check the gate by eye, pick species "animal" and tick **+ hidden** on the dashboard: hidden
 visits show a badge with the reason. Open one and mark it real or false; the viewer moves on to
-the next unlabelled visit (or press **next unlabelled ›**). The backtest's `lbl_real` column then
+the next unlabelled visit (or press **next unlabelled ›**). Wrong sp. moves on once you've said
+what it was. The backtest's `lbl_real` column then
 counts real animals the rules would hide. A label is per visit, but a visit you mark real
 can still have a junk box or two (a bird on the feeder plus a box on the clothesline), so single
 boxes can be tagged too, and any tag can say what the animal actually was (a species: the right
