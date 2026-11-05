@@ -739,7 +739,7 @@ def test_the_viewer_tags_single_boxes_and_names_species(client):
     assert "if(moved>5||mode!=='image'||!boxesOn||!boxData)return;" in page
     assert ".sort((a,b)=>a.w*a.h-b.w*b.h)[0]" in page
     assert ".boxov rect.inh{stroke-dasharray:6 4}" in page and "t.source==='visit'?' inh'" in page
-    assert "if(v!=='wrong_species'||keep)setTimeout(nextUnlabelled,350)" in page
+    assert "if(v!=='wrong_species'||keep)setTimeout(advance,350)" in page
     assert "if(v==='real'&&!curLabel&&await postLabel('real',''))" in page  # a box tagged real makes an untagged visit real
     assert '<datalist id="spplist">' in page and client.get("/api/labels/species").json() == {"species": []}
 
@@ -861,5 +861,40 @@ def test_every_visit_tag_moves_on_to_the_next_visit(client):
     """Real and false move on at once, even when the visit was already tagged (a real box tag makes
     it real first); wrong sp. moves on once it's named."""
     html = client.get("/").text
-    assert "if(v!=='wrong_species'||keep)setTimeout(nextUnlabelled" in html and "!had&&" not in html
-    assert "v==='wrong_species'&&sp&&VIEW!=='map')setTimeout(nextUnlabelled" in html
+    assert "if(v!=='wrong_species'||keep)setTimeout(advance" in html and "!had&&" not in html
+    assert "v==='wrong_species'&&sp&&VIEW!=='map')setTimeout(advance" in html
+
+
+def test_the_viewer_shows_the_tag_models_suggestion_and_its_queue(tmp_path):
+    """/api/visit/<id>/suggestion gives a visit's suggestion and the tag accepting it records;
+    /api/labels/suggested lists the untagged ones, most useful first, leaving out what's been tagged."""
+    import json
+    import time
+
+    from camera_mcp.config import Camera
+    from camera_mcp.store import Store
+    from camera_mcp.visits import Visit
+    from camera_mcp.web import build_app
+    store = Store(tmp_path / "monitor.db")
+    ids = []
+    for logged in ("bird", "songbirds", "cat"):
+        v = Visit("alley", logged, start=time.time() - 600, last_seen=time.time() - 500, frames=1)
+        v.votes[(logged, "")] = 1.0
+        ids.append(store.add_visit(v, model="m", thumbnail=None, clip=None))
+    store.set_visit_label(ids[2], "real")
+    store.close()
+    (tmp_path / "tagmodel").mkdir()
+    s = lambda g, logged, useful: {"group": g, "p": 0.9, "second": "rat", "p2": 0.05, "logged": logged,  # noqa: E731
+                                   "boxes": 1, "useful": useful}
+    (tmp_path / "tagmodel" / "suggestions.json").write_text(json.dumps({"model": "20261105-1303", "visits": {
+        str(ids[0]): s("cat", "bird", 0.2), str(ids[1]): s("cat", "songbirds", 1.2), str(ids[2]): s("cat", "cat", 0.1)}}))
+    c = starlette_testclient.TestClient(build_app({"alley": Camera("alley", "a.mp4")}, tmp_path, None))
+    one = c.get(f"/api/visit/{ids[1]}/suggestion").json()
+    assert one["suggestion"]["group"] == "cat" and one["accept"] == {"verdict": "wrong_species", "species": "cat"}
+    assert c.get(f"/api/visit/{ids[0]}/suggestion").json()["accept"] == {"verdict": "real", "species": "cat"}
+    assert c.get("/api/visit/999/suggestion").json()["suggestion"] is None
+    q = c.get("/api/labels/suggested").json()
+    assert [v["id"] for v in q["visits"]] == [ids[1], ids[0]] and q["count"] == 2  # the tagged one is gone
+    assert q["visits"][0]["suggestion"]["logged"] == "songbirds"
+    html = c.get("/").text
+    assert 'id="suggok"' in html and 'id="usebtn"' in html and "function advance()" in html

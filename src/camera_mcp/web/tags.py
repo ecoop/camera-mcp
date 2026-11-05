@@ -88,6 +88,32 @@ def routes(ctx: Context) -> list[Route]:
             return ids
         return JSONResponse({"visits": history.visits_by_id(ids), "count": len(ids)})
 
+    def suggestions() -> dict:
+        """The tag model's suggestions (data/tagmodel/suggestions.json, see tagmodel.suggest)."""
+        from camera_mcp.tagmodel import read_suggestions
+        return read_suggestions(ctx.data_dir)
+
+    async def api_visit_suggestion(request: Request) -> JSONResponse:
+        """The tag model's suggestion for a visit, and the tag accepting it records; null if none."""
+        from camera_mcp.tagmodel import accept_label
+        s = suggestions()
+        got = s["visits"].get(str(request.path_params["vid"]))
+        accept = dict(zip(("verdict", "species"), accept_label(got))) if got else None
+        return JSONResponse({"suggestion": got, "accept": accept, "model": s.get("model")})
+
+    async def api_suggested(request: Request):
+        """The untagged visits with a suggestion, most useful to tag first (see tagmodel.suggest),
+        as /api/visits returns them, each with its `suggestion`: the "most useful next" queue."""
+        s = suggestions()
+        order = sorted(s["visits"], key=lambda k: -s["visits"][k]["useful"])
+        ids = ctx.query(history.untagged, [int(k) for k in order], request.query_params.get("camera") or None)
+        if isinstance(ids, Response):
+            return ids
+        visits = history.visits_by_id(ids[:200])
+        for v in visits:
+            v["suggestion"] = s["visits"][str(v["id"])]
+        return JSONResponse({"visits": visits, "count": len(ids), "model": s.get("model")})
+
     async def api_favorite_set(request: Request):
         """Star or unstar a visit: {"on": true|false, "kind": "still"|"clip", "clip_at": seconds}."""
         if not ctx.editable:
@@ -151,5 +177,7 @@ def routes(ctx: Context) -> list[Route]:
         Route("/api/visit/{vid:int}/box-label", api_box_label_set, methods=["POST"]),
         Route("/api/visit/{vid:int}/favorite", api_favorite_set, methods=["POST"]),
         Route("/api/labels/needs-box-tags", api_needs_box_tags),
+        Route("/api/visit/{vid:int}/suggestion", api_visit_suggestion),
+        Route("/api/labels/suggested", api_suggested),
         Route("/api/labels/species", api_tag_species),
     ]

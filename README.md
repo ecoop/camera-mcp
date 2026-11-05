@@ -400,7 +400,18 @@ report compares the model with the detector's confidence and with what the log s
 It reads the visit log read-only and writes only under `data/tagmodel/`: a feature cache
 (`features.npz`, so a re-run featurizes only new boxes) and a versioned folder with `model.pt`,
 `report.md` and `report.json`. The default runs on the CPU at 4 threads, leaving the GPU to the
-monitor. Nothing uses the model yet: suggestions while tagging and a nightly retrain come next.
+monitor.
+
+    camera-tagmodel suggest [--since 3d] [--model data/tagmodel/<stamp>]
+
+scores the untagged visits since then with the newest model and writes
+`data/tagmodel/suggestions.json`. The visit viewer then shows "suggests **cat** 92% (log: bird)"
+with an **accept** button, which records the tag that suggestion implies: real if the log said the
+same, real and named if the log only said animal or bird, wrong species and named otherwise. It
+moves on like any tag. **most useful next ›** (also above the visits grid) walks the untagged
+visits the model would learn most from: first those where it contradicts the log's name, then
+those it's least sure of. It stays in that queue until it's empty. A nightly retrain-and-suggest
+comes next (#153 step 4); until then run both by hand.
 
 ## Benchmark
 

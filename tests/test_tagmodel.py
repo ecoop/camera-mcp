@@ -38,6 +38,22 @@ def colour_featurizer(calls):
     return lambda: featurize
 
 
+def add_visit(store, db, data, kind, logged, name, t) -> int:
+    """One visit with a still: a grey frame with a `kind`-coloured square, one box on it."""
+    v = Visit("alley", logged, start=t, last_seen=t + 5, frames=1)
+    v.votes[(name, "")] = 1.0
+    n = db.execute("SELECT COUNT(*) FROM visits").fetchone()[0] + 1
+    img = Image.new("RGB", (64, 64), (128, 128, 128))
+    img.paste(COLOURS[kind], (16, 16, 48, 48))
+    img.save(data / "stills" / f"{n}.jpg", quality=95)
+    vid = store.add_visit(v, model="m", thumbnail=None, clip=None, still=f"stills/{n}.jpg")
+    db.execute("INSERT INTO visit_frames VALUES (?, ?, ?, '', 0.9, ?)",
+               (vid, f"2026-01-01T00:00:{n % 60:02d}", name,
+                json.dumps([{"conf": 0.4 + 0.01 * (n % 40), "bbox": [0.25, 0.25, 0.5, 0.5]}])))
+    db.commit()
+    return vid
+
+
 @pytest.fixture
 def log(tmp_path):
     """Two weeks of tagged visits on one camera: cats (one a day logged as "bird" and tagged wrong
@@ -53,18 +69,7 @@ def log(tmp_path):
                 ("songbirds", "songbirds", "house finch", "real", None),
                 ("songbirds", "songbirds", "house finch", "real", None),
                 ("leaves", "animal", "animal", "false", None), ("leaves", "animal", "animal", "false", None)):
-            t = now - (13 - day) * DAY
-            v = Visit("alley", logged, start=t, last_seen=t + 5, frames=1)
-            v.votes[(name, "")] = 1.0
-            n = db.execute("SELECT COUNT(*) FROM visits").fetchone()[0] + 1
-            img = Image.new("RGB", (64, 64), (128, 128, 128))
-            img.paste(COLOURS[kind], (16, 16, 48, 48))
-            img.save(tmp_path / "stills" / f"{n}.jpg", quality=95)
-            vid = store.add_visit(v, model="m", thumbnail=None, clip=None, still=f"stills/{n}.jpg")
-            ts = f"2026-01-01T00:00:{n % 60:02d}"
-            db.execute("INSERT INTO visit_frames VALUES (?, ?, ?, '', 0.9, ?)",
-                       (vid, ts, name, json.dumps([{"conf": 0.4 + 0.01 * (n % 40), "bbox": [0.25, 0.25, 0.5, 0.5]}])))
-            db.commit()
+            vid = add_visit(store, db, tmp_path, kind, logged, name, now - (13 - day) * DAY)
             store.set_visit_label(vid, verdict, species=species)
     db.close()
     store.close()
@@ -108,3 +113,36 @@ def test_too_few_days_to_hold_a_week_out(log):
     history, data = log
     with pytest.raises(HistoryError, match="more than 20 days"):
         tagmodel.run(history, data, test_days=20, make_featurizer=colour_featurizer([]))
+
+
+def test_suggest_scores_untagged_visits_and_ranks_them(log):
+    """After training, today's untagged visits get a suggestion: a cat the log called "bird" (vague:
+    accepting names it, real), a cat the log called songbirds (contradicted: most useful, accepting
+    tags it wrong species), a songbird the log got right (accepting tags it real), and leaves the log
+    called an animal (the real head says no animal: suggested false)."""
+    history, data = log
+    tagmodel.run(history, data, test_days=4, make_featurizer=colour_featurizer([]))
+    store, db = Store(data / "monitor.db"), sqlite3.connect(data / "monitor.db")
+    now = time.time()
+    vague = add_visit(store, db, data, "cat", "bird", "bird", now - 300)
+    wrong = add_visit(store, db, data, "cat", "songbirds", "house finch", now - 200)
+    right = add_visit(store, db, data, "songbirds", "songbirds", "house finch", now - 100)
+    leaves = add_visit(store, db, data, "leaves", "animal", "animal", now - 50)
+    db.close()
+    store.close()
+    got = tagmodel.suggest(history, data, since="1h", make_featurizer=colour_featurizer([]))
+    v = got["visits"]
+    assert set(v) == {str(vague), str(wrong), str(right), str(leaves)}  # the tagged ones aren't scored
+    assert v[str(leaves)]["group"] == "false" and tagmodel.accept_label(v[str(leaves)]) == ("false", "")
+    assert (v[str(vague)]["group"], v[str(wrong)]["group"], v[str(right)]["group"]) == ("cat", "cat", "songbirds")
+    assert v[str(wrong)]["useful"] > 1 > v[str(vague)]["useful"]  # contradicting the log ranks first
+    assert tagmodel.accept_label(v[str(vague)]) == ("real", "cat")
+    assert tagmodel.accept_label(v[str(wrong)]) == ("wrong_species", "cat")
+    assert tagmodel.accept_label(v[str(right)]) == ("real", "")
+    assert tagmodel.read_suggestions(data)["model"] == got["model"]
+
+
+def test_suggest_needs_a_trained_model(log):
+    history, data = log
+    with pytest.raises(HistoryError, match="no trained model"):
+        tagmodel.suggest(history, data, make_featurizer=colour_featurizer([]))

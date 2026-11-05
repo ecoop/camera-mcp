@@ -17,10 +17,20 @@ run, so a changed tag needs no re-featurizing. The test set is the last `test_da
 visits; everything earlier trains. Splitting by day, not at random, keeps near-identical frames of
 one visit from landing on both sides and flattering the score.
 
-A run reads the visit log read-only and writes only under data/tagmodel/: features.npz and a
-versioned <stamp>/ with model.pt and report.md.
+Step 3: `suggest` scores the untagged visits of the last few days with the newest model (their
+features join the cache, so they're ready when tagged) and writes data/tagmodel/suggestions.json:
+each visit's suggestion, how sure the model is, and how useful tagging it would be. The real head
+speaks first: a visit it thinks has no animal is suggested "false" (the group head alone names a
+group even for leaves). Otherwise the group head's answer. Most useful: where the model is fairly
+sure (CONTRADICT_P) the log's name is wrong, then the less sure it is (uncertainty sampling, the
+simplest active learning). The dashboard shows a visit's suggestion with a one-click accept, and
+a "most useful next" queue of the untagged ones, in that order.
 
-    camera-tagmodel [--device cpu] [--threads 4] [--test-days 7] [--config cameras.yaml] [--data-dir data]
+A run reads the visit log read-only and writes only under data/tagmodel/: features.npz, a
+versioned <stamp>/ with model.pt and report.md, and suggestions.json.
+
+    camera-tagmodel [train] [--device cpu] [--threads 4] [--test-days 7] [--config cameras.yaml] [--data-dir data]
+    camera-tagmodel suggest [--since 3d] [--model data/tagmodel/<stamp>] [--device cpu] [--threads 4]
 """
 
 from __future__ import annotations
@@ -43,6 +53,7 @@ from camera_mcp.history.base import _named_as
 VAGUE = frozenset({"animal", "mammal", "bird", "reptile", "amphibian"})  # real, but no group to learn
 MIN_CLASS = 8  # train examples a group needs to get its own output
 L2 = (1e-4, 1e-3, 1e-2, 1e-1)  # weight-decay choices, picked on the last fifth of the training days
+CONTRADICT_P = 0.6  # how sure a suggestion must be before contradicting the log moves it up the queue
 
 
 @dataclass
@@ -57,15 +68,24 @@ class Example:
     real: bool
     group: str | None  # the owner's group for a real box; None if false, unnamed wrong_species or vague
     logged: str  # the group the log filed the visit under (what SpeciesNet's pipeline said)
-    source: str  # "box" (the owner tagged this box) or "visit" (inherited from the visit's tag)
+    source: str  # "box" (the owner tagged this box), "visit" (inherited from the visit's tag), "none" (untagged)
 
 
-def examples(history: History, data_dir: Path) -> tuple[list[Example], dict[int, Path], Counter]:
-    """The tagged boxes of each tagged visit's still, their stills, and counts of what was skipped."""
+def examples(history: History, data_dir: Path, untagged_since: float | None = None
+             ) -> tuple[list[Example], dict[int, Path], Counter]:
+    """The tagged boxes of each tagged visit's still, their stills, and counts of what was skipped.
+    With `untagged_since` (epoch seconds): instead every box of the stills of visits since then that
+    have no tag and weren't hidden, to be scored (source "none")."""
     skipped: Counter = Counter()
     with closing(history._db()) as db:
-        visits = db.execute("SELECT v.id, v.camera, v.started_at, v.grp FROM visits v"
-                            " JOIN visit_labels l ON l.visit_id = v.id ORDER BY v.started_at").fetchall()
+        if untagged_since is None:
+            visits = db.execute("SELECT v.id, v.camera, v.started_at, v.grp FROM visits v"
+                                " JOIN visit_labels l ON l.visit_id = v.id ORDER BY v.started_at").fetchall()
+        else:
+            shown = " AND v.suppressed IS NULL" if "suppressed" in {r[1] for r in db.execute("PRAGMA table_info(visits)")} else ""
+            visits = db.execute("SELECT v.id, v.camera, v.started_at, v.grp FROM visits v WHERE v.started_at >= ?"
+                                f" AND v.id NOT IN (SELECT visit_id FROM visit_labels){shown} ORDER BY v.started_at",
+                                (history._iso(untagged_since),)).fetchall()
         named: dict[str, str] = {}
 
         def group(tag) -> str | None:
@@ -94,7 +114,9 @@ def examples(history: History, data_dir: Path) -> tuple[list[Example], dict[int,
                         if tag is not None and tag["source"] == "box":
                             skipped["box tags on a frame with no still"] += 1
                         continue
-                    if tag is None:
+                    if untagged_since is not None:
+                        tag = {"verdict": "", "species": None, "source": "none"}
+                    elif tag is None:
                         skipped["untagged box of a real visit"] += 1
                         continue
                     try:
@@ -105,8 +127,8 @@ def examples(history: History, data_dir: Path) -> tuple[list[Example], dict[int,
                     if roi:
                         rx, ry, rw, rh = roi
                         x, y, w, h = rx + x * rw, ry + y * rh, w * rw, h * rh
-                    real = tag["verdict"] != "false"
-                    grp = group(tag)
+                    real = tag["verdict"] not in ("false", "")
+                    grp = group(tag) if tag["verdict"] else None
                     if real and grp is None and tag["verdict"] == "real":
                         grp = v["grp"]  # tagged real and not renamed: the log's name was right
                     out.append(Example(f"{v['id']}:{f['ts']}:{i}", v["id"], v["camera"], day, (x, y, w, h),
@@ -356,9 +378,90 @@ def report(exs, test, test_from, skipped, real_y, real_got, real_p, conf, cut, n
     return {"md": "\n".join(lines) + "\n", "json": js}
 
 
+def latest_model(data_dir: Path) -> Path:
+    """The newest trained run under data/tagmodel/ (its folder). Raises HistoryError if there's none."""
+    runs = sorted(p for p in (data_dir / "tagmodel").glob("*/model.pt"))
+    if not runs:
+        raise HistoryError("no trained model yet: run camera-tagmodel first")
+    return runs[-1].parent
+
+
+def suggest(history: History, data_dir: Path, *, since: str = "3d", model_dir: Path | None = None,
+            make_featurizer=Featurizer, log=print) -> dict:
+    """Score the untagged visits since `since` with a trained model and write
+    data/tagmodel/suggestions.json (see the module docstring); returns what was written."""
+    import time
+
+    import torch
+
+    from camera_mcp.history.base import parse_when
+
+    model_dir = model_dir or latest_model(data_dir)
+    m = torch.load(model_dir / "model.pt", weights_only=False)
+    exs, stills, _ = examples(history, data_dir, untagged_since=parse_when(since, time.time(), history.tz))
+    feats = featurize(exs, stills, data_dir / "tagmodel" / "features.npz", make_featurizer, log) if exs else {}
+    names, (gw, gb), (rw, rb) = m["groups"], m["group"], m["real"]
+    by_visit: dict[int, list[Example]] = {}
+    for e in exs:
+        by_visit.setdefault(e.visit_id, []).append(e)
+    out = {}
+    for vid, es in by_visit.items():
+        x = (np.stack([feats[e.key] for e in es]) - m["mean"]) / m["std"]
+        w = np.array([max(e.conf, 1e-3) for e in es])
+
+        def visit_probs(weight, bias):  # each box's probabilities, weighted by the detector's confidence
+            z = x @ weight.T + bias
+            p = np.exp(z - z.max(axis=1, keepdims=True))
+            p /= p.sum(axis=1, keepdims=True)
+            return (p * w[:, None]).sum(axis=0) / w.sum()
+
+        real, gp = float(visit_probs(rw, rb)[1]), visit_probs(gw, gb)
+        first, second = np.argsort(gp)[::-1][:2] if len(names) > 1 else (0, 0)
+        logged = es[0].logged
+        if real < 0.5:  # most likely no animal: leaves, fruit, a shadow
+            group, p, second_name, p2 = "false", 1 - real, names[first], float(gp[first])
+            margin, contradicts = abs(2 * real - 1), False
+        else:
+            group, p, second_name, p2 = names[first], float(gp[first]), names[second], float(gp[second])
+            margin = min(p - p2, abs(2 * real - 1))  # unsure of either answer is unsure
+            contradicts = logged not in VAGUE and logged != group and p >= CONTRADICT_P
+        out[str(vid)] = {"group": group, "p": round(p, 3), "second": second_name, "p2": round(p2, 3),
+                         "real": round(real, 3), "logged": logged, "boxes": len(es),
+                         "useful": round((1.0 if contradicts else 0.0) + 1.0 - margin, 3)}
+    written = {"model": model_dir.name, "made": datetime.now().astimezone().isoformat(timespec="seconds"),
+               "since": since, "groups": names, "visits": out}
+    path = data_dir / "tagmodel" / "suggestions.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(written, indent=1))
+    return written
+
+
+def read_suggestions(data_dir: Path) -> dict:
+    """data/tagmodel/suggestions.json, or an empty set of suggestions if there's none yet."""
+    try:
+        return json.loads((data_dir / "tagmodel" / "suggestions.json").read_text())
+    except (OSError, ValueError):
+        return {"model": None, "visits": {}}
+
+
+def accept_label(suggestion: dict) -> tuple[str, str]:
+    """The tag that accepting a suggestion records: (verdict, species). "false" -> false; the log's
+    own group -> real; a group for what the log left vague ("animal", "bird") -> real, named;
+    another group -> wrong species, named."""
+    group, logged = suggestion["group"], suggestion["logged"]
+    if group == "false":
+        return "false", ""
+    if group == logged:
+        return "real", ""
+    return ("real" if logged in VAGUE else "wrong_species"), group
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="camera-tagmodel", description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("step", nargs="?", choices=["train", "suggest"], default="train")
+    parser.add_argument("--since", default="3d", help="suggest: score untagged visits since then (default 3d)")
+    parser.add_argument("--model", type=Path, default=None, help="suggest: a trained run's folder (default: the newest)")
     parser.add_argument("--device", default="cpu", help="cpu (default: leaves the GPU to the monitor), mps or cuda")
     parser.add_argument("--threads", type=int, default=4, help="CPU threads for featurizing")
     parser.add_argument("--test-days", type=int, default=7)
@@ -369,8 +472,12 @@ def main(argv: list[str] | None = None) -> None:
     try:
         cameras = load_cameras(str(args.config), require_login=False)
         history = History(data_dir / "monitor.db", cameras, load_site(str(args.config)))
-        out = run(history, data_dir, test_days=args.test_days,
-                  make_featurizer=lambda: Featurizer(args.device, args.threads))
+        make = lambda: Featurizer(args.device, args.threads)  # noqa: E731
+        if args.step == "suggest":
+            got = suggest(history, data_dir, since=args.since, model_dir=args.model, make_featurizer=make)
+            print(f"camera-tagmodel: {len(got['visits'])} untagged visits since {args.since} scored with {got['model']}")
+            return
+        out = run(history, data_dir, test_days=args.test_days, make_featurizer=make)
     except (ConfigError, HistoryError) as e:
         print(f"camera-tagmodel: {e}", file=sys.stderr)
         raise SystemExit(1) from None
