@@ -387,6 +387,21 @@ $0.25 a run and `AGENT_DAILY_USD` (default $0.50) a day, tracked in `data/agent_
 
 `deploy/install-agent.sh weekly-digest` schedules it weekly (Sunday 08:00 by default, by email).
 
+## Tag model (experimental)
+
+`camera-tagmodel` learns the owner's tags on top of SpeciesNet (#153). For each tagged visit's
+still it crops the tagged boxes, reads SpeciesNet's features (the 1,280 numbers its last layer
+reads, through a forward hook; SpeciesNet itself is unchanged), and trains two small linear heads:
+real or false, and which group. The last 7 days with tags are held out as the test set, and the
+report compares the model with the detector's confidence and with what the log said.
+
+    camera-tagmodel [--device cpu] [--threads 4] [--test-days 7]
+
+It reads the visit log read-only and writes only under `data/tagmodel/`: a feature cache
+(`features.npz`, so a re-run featurizes only new boxes) and a versioned folder with `model.pt`,
+`report.md` and `report.json`. The default runs on the CPU at 4 threads, leaving the GPU to the
+monitor. Nothing uses the model yet: suggestions while tagging and a nightly retrain come next.
+
 ## Benchmark
 
 ```bash
