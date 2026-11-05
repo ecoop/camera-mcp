@@ -30,6 +30,7 @@ detect = ["speciesnet>=5.0.5; python_version < '3.14'"]
 camera-mcp = "camera_mcp.server:main"
 camera-monitor = "camera_mcp.monitor:main"
 camera-backtest = "camera_mcp.gate:main"
+camera-tagmodel = "camera_mcp.tagmodel:main"
 camera-agent = "camera_mcp.agent:main"
 camera-watchdog = "camera_mcp.watchdog:main"
 
