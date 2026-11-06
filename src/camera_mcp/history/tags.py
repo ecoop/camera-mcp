@@ -102,6 +102,23 @@ class TagQueries:
         with closing(self._db()) as db:
             return self._label(db, visit_id)
 
+    def untagged(self, ids: list[int], camera: str | None = None) -> list[int]:
+        """Those of `ids` that have no visit tag now (and are on `camera`, if given), in the same order."""
+        if not ids:
+            return []
+        with closing(self._db()) as db:
+            tagged = ({r[0] for r in db.execute("SELECT visit_id FROM visit_labels")}
+                      if "visit_labels" in _tables(db) else set())
+            if camera:
+                cam = find_camera(self.cameras, camera)
+                if cam is None:
+                    raise HistoryError(f"unknown camera {camera!r}; known: {', '.join(sorted(self.cameras))}")
+                on = {r[0] for r in db.execute(f"SELECT id FROM visits WHERE camera = ? AND id IN ({','.join('?' * len(ids))})",
+                                               (cam.name, *ids))}
+            else:
+                on = set(ids)
+        return [i for i in ids if i in on and i not in tagged]
+
     def needs_box_tags(self, camera: str | None = None, limit: int = 500) -> list[int]:
         """Visits tagged real whose still (best frame) shows a box with no tag of its own or
         inherited (see box_tags): the ones to revisit so every box on a training still is known.
