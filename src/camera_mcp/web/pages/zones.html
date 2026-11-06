@@ -15,6 +15,10 @@
 .bar{display:flex;align-items:center;justify-content:space-between;gap:.6rem;flex-wrap:wrap;margin-bottom:1rem}
 .brand{font-family:var(--mono);font-weight:600;font-size:1.2rem}
 .brand a{color:inherit;text-decoration:none}
+.tabs{display:flex;gap:1rem;flex:1;margin-left:1.3rem}
+.tabs a{font-family:var(--mono);font-size:.82rem;color:var(--muted);text-decoration:none;text-transform:lowercase;letter-spacing:.02em;padding:.1rem 0;border-bottom:2px solid transparent}
+.tabs a.active{color:var(--accent);border-bottom-color:var(--accent)}
+.tabs a:hover{color:var(--ink)}
 .who{font-family:var(--mono);font-size:.72rem;color:var(--muted)}
 .row{display:flex;gap:.6rem;flex-wrap:wrap;align-items:center;margin-bottom:.8rem}
 select,button{font-family:var(--mono);font-size:.78rem;background:var(--frame);color:var(--ink);
@@ -80,8 +84,9 @@ button:disabled{opacity:.5;cursor:default}
 .cols{display:grid;grid-template-columns:minmax(0,960px) 240px;gap:1.2rem;align-items:start}
 @media(max-width:760px){.cols{grid-template-columns:1fr}}
 </style></head><body><div class="wrap">
-<div class="bar"><div class="brand"><a href="/">&#129437; Yard Sentry</a> &middot; zones</div>
-  <div class="who"><a href="/" style="color:var(--accent);text-decoration:none">&larr; dashboard</a></div></div>
+<div class="bar"><div class="brand"><a href="/">&#129437; Yard Sentry</a></div>
+  <nav class="tabs"><a href="/">feeds</a><a href="/analytics">analytics</a><a href="/map">map</a>
+    <a href="/zones" class="active">zones</a></nav></div>
 <div class="row">
   <select id="camera"></select>
   <div class="tools">
