@@ -313,7 +313,8 @@ the same mail settings and `SMS_ALERT_TO`. In `zones.json` they're under `alert`
 shut their email-to-text gateways (AT&T's `txt.att.net` no longer delivers). An alert email has the
 alert as its subject, shows a close-up of the box that set it off at full resolution, and attaches
 the whole frame with the box drawn on it. Set `WEB_URL` (the dashboard's address as your phone
-reaches it, e.g. `http://studio.local:8080`) in the credentials file and it also links to the visit.
+reaches it, e.g. `http://studio.local:8080`) in the credentials file and it also links to the visit
+(`/?visit=<number>`), which opens it in the dashboard ready to tag.
 
 **Drawing zones.** The editor zooms (wheel, trackpad pinch, or **+ / − / fit**) and pans
 (**Space**-drag, middle-drag or **✋**), on a full-resolution snapshot. Motion ROI, motion mask,
@@ -359,6 +360,8 @@ low effort) answers with the MCP server's own read-only history tools (`find_vis
 is defined once, in `server.py`, for the ask box, Claude Code and any agent alike. Visits it mentions
 show as thumbnails you can open, label or hide. **Only metadata leaves the machine** (labels, times,
 counts, camera names), never images or clips. It can't change settings or control cameras.
+The same box finds visits by number, with no model call and whether or not asking is on: `#15779`
+opens that visit ready to tag, and `#13818 #7151` shows several.
 
 It's off until the host has an API key. To turn it on:
 

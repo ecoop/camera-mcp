@@ -77,7 +77,7 @@ class Alerter:
                     close, full = photo()
                 except Exception:  # an alert without a picture beats no alert
                     log.exception("alert photo failed for %s", body)
-            link = f"{self.web_url}/visit/{visit}/image" if self.web_url and visit is not None else None
+            link = f"{self.web_url}/?visit={visit}" if self.web_url and visit is not None else None  # opens it to tag
             attachments = ((f"{camera}-{self._local(t):%Y-%m-%d-%H%M%S}.jpg", full),) if full else ()
             text = body + (f" (visit {visit})" if visit is not None else "")
             try:

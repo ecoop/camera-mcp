@@ -40,6 +40,12 @@ def routes(ctx: Context) -> list[Route]:
                                include_suppressed=q.get("suppressed") == "1",  # ?suppressed=1: the gate's hidden visits too
                                favorites_only=q.get("favorites") == "1"))  # ?favorites=1: starred ones, from any time
 
+    async def api_visits_by_id(request: Request):
+        """?ids=15779,13818: those visits, in that order, from any time (the ask box's #<number> and an
+        alert's link). Unknown ids are left out; at most 50."""
+        ids = [int(i) for i in request.query_params.get("ids", "").split(",") if i.strip().isdigit()][:50]
+        return reply(ctx.query(lambda: {"visits": history.visits_by_id(ids)}))
+
     async def api_label_map(request: Request):
         """Past visits on one camera, placed where they were boxed, with their labels (see
         History.label_map): the dashboard's map view plots them over the camera's picture."""
@@ -80,6 +86,7 @@ def routes(ctx: Context) -> list[Route]:
         Route("/api/status", api_status),
         Route("/api/health", api_health),
         Route("/api/visits", api_visits),
+        Route("/api/visits/by-id", api_visits_by_id),
         Route("/api/labels/map", api_label_map),
         Route("/api/visits/timeline", api_visits_timeline),
         Route("/api/species", api_species),

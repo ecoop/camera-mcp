@@ -511,7 +511,7 @@ def test_alert_email_carries_a_close_up_the_full_frame_and_a_link_to_the_visit(m
     assert made == [1]  # pictures are made only for an alert that's sent, not one the cooldown holds back
     subj, body, image, link, attachments = sent[0]
     assert subj == "cat on fence: bird at west_alley, 2:13pm" and body == subj + " (visit 15779)"
-    assert image == b"close" and link == "http://studio:8080/visit/15779/image"
+    assert image == b"close" and link == "http://studio:8080/?visit=15779"
     assert attachments == (("west_alley-2023-11-14-141320.jpg", b"full"),)
 
     def broken():
