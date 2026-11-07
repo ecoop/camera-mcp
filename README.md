@@ -256,9 +256,13 @@ opens on the still. Starred visits show ★ after their name, and **★ favourit
 lists them all, from any time (the window is ignored) and hidden or not. Nothing cleans up visit
 media today; any future cleanup must leave favourites alone.
 
-In the viewer, scroll to zoom and drag to pan. **full-res image** opens the still in its own tab,
-filling the window, with the same scroll-zoom and drag-pan (double-click fits; **boxes** turns the
-detector's boxes off; **jpeg ↗** is the file itself).
+A visit opens on its full-resolution still, even when the grid loaded before the visit ended; only a
+visit with no frame kept shows its thumbnail (scaled up, without boxes). In the viewer, scroll or
+pinch to zoom, and drag to pan once zoomed; on a touch screen a double tap zooms in at that spot,
+or back out. **⤢** fills the window with the viewer, tags and all; a phone always shows it that
+way. **full-res image** opens the still in its own tab, filling the window, with the same zoom and
+pan (a double click or tap zooms in, or fits again; **boxes** turns the detector's boxes off;
+**jpeg ↗** is the file itself; **tag ›** opens the visit here).
 
 **Exclusion zones.** In the zones editor (`/zones`), the **exclude** tool marks spots that only
 ever produce junk: a feeder roof's underside, a patch of hedge. Each zone has a mode (click it to

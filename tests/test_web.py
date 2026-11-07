@@ -653,8 +653,9 @@ def test_the_map_shows_dots_only_with_their_cameras_picture(client):
 
 def test_the_full_res_image_opens_in_its_own_zoomable_page(client):
     """"full-res image" opens a page that fills the window with the visit's boxed still and zooms on
-    scroll at the pointer, pans on drag, fits on double click (the browser's own image view only has a
-    click-to-100% magnifier); the boxes switch off, and the JPEG itself is a link away."""
+    scroll or pinch at the pointer, pans on drag, zooms in or fits on a double click or tap (the browser's
+    own image view only has a click-to-100% magnifier); the boxes switch off, and the JPEG itself is a
+    link away."""
     page = client.get("/").text
     assert "$('#cliplink').href='/visit/'+id+'/image'" in page and 'id="cliplink" target="_blank"' in page
     r = client.get("/visit/42/image")
@@ -663,7 +664,23 @@ def test_the_full_res_image_opens_in_its_own_zoomable_page(client):
     assert "stage.addEventListener('wheel'" in img and "function zoomAt" in img and "fitAll();" in img
     assert "'/frame/boxed':'/frame'" in img and "/thumb'" in img  # boxes switchable; thumbnail-only visits still show
     assert 'id="raw"' in img and "$('#raw').href=img.src" in img
+    # touch: two fingers pinch and pan; a double tap zooms in at the spot, or fits once zoomed
+    assert "zoomAt(m.d/(pd||m.d),m.x,m.y)" in img and "zoomAt(2.5,e.clientX,e.clientY)" in img
     assert client.get("/visit/x/image").status_code == 404
+
+
+def test_the_viewer_opens_on_the_full_frame_zooms_by_touch_and_fills_the_screen(client):
+    """A visit opens on its full frame whatever its tile says (the grid may have loaded before the clip
+    was kept), and the visit's record says whether there's a clip; only with no frame at all does it
+    show the thumbnail, scaled up and without boxes. A pinch zooms and pans, a double tap zooms in or
+    back out; full screen keeps the tags, and a phone always gets it."""
+    page = client.get("/").text
+    assert "img.src='/media/visit/'+id+'/frame';" in page and "curClip=!!boxData.has_clip;" in page
+    assert "$('#still').classList.add('small');" in page and ".pz img.small{" in page
+    assert "if(pts.size===2){pinched=true;" in page and "zoomTo(2.5,...local(e.clientX,e.clientY))" in page
+    assert "if(moved>5||pinched||mode!=='image'" in page  # a pinch isn't a tap on a box
+    assert 'id="fullbtn"' in page and "$('#clip').classList.toggle('full')" in page
+    assert "@media(max-width:760px){.clipx.clipfull{display:none}" in page
 
 
 def test_python_m_camera_mcp_web_starts_the_dashboard():
@@ -770,7 +787,7 @@ def test_the_viewer_tags_single_boxes_and_names_species(client):
     page = client.get("/").text
     assert 'id="boxtag"' in page and 'id="tgts"' in page and 'id="vsp"' in page and "function untaggedBox" in page
     assert 'id="boxqbtn"' in page and "function nextBoxToTag" in page and "/api/labels/needs-box-tags" in page
-    assert "if(moved>5||mode!=='image'||!boxesOn||!boxData)return;" in page
+    assert "if(moved>5||pinched||mode!=='image'||!boxesOn||!boxData)return;" in page
     assert ".sort((a,b)=>a.w*a.h-b.w*b.h)[0]" in page
     assert ".boxov rect.inh{stroke-dasharray:6 4}" in page and "t.source==='visit'?' inh'" in page
     assert "if(v!=='wrong_species'||keep)setTimeout(advance,350)" in page
