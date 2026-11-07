@@ -728,19 +728,54 @@ def test_tags_carry_a_species_and_boxes_can_be_tagged(tmp_path):
     assert c.get("/api/labels/needs-box-tags").json() == {"visits": [], "count": 0}
 
 
+
+def test_tagging_every_box_on_the_still_tags_the_visit(tmp_path):
+    """Two boxes on the still: tagging one leaves the visit alone; tagging the other too tags the
+    visit from them (noted "from boxes") and says the visit is complete. A rat and a bird make it
+    real with no species (each box keeps its own); both false make it false."""
+    import time
+    from camera_mcp.config import Camera
+    from camera_mcp.store import Store
+    from camera_mcp.taxa import Label
+    from camera_mcp.visits import Box, Detection, Visit
+    from camera_mcp.web import build_app
+    store = Store(tmp_path / "monitor.db")
+    v = Visit("fence", "animal", start=time.time(), last_seen=time.time() + 5, frames=1)
+    v.votes[("animal", "")] = 1.0
+    v.log = [(v.start + 1, [Detection(Box(0.1, 0.1, 0.1, 0.1, 0.9), Label("animal", "", 0.5), "animal"),
+                            Detection(Box(0.7, 0.7, 0.1, 0.1, 0.6), Label("animal", "", 0.5), "animal")])]
+    store.add_visit(v, model="m", thumbnail=None, clip=None)
+    store.close()
+    c = starlette_testclient.TestClient(build_app({"fence": Camera("fence", "f.mp4")}, tmp_path, None))
+    b = c.get("/api/visit/1/boxes").json()
+    ts = b["frames"][b["best"]]["ts"]
+    r = c.post("/api/visit/1/box-label", json={"ts": ts, "box": 0, "verdict": "real", "species": "rat"}).json()
+    assert r["complete"] is False and r["label"] is None and c.get("/api/visit/1/label").json()["label"] is None
+    r = c.post("/api/visit/1/box-label", json={"ts": ts, "box": 1, "verdict": "wrong_species", "species": "songbirds"}).json()
+    assert r["complete"] is True and (r["label"]["verdict"], r["label"]["species"]) == ("real", None)
+    assert c.get("/api/visit/1/label").json()["label"]["note"] == "from boxes"
+    assert [t["tag"]["species"] for t in c.get("/api/visit/1/boxes").json()["frames"][0]["boxes"]] == ["rat", "songbirds"]
+    c.post("/api/visit/1/box-label", json={"ts": ts, "box": 0, "verdict": "false"})
+    r = c.post("/api/visit/1/box-label", json={"ts": ts, "box": 1, "verdict": "false"}).json()
+    assert r["complete"] is True and r["label"]["verdict"] == "false"
+    assert c.get("/api/visit/1/label").json()["label"]["verdict"] == "false"
+
 def test_the_viewer_tags_single_boxes_and_names_species(client):
-    """Click a box on the still to tag it (a click, not a drag; the smallest box under the pointer);
-    boxes are coloured by their tag, dashed when it comes from the visit's; a species field sits by
-    real / wrong sp. tags; wrong sp. waits for its species instead of moving on; "next box to tag"
-    walks the revisit list; suggestions come from /api/labels/species."""
+    """One set of tag buttons tags the target: the whole visit, or a box picked from the chips or
+    clicked on the still (a click, not a drag; the smallest box under the pointer). An untagged
+    visit with several boxes starts on its first box; each tag moves to the next, and once all are
+    tagged the visit is and the viewer moves on. Boxes are coloured by their tag, dashed when it
+    comes from the visit's; wrong sp. waits for its species; "next box to tag" walks the revisit
+    list; suggestions come from /api/labels/species."""
     page = client.get("/").text
-    assert 'id="boxtag"' in page and 'id="boxtagset"' in page and 'id="boxsp"' in page and 'id="vsp"' in page
+    assert 'id="boxtag"' in page and 'id="tgts"' in page and 'id="vsp"' in page and "function untaggedBox" in page
     assert 'id="boxqbtn"' in page and "function nextBoxToTag" in page and "/api/labels/needs-box-tags" in page
     assert "if(moved>5||mode!=='image'||!boxesOn||!boxData)return;" in page
     assert ".sort((a,b)=>a.w*a.h-b.w*b.h)[0]" in page
     assert ".boxov rect.inh{stroke-dasharray:6 4}" in page and "t.source==='visit'?' inh'" in page
     assert "if(v!=='wrong_species'||keep)setTimeout(advance,350)" in page
-    assert "if(v==='real'&&!curLabel&&await postLabel('real',''))" in page  # a box tagged real makes an untagged visit real
+    assert "if(d.complete){" in page and "else if(named&&v)selBox=untaggedBox()||selBox;" in page  # every box tagged: move on
+    assert "if(!curLabel&&stillBoxes().boxes.length>1)selBox=untaggedBox();" in page  # several boxes: start on the first
     assert '<datalist id="spplist">' in page and client.get("/api/labels/species").json() == {"species": []}
 
 

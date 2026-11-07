@@ -11,8 +11,11 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
+from camera_mcp.boxtags import visit_from_boxes
 from camera_mcp.store import VERDICTS, Store
 from camera_mcp.web.context import Context
+
+FROM_BOXES = "from boxes"  # the note on a visit tag its boxes set
 
 
 def routes(ctx: Context) -> list[Route]:
@@ -54,7 +57,9 @@ def routes(ctx: Context) -> list[Route]:
 
     async def api_box_label_set(request: Request):
         """Tag one box: {"ts": its frame's time, "box": its index (both from /api/visit/{id}/boxes),
-        "verdict": real | false | wrong_species | null to clear, "species": optional}."""
+        "verdict": real | false | wrong_species | null to clear, "species": optional}. Once every box on
+        the still has its own tag, they tag the visit (boxtags.visit_from_boxes, noted "from boxes"):
+        the reply's `complete` says so, and `label` is the visit's tag now."""
         if not ctx.editable:
             return JSONResponse({"error": "labeling is disabled (CAMERA_MCP_WEB_READONLY)"}, status_code=403)
         vid = int(request.path_params["vid"])
@@ -74,11 +79,19 @@ def routes(ctx: Context) -> list[Route]:
         store = Store(ctx.db_path)
         try:
             store.set_box_label(vid, ts, box, verdict, species)
+            d = history.visit_boxes(vid)
+            still = d["frames"][d["best"]] if d["frames"] else None
+            derived = visit_from_boxes(still["tags"]) if still and still["ts"] == ts else None
+            label = d["visit_tag"]
+            if derived and (not label or (label["verdict"], label.get("species")) != (derived["verdict"], derived["species"])):
+                store.set_visit_label(vid, derived["verdict"], FROM_BOXES, derived["species"])
+                label = {**derived, "note": FROM_BOXES}
         except ValueError as e:
             return JSONResponse({"error": str(e)}, status_code=404)
         finally:
             store.close()
-        return JSONResponse({"ok": True, "box": {"ts": ts, "i": box, "verdict": verdict, "species": species}})
+        return JSONResponse({"ok": True, "box": {"ts": ts, "i": box, "verdict": verdict, "species": species},
+                             "complete": derived is not None, "label": label})
 
     async def api_needs_box_tags(request: Request):
         """Visits tagged real whose still has a box with no tag yet (history.needs_box_tags), newest

@@ -194,3 +194,16 @@ def test_favourites_are_starred_apart_from_tags_and_listed_from_any_time(tmp_pat
     store.set_favorite(old, False)
     store.close()
     assert [v["id"] for v in h.find_visits(since="1h", favorites_only=True)["visits"]] == [new]
+
+
+def test_a_visit_tag_follows_from_its_boxes_once_each_has_its_own():
+    """visit_from_boxes: nothing until every box has its own tag (an inherited one doesn't count);
+    all false is false; one shared verdict and species carries over; a mix is real with no species."""
+    from camera_mcp.boxtags import visit_from_boxes
+    own = lambda v, sp=None: {"verdict": v, "species": sp, "source": "box"}
+    assert visit_from_boxes([]) is None
+    assert visit_from_boxes([own("real"), None]) is None
+    assert visit_from_boxes([own("real"), {"verdict": "false", "species": None, "source": "visit"}]) is None
+    assert visit_from_boxes([own("false"), own("false")]) == {"verdict": "false", "species": None}
+    assert visit_from_boxes([own("wrong_species", "rat"), own("false")]) == {"verdict": "wrong_species", "species": "rat"}
+    assert visit_from_boxes([own("real", "rat"), own("real", "songbirds")]) == {"verdict": "real", "species": None}

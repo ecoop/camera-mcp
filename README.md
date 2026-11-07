@@ -234,11 +234,15 @@ tag of its own takes its visit's where that must hold: every box of a false or w
 and of a real visit whose boxes all stayed in one place. A real visit whose boxes moved around
 leaves them untagged.
 
-In the viewer, click a box on the still (a click, not a drag) and tag it in the row below; boxes
-are outlined by their tag (green real, grey false, amber wrong species, red none yet; dashed when
-the tag comes from the visit's), with a ✓ / ✗ / ≠ mark. Tagging a box real makes an untagged visit
-real. A real or wrong-species tag has a **what was it?** field, suggesting names you've used and
-groups seen here; a wrong-species tag waits for it instead of moving on. **next box to tag ›**
+In the viewer, one set of tag buttons tags the target picked in the **tag** row: the whole visit, or
+one box (pick its chip, or click it on the still: a click, not a drag). An untagged visit with
+several boxes starts on its most confident box, and each tag moves to the next box. Once every box
+on the still has its own tag, they tag the visit (noted "from boxes"): false if all are false, the
+shared verdict and species if the animal boxes agree, else real with no species (a rat and a bird:
+each box keeps its own); then the viewer moves on. Boxes are outlined by their tag (green real, grey
+false, amber wrong species, red none yet; dashed when the tag comes from the visit's), with a
+✓ / ✗ / ≠ mark. A real or wrong-species tag has a **what was it?** field, suggesting names you've
+used and groups seen here; a wrong-species tag waits for it instead of moving on. **next box to tag ›**
 walks the real visits whose still still has an untagged box (narrowed to the camera filter): the
 ones to revisit before the stills are used as training data.
 

@@ -26,6 +26,22 @@ def box_tags(frames: list[dict], label: dict | None, explicit: dict) -> list[lis
              for i in range(len(f["boxes"]))] for f in frames]
 
 
+def visit_from_boxes(tags: list[dict | None]) -> dict | None:
+    """The visit tag a still's box tags imply, once every box on it has its own (source "box"):
+    'false' when they all are; else the one verdict and species the other boxes share; else 'real'
+    with no species (a mixed still, say a rat and a bird: each box keeps its own). None while a box
+    has no tag of its own, or there are no boxes."""
+    if not tags or any(t is None or t.get("source") != "box" for t in tags):
+        return None
+    animals = {(t["verdict"], t.get("species") or None) for t in tags if t["verdict"] != "false"}
+    if not animals:
+        return {"verdict": "false", "species": None}
+    if len(animals) == 1:
+        verdict, species = animals.pop()
+        return {"verdict": verdict, "species": species}
+    return {"verdict": "real", "species": None}
+
+
 def best_frame(frames: list[dict]) -> int:
     """The frame with the most confident box: the one the visit's still, viewer and map dot show."""
     best, conf = 0, -1.0
