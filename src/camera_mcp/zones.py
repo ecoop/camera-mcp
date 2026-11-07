@@ -203,16 +203,21 @@ def alert_hits(camera: Camera, detections) -> list[tuple[AlertArea, object]]:
     fractions of the analysis frame (the roi crop); areas, like zones, are fractions of the full frame."""
     if not camera.alert:
         return []
-    rx, ry, rw, rh = camera.roi or (0.0, 0.0, 1.0, 1.0)
     hits = []
     for d in detections:
-        b = d.box
-        cx, cy = rx + (b.x + b.w / 2) * rw, ry + (b.y + b.h / 2) * rh
+        x, y, w, h = frame_box(camera, d.box)
         for area in camera.alert:
             if (d.label.name.lower() not in area.skip and d.key.lower() not in area.skip
-                    and area.holds(cx, cy, b.w * rw, b.h * rh)):
+                    and area.holds(x + w / 2, y + h / 2, w, h)):
                 hits.append((area, d))
     return hits
+
+
+def frame_box(camera: Camera, box) -> tuple[float, float, float, float]:
+    """A detector box (fractions of the analysis frame, the roi crop) as (x, y, w, h) fractions of
+    the full frame, where zones and alert areas live."""
+    rx, ry, rw, rh = camera.roi or (0.0, 0.0, 1.0, 1.0)
+    return rx + box.x * rw, ry + box.y * rh, box.w * rw, box.h * rh
 
 
 def parse_shapes(value, where: str, key: str) -> tuple[Shape, ...]:

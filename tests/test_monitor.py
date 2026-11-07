@@ -461,7 +461,7 @@ def test_alerter_fires_once_per_cooldown_for_alert_species(monkeypatch):
     import camera_mcp.mailer as mailer
     from camera_mcp.alerts import Alerter
     sent = []
-    monkeypatch.setattr(mailer, "send_email", lambda subj, body, settings: sent.append((body, settings["SMTP_TO"])))
+    monkeypatch.setattr(mailer, "send_email", lambda subj, body, settings, *a, **k: sent.append((body, settings["SMTP_TO"])))
     a = Alerter({"coyote"}, {"SMTP_HOST": "h", "SMTP_FROM": "f", "SMTP_TO": "brief@x"},
                 "15551234567@txt.att.net", ZoneInfo("America/Los_Angeles"))
     assert a.active
@@ -481,7 +481,7 @@ def test_alerter_texts_once_per_cooldown_per_alert_area(monkeypatch):
     import camera_mcp.mailer as mailer
     from camera_mcp.alerts import Alerter
     sent = []
-    monkeypatch.setattr(mailer, "send_email", lambda subj, body, settings: sent.append(body))
+    monkeypatch.setattr(mailer, "send_email", lambda subj, body, settings, *a, **k: sent.append(subj))
     a = Alerter({"cat"}, {"SMTP_HOST": "h"}, "r", ZoneInfo("America/Los_Angeles"))
     a.maybe_area_alert("west_alley", "cat on fence", "bird", 1_700_000_000.0)    # fires, whatever the label
     a.maybe_area_alert("west_alley", "cat on fence", "animal", 1_700_000_060.0)  # same area, within cooldown
@@ -492,6 +492,75 @@ def test_alerter_texts_once_per_cooldown_per_alert_area(monkeypatch):
     a._last = {k: v - Alerter.COOLDOWN for k, v in a._last.items()}  # the cooldown passes
     a.maybe_area_alert("west_alley", "cat on fence", "domestic cat", 1_700_000_400.0)
     assert sent[-1].startswith("cat on fence: domestic cat")
+
+
+def test_alert_email_carries_a_close_up_the_full_frame_and_a_link_to_the_visit(monkeypatch):
+    from zoneinfo import ZoneInfo
+    import camera_mcp.mailer as mailer
+    from camera_mcp.alerts import Alerter
+    sent, made = [], []
+    monkeypatch.setattr(mailer, "send_email", lambda subj, body, settings, image=None, **k: sent.append(
+        (subj, body, image, k["link"], k["attachments"])))
+
+    def photo():
+        made.append(1)
+        return b"close", b"full"
+    a = Alerter(set(), {"SMTP_HOST": "h"}, "r", ZoneInfo("America/Los_Angeles"), "http://studio:8080")
+    a.maybe_area_alert("west_alley", "cat on fence", "bird", 1_700_000_000.0, photo=photo, visit=15779)
+    a.maybe_area_alert("west_alley", "cat on fence", "bird", 1_700_000_060.0, photo=photo, visit=15779)
+    assert made == [1]  # pictures are made only for an alert that's sent, not one the cooldown holds back
+    subj, body, image, link, attachments = sent[0]
+    assert subj == "cat on fence: bird at west_alley, 2:13pm" and body == subj + " (visit 15779)"
+    assert image == b"close" and link == "http://studio:8080/visit/15779/image"
+    assert attachments == (("west_alley-2023-11-14-141320.jpg", b"full"),)
+
+    def broken():
+        raise RuntimeError("no frame")
+    b = Alerter(set(), {"SMTP_HOST": "h"}, "r", ZoneInfo("UTC"))  # no dashboard address: no link
+    b.maybe_area_alert("west_alley", "cat on fence", "bird", 1_700_000_000.0, photo=broken, visit=7)
+    assert sent[-1][2:] == (None, None, ())  # a failed picture still sends the alert
+
+
+def test_alert_photo_crops_a_close_up_around_the_box_at_native_resolution():
+    import numpy as np
+    from camera_mcp.monitor import alert_photo
+    full = np.zeros((1440, 2560, 3), np.uint8)
+
+    def size(jpeg):
+        import cv2
+        return cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR).shape[:2]
+    close, whole = alert_photo(full, (0.10, 0.50, 0.05, 0.05))  # a 128x72 box: 640x480 around it
+    assert size(close) == (480, 640) and size(whole) == (1440, 2560)
+    close, _ = alert_photo(full, (0.97, 0.97, 0.03, 0.03))  # at the corner: kept inside the frame
+    assert size(close) == (480, 640)
+    close, _ = alert_photo(full, (0.0, 0.0, 0.5, 0.5))  # a big box: the close-up is at most the frame
+    assert size(close) == (1440, 2560)
+    assert alert_photo(full, None)[0] is None  # no box: just the frame
+
+
+def test_alerts_link_to_the_visit_the_detection_belongs_to():
+    from types import SimpleNamespace
+    import numpy as np
+    from camera_mcp.config import Camera
+    from camera_mcp.monitor import Analyzer
+    from camera_mcp.zones import AlertArea
+    calls = []
+
+    class Fake:
+        def maybe_area_alert(self, camera, area, label, t, photo=None, visit=None):
+            calls.append(("area", area, label, visit, photo()[0] is not None))
+
+        def maybe_alert(self, camera, species, t, photo=None, visit=None):
+            calls.append(("species", species, visit, photo()[0] is not None))
+    analyzer = Analyzer.__new__(Analyzer)
+    analyzer.alerter = Fake()
+    cam = Camera("west_alley", "rtsp://x", roi=(0.08, 0.13, 0.48, 0.43),
+                 alert=(AlertArea((0.0, 0.0, 1.0, 1.0), "yard", 0.0),))
+    still_open = {"cat": SimpleNamespace(db_id=42), "coyote": SimpleNamespace(db_id=43)}
+    analyzer._alert(cam, 1.0, np.zeros((360, 640, 3), np.uint8), [_det(0.4, 0.4, 0.1, 0.1, "domestic cat", "cat")],
+                    still_open)
+    assert calls == [("area", "yard", "domestic cat", 42, True),
+                     ("species", "cat", 42, True), ("species", "coyote", 43, False)]  # coyote: no box this frame
 
 
 def _det(x, y, w, h, name="animal", key=None):

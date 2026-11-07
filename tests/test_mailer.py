@@ -74,6 +74,26 @@ def test_send_email_starttls_login_and_inline_image(creds_file, tmp_path, monkey
     assert any(part.get_content_type() == "image/jpeg" for part in msg.walk())  # montage attached inline
 
 
+def test_send_email_with_image_bytes_a_link_and_an_attachment(creds_file, monkeypatch):
+    FakeSMTP.instances.clear()
+    monkeypatch.setattr(mailer.smtplib, "SMTP", FakeSMTP)
+    mailer.send_email("cat at west_alley", "cat at west_alley (visit 7)", mailer.email_settings(), b"\xff\xd8 close",
+                      link="http://studio:8080/visit/7/image", attachments=(("west_alley.jpg", b"\xff\xd8 full"),))
+    msg, _ = FakeSMTP.instances[0].sent
+    assert "http://studio:8080/visit/7/image" in msg.get_body(("plain",)).get_content()
+    assert "href='http://studio:8080/visit/7/image'" in msg.get_body(("html",)).get_content()
+    images = [p for p in msg.walk() if p.get_content_type() == "image/jpeg"]
+    assert [p.get_content_disposition() for p in images] == ["inline", "attachment"]  # inline close-up, saved frame
+    assert images[1].get_filename() == "west_alley.jpg"
+
+
+def test_web_url_for_alert_links(creds_file, monkeypatch):
+    monkeypatch.delenv("WEB_URL", raising=False)
+    assert mailer.web_url() is None
+    monkeypatch.setenv("WEB_URL", "http://studio:8080/")
+    assert mailer.web_url() == "http://studio:8080"
+
+
 def test_send_email_uses_ssl_on_465(creds_file, monkeypatch):
     FakeSMTP.instances.clear()
     monkeypatch.setattr(mailer.smtplib, "SMTP_SSL", FakeSMTP)
