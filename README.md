@@ -4,7 +4,7 @@
 ![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13-blue)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
-_Last updated: 2026-11-05_
+_Last updated: 2026-11-07_
 
 An MCP server and an always-on monitor for home IP cameras, built to watch for wildlife on one
 machine without saturating it.
@@ -89,7 +89,7 @@ security add-generic-password -U -s camera-mcp -a <camera user> -w
 headless or remote host the login Keychain is locked in an SSH session, so put
 `CAMERA_USER=` and `CAMERA_PASS=` lines in `~/.config/camera-mcp/credentials` (`chmod 600`,
 or `$CAMERA_MCP_CREDENTIALS` to point elsewhere) and that is used instead. The same file also
-holds the optional email and alert settings (`SMTP_*`, `SMS_ALERT_TO`); see
+holds the optional email and alert settings (`SMTP_*`, `SMS_ALERT_TO`, `WEB_URL`); see
 [`credentials.example`](credentials.example) for every key the code reads, with placeholder
 values and the exact `KEY=value` format it expects.
 Anything else goes in `source` instead of `host`: a video file (which is how the tests run, and
@@ -304,6 +304,12 @@ smaller; a cat on a fence boxed 0.04–0.21) and skip `squirrel, rodent`, which 
 at the same sizes as a cat but are usually labelled right. Areas are opt-in, per camera, and need
 the same mail settings and `SMS_ALERT_TO`. In `zones.json` they're under `alert`:
 `{"rect" | "poly", "name", "min_size", "skip": [...]}`.
+
+`SMS_ALERT_TO` can be a plain email address, and that's the reliable choice: several carriers have
+shut their email-to-text gateways (AT&T's `txt.att.net` no longer delivers). An alert email has the
+alert as its subject, shows a close-up of the box that set it off at full resolution, and attaches
+the whole frame with the box drawn on it. Set `WEB_URL` (the dashboard's address as your phone
+reaches it, e.g. `http://studio.local:8080`) in the credentials file and it also links to the visit.
 
 **Drawing zones.** The editor zooms (wheel, trackpad pinch, or **+ / − / fit**) and pans
 (**Space**-drag, middle-drag or **✋**), on a full-resolution snapshot. Motion ROI, motion mask,

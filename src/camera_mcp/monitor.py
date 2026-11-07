@@ -54,7 +54,7 @@ from camera_mcp.scenery import Scenery
 from camera_mcp.store import Store
 from camera_mcp.view import ViewCheck, is_colour, is_infrared
 from camera_mcp.visits import Visit, VisitTracker
-from camera_mcp.zones import alert_hits, zone_drop
+from camera_mcp.zones import alert_hits, frame_box, zone_drop
 
 log = logging.getLogger("camera_mcp.monitor")
 
@@ -100,6 +100,24 @@ def encode_still(full: np.ndarray) -> bytes | None:
     from. imencode, not imwrite: SpeciesNet's yolov5 replaces cv2.imwrite with a 2-argument version."""
     ok, buf = cv2.imencode(".jpg", cv2.cvtColor(full, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 92])
     return buf.tobytes() if ok else None
+
+
+def alert_photo(full: np.ndarray, box: tuple[float, float, float, float] | None) -> tuple[bytes | None, bytes | None]:
+    """An alert's pictures from the full decoded frame (RGB), with `box` (fractions of the full frame)
+    outlined: a close-up around the box at native resolution (never upscaled), and the whole frame.
+    No box: no close-up, just the frame."""
+    if box is None:
+        return None, encode_still(full)
+    h, w = full.shape[:2]
+    img = full.copy()
+    x0, y0 = round(box[0] * w), round(box[1] * h)
+    x1, y1 = round((box[0] + box[2]) * w), round((box[1] + box[3]) * h)
+    cv2.rectangle(img, (x0, y0), (x1, y1), (230, 40, 40), max(2, round(w / 640)))  # RGB red
+    cw = min(w, max(640, 4 * (x1 - x0)))  # the box with room around it, at least phone-screen sized
+    ch = min(h, max(480, 4 * (y1 - y0)))
+    cx = min(max((x0 + x1) // 2 - cw // 2, 0), w - cw)
+    cy = min(max((y0 + y1) // 2 - ch // 2, 0), h - ch)
+    return encode_still(img[cy:cy + ch, cx:cx + cw]), encode_still(img)
 
 
 class CameraWorker:
@@ -725,9 +743,6 @@ class Analyzer:
                 detections = [d for d in detections if not drop(d.box)]
                 self._note_zoned(worker.camera.name, zoned[0])
             detections, learned = worker.scenery.filter(t, detections, frame)
-            if self.alerter is not None:  # anything in an alert area texts, whatever it's labelled
-                for area, d in alert_hits(worker.camera, detections):
-                    self.alerter.maybe_area_alert(worker.camera.name, area.name, d.label.name, t)
             for spot in learned:
                 log.info("%s: learned scenery at x=%.2f y=%.2f (%.0f%% x %.0f%% of the frame): a \"%s\" that "
                          "keeps appearing in exactly the same place; ignoring it from now on",
@@ -748,11 +763,28 @@ class Analyzer:
                     visit.db_id = worker.store.open_visit(visit, model=self.model)
                 elif visit.last_seen == t:
                     worker.store.update_open_visit(visit)
-                if self.alerter is not None:  # real-time alert for a high-priority species
-                    self.alerter.maybe_alert(worker.camera.name, key, t)
+            if self.alerter is not None:  # after the visits have rows, so an alert can link to its visit
+                self._alert(worker.camera, t, full, detections, still_open)
             for visit in closed:
                 worker._visit_closed(visit)
         return len(proc.stdout) // size  # frames (inferences) run on this segment
+
+    def _alert(self, camera: Camera, t: float, full: np.ndarray, detections, still_open: dict) -> None:
+        """Real-time alerts for this frame: anything in an alert area, whatever it's labelled, and
+        any open visit of a high-priority species. Each carries this frame (a close-up of the box
+        that set it off) and the visit it belongs to; the pictures are made only if it's sent."""
+        def ids(key):
+            visit = still_open.get(key)
+            return visit.db_id if visit is not None else None
+
+        for area, d in alert_hits(camera, detections):
+            box = frame_box(camera, d.box)
+            self.alerter.maybe_area_alert(camera.name, area.name, d.label.name, t,
+                                          photo=lambda b=box: alert_photo(full, b), visit=ids(d.key))
+        for key in sorted(still_open):  # the species alert: its biggest box in this frame, if any
+            mine = [d for d in detections if d.key == key]
+            box = frame_box(camera, max(mine, key=lambda d: d.box.w * d.box.h).box) if mine else None
+            self.alerter.maybe_alert(camera.name, key, t, photo=lambda b=box: alert_photo(full, b), visit=ids(key))
 
 
 def backfill_night(store: Store, data_dir: Path, stop: threading.Event | None = None) -> int:
@@ -867,8 +899,8 @@ def main(argv: list[str] | None = None) -> None:
     monitor = Monitor(chosen, args.data_dir, detector, tz=site.tz())
     areas = [f"{c.name}: {a.name}" for c in chosen for a in c.alert]
     if monitor.analyzer is not None and (site.alert_species or areas):  # real-time alerts (email->SMS)
-        from camera_mcp.mailer import alert_recipient, email_settings
-        monitor.analyzer.alerter = Alerter(site.alert_species, email_settings(), alert_recipient(), site.tz())
+        from camera_mcp.mailer import alert_recipient, email_settings, web_url
+        monitor.analyzer.alerter = Alerter(site.alert_species, email_settings(), alert_recipient(), site.tz(), web_url())
         what = ", ".join([*site.alert_species, *(f"alert area {a}" for a in areas)])
         if monitor.analyzer.alerter.active:
             log.info("alerts on for %s -> %s", what, monitor.analyzer.alerter.recipient)

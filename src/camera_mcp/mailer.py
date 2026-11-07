@@ -10,7 +10,10 @@ Settings come from the environment or the credentials file (read_credentials_fil
     SMTP_USER   login user (default: SMTP_FROM)
     SMTP_PASS   login password (omit for an unauthenticated relay)
 
-For real-time alerts, SMS_ALERT_TO is the email->SMS gateway address (e.g. 15551234567@txt.att.net).
+For real-time alerts, SMS_ALERT_TO is where they go: an email address, or an email->SMS gateway
+(e.g. 15551234567@vtext.com; AT&T's txt.att.net no longer delivers). WEB_URL, if set, is the web
+dashboard's address as seen from the reader's phone (e.g. http://studio.local:8080), so an alert can
+link to its visit.
 
 No address or password is ever hard-coded or committed; the real values live only in the
 host's git-ignored credentials file.
@@ -52,6 +55,13 @@ def alert_recipient() -> str | None:
     return merged.get("SMS_ALERT_TO") or None
 
 
+def web_url() -> str | None:
+    """The web dashboard's address for links in alerts (WEB_URL), from the credentials file or the
+    environment, without a trailing slash. None if unset: alerts then carry no link."""
+    merged = {**read_credentials_file(), **os.environ}
+    return (merged.get("WEB_URL") or "").rstrip("/") or None
+
+
 def _tls_context(settings: dict[str, str]) -> ssl.SSLContext:
     """A TLS context that actually verifies the mail server. Python's default context can miss a
     valid chain (its CA paths differ from the system's); certifi's current bundle verifies them.
@@ -72,27 +82,36 @@ def _tls_context(settings: dict[str, str]) -> ssl.SSLContext:
     return ssl.create_default_context(cafile=ca_file)
 
 
-def _message(subject: str, body: str, settings: dict[str, str], image: Path | None) -> EmailMessage:
+def _message(subject: str, body: str, settings: dict[str, str], image: Path | bytes | None,
+             link: str | None = None, attachments: tuple[tuple[str, bytes], ...] = ()) -> EmailMessage:
     msg = EmailMessage()
     msg["Subject"] = subject
     msg["From"] = settings["SMTP_FROM"]
     msg["To"] = settings["SMTP_TO"]
-    msg.set_content(body)  # plain-text part, for clients without HTML
-    if image is not None and image.is_file():
+    msg.set_content(body + (f"\n\n{link}" if link else ""))  # plain-text part, for clients without HTML
+    data = image.read_bytes() if isinstance(image, Path) and image.is_file() else image if isinstance(image, bytes) else None
+    if data is not None or link:
         html = (f"<div style='font:14px/1.4 -apple-system,system-ui,sans-serif'>"
                 f"<pre style='font:13px/1.4 ui-monospace,monospace;white-space:pre-wrap'>{escape(body)}</pre>"
-                f"<img src='cid:montage' style='max-width:100%;border-radius:6px'></div>")
+                + (f"<p><a href='{escape(link, quote=True)}'>Open the visit</a></p>" if link else "")
+                + ("<img src='cid:montage' style='max-width:100%;border-radius:6px'>" if data is not None else "")
+                + "</div>")
         msg.add_alternative(html, subtype="html")
-        msg.get_payload()[1].add_related(image.read_bytes(), maintype="image", subtype="jpeg", cid="<montage>")
+        if data is not None:
+            msg.get_payload()[1].add_related(data, maintype="image", subtype="jpeg", cid="<montage>")
+    for name, blob in attachments:  # e.g. the full-resolution frame, to save or zoom
+        msg.add_attachment(blob, maintype="image", subtype="jpeg", filename=name)
     return msg
 
 
-def send_email(subject: str, body: str, settings: dict[str, str], image: Path | None = None) -> None:
-    """Send one message. Raises MailError on any SMTP or network failure."""
+def send_email(subject: str, body: str, settings: dict[str, str], image: Path | bytes | None = None, *,
+               link: str | None = None, attachments: tuple[tuple[str, bytes], ...] = ()) -> None:
+    """Send one message: `image` shown inline, `link` as a button under the text, `attachments`
+    as (filename, JPEG bytes). Raises MailError on any SMTP or network failure."""
     host = settings["SMTP_HOST"]
     port = int(settings.get("SMTP_PORT") or 587)
     recipients = [a.strip() for a in settings["SMTP_TO"].split(",") if a.strip()]
-    msg = _message(subject, body, settings, image)
+    msg = _message(subject, body, settings, image, link, attachments)
     context = _tls_context(settings)
     try:
         if port == 465:
