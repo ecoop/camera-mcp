@@ -898,3 +898,21 @@ def test_the_viewer_shows_the_tag_models_suggestion_and_its_queue(tmp_path):
     assert q["visits"][0]["suggestion"]["logged"] == "songbirds"
     html = c.get("/").text
     assert 'id="suggok"' in html and 'id="usebtn"' in html and "function advance()" in html
+
+
+def test_visits_open_by_number_from_the_ask_box_and_a_link(tmp_path):
+    """#148: `#3` (or `#3 #1`) in the ask box shows those visits, with no model call, whether or not
+    asking is on; /?visit=3 (an alert's link, and the image page's "tag") opens it ready to tag."""
+    from camera_mcp.web import build_app
+    _seed_visits(tmp_path)
+    cams = load_cameras(_cfg(tmp_path), require_login=False)
+    c = starlette_testclient.TestClient(build_app(cams, tmp_path, load_site(_cfg(tmp_path))))
+    d = c.get("/api/visits/by-id?ids=3,999,1").json()
+    assert [v["id"] for v in d["visits"]] == [3, 1]  # in the order asked; unknown ones left out
+    assert d["visits"][0]["label"] == "northern raccoon"
+    assert c.get("/api/visits/by-id?ids=").json()["visits"] == []
+    page = c.get("/").text
+    assert '<div class="ask" id="askbox">' in page  # shown even where asking is off
+    assert "const ids=visitIds(q); if(ids){await lookUpVisits(ids); return;}" in page  # before any model call
+    assert "new URLSearchParams(location.search).get('visit')" in page and "openLinkedVisit();" in page
+    assert "$('#tag').href='/?visit='+id" in c.get("/visit/3/image").text

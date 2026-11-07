@@ -187,9 +187,9 @@ dialog .boxtag[hidden],.spin[hidden],.lblset[hidden],.boxbtn[hidden]{display:non
 </div>
 
 <section id="view-feeds">
-  <div class="ask" id="askbox" hidden>
+  <div class="ask" id="askbox">
     <form id="askform"><input id="askq" maxlength="500" autocomplete="off"
-      placeholder="Ask about your cameras, e.g. all skunks in the last 24 hours?"><button id="askbtn">ask</button></form>
+      placeholder="Look up visits by number, e.g. #15779"><button id="askbtn">go</button></form>
     <div class="askans" id="askans"></div>
     <div class="grid askgrid" id="askgrid"></div>
     <div class="askmeta" id="askmeta"></div>
@@ -441,11 +441,29 @@ function renderAnswer(text,byId){
     if(inList){html+='</ul>';inList=false;}
     html+=l.trim()?l+'<br>':'';}
   return html+(inList?'</ul>':'');}
-async function askInit(){try{const d=await (await fetch('/api/ask')).json(); if(!d.enabled)return;
-  $('#askbox').hidden=false; askMeta(d.spent_today,d.cap);}catch(e){}}
+// The box always looks visits up by number (#15779, or several: #13818 #7151), with no model call;
+// where asking is on, anything else is a question for Claude.
+let ASKON=false;
+const visitIds=q=>/^#?\d+(?:[\s,]+#?\d+)*$/.test(q)?q.match(/\d+/g).slice(0,50):null;
+async function visitsById(ids){const d=await (await fetch('/api/visits/by-id?ids='+ids.join(','))).json(); return d.visits||[];}
+async function askInit(){try{const d=await (await fetch('/api/ask')).json(); if(!d.enabled)return; ASKON=true;
+  $('#askq').placeholder='Ask about your cameras (e.g. all skunks in the last 24 hours?), or #15779 for a visit';
+  $('#askbtn').textContent='ask'; askMeta(d.spent_today,d.cap);}catch(e){}}
+async function lookUpVisits(ids){$('#askans').className='askans'; $('#askgrid').innerHTML='';
+  try{const v=await visitsById(ids), found=new Set(v.map(x=>String(x.id))), missing=ids.filter(i=>!found.has(i));
+    $('#askans').textContent=!v.length?'no such visit':missing.length?'not found: '+missing.map(i=>'#'+i).join(' '):'';
+    $('#askgrid').innerHTML=v.map(tileHTML).join('');
+    $('#askgrid').querySelectorAll('.tile').forEach(t=>t.onclick=e=>{e.preventDefault();openVisit(t);});
+    if(v.length===1)openVisit($('#askgrid .tile'));}
+  catch(e){$('#askans').className='askans err';$('#askans').textContent='network error: '+e;}}
+// /?visit=15779 (an alert's link) opens that visit, ready to tag
+async function openLinkedVisit(){const id=new URLSearchParams(location.search).get('visit'); if(!id||!/^\d+$/.test(id))return;
+  $('#askq').value='#'+id; await lookUpVisits([id]);}
 function askMeta(spent,cap,cost){$('#askmeta').textContent=(cost!=null?`this answer ≈ $${cost.toFixed(3)} · `:'')+
   `$${(+spent).toFixed(2)} of $${(+cap).toFixed(2)} used today · answers use the visit log only (no images)`;}
 $('#askform').addEventListener('submit',async ev=>{ev.preventDefault(); const q=$('#askq').value.trim(); if(!q)return;
+  const ids=visitIds(q); if(ids){await lookUpVisits(ids); return;}
+  if(!ASKON){$('#askans').className='askans err'; $('#askans').textContent='asking isn’t set up here; #15779 looks up a visit'; return;}
   $('#askbtn').disabled=true; $('#askans').className='askans'; $('#askans').textContent='looking…'; $('#askgrid').innerHTML='';
   try{const res=await fetch('/api/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:q})});
     const d=await res.json();
@@ -793,5 +811,6 @@ try{$('#showidle').checked=localStorage.getItem('showIdle')==='1';}catch(e){}
 $('#showidle').onchange=()=>{try{localStorage.setItem('showIdle',idleOn()?'1':'0');}catch(e){} if(VIEW==='analytics'){loadStats();loadHeatmap();}};
 tick();setInterval(tick,1000);loadCameras();loadSpecies();loadHealth();refreshUseful();
 setView(viewOf(location.pathname),false);
+openLinkedVisit();
 setInterval(()=>{loadHealth();renderView();},60000);
 </script></div></body></html>

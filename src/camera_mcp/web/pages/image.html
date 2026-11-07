@@ -22,7 +22,8 @@
   <button id="zout" title="zoom out">&minus;</button><span class="lvl" id="lvl"></span><button id="zin" title="zoom in">+</button>
   <button id="fit" title="fit the whole picture (or double-click)">fit</button>
   <button id="boxes" class="on" title="the detector's boxes and confidences">boxes</button>
-  <a id="raw" target="_blank" rel="noopener" title="the JPEG itself, e.g. to save it">jpeg &nearr;</a></div>
+  <a id="raw" target="_blank" rel="noopener" title="the JPEG itself, e.g. to save it">jpeg &nearr;</a>
+  <a id="tag" title="open this visit in the dashboard, to tag it">tag &rsaquo;</a></div>
 <script>
 const $=s=>document.querySelector(s), id=(location.pathname.match(/\/visit\/(\d+)/)||[])[1];
 const img=$('#img'), stage=$('#stage');
@@ -53,5 +54,5 @@ addEventListener('resize',()=>{const was=s===fit; fit=Math.min(innerWidth/img.na
 addEventListener('keydown',e=>{if(e.key==='+'||e.key==='=')zoomAt(1.5); else if(e.key==='-')zoomAt(1/1.5); else if(e.key==='0')fitAll();});
 $('#zin').onclick=()=>zoomAt(1.5); $('#zout').onclick=()=>zoomAt(1/1.5); $('#fit').onclick=fitAll;
 $('#boxes').onclick=()=>{boxes=!boxes; $('#boxes').classList.toggle('on',boxes); img.src=src();};  // same size: the view is kept
-if(id){document.title='#'+id+' · Yard Sentry'; img.src=src();} else $('#msg').textContent='no visit given';
+if(id){document.title='#'+id+' · Yard Sentry'; img.src=src(); $('#tag').href='/?visit='+id;} else $('#msg').textContent='no visit given';
 </script></body></html>
