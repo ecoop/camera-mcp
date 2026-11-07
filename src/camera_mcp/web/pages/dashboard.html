@@ -162,7 +162,12 @@ dialog .vmeta a{color:var(--accent);cursor:pointer}
 .boxov rect.t-real{stroke:#34c759} .boxov rect.t-false{stroke:#9a9aa0} .boxov rect.t-wrong_species{stroke:#ff9f0a}
 .boxov text.t-real{fill:#34c759} .boxov text.t-false{fill:#c7c7cc} .boxov text.t-wrong_species{fill:#ff9f0a}
 .boxov rect.inh{stroke-dasharray:6 4} .boxov rect.sel{stroke-width:4}
-dialog .boxtag{font-family:var(--mono);font-size:.72rem;color:var(--muted);padding:0 .8rem .6rem;display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
+dialog .boxtag{font-family:var(--mono);font-size:.72rem;color:var(--muted);display:flex;gap:.35rem;align-items:center;flex-wrap:wrap;width:100%}
+#tgts{display:contents}
+.tgt{border:1px solid var(--line);border-radius:999px;padding:.12rem .55rem;background:none;color:var(--muted);font-family:var(--mono);font-size:.72rem;cursor:pointer}
+.tgt.on{background:var(--accent-soft);border-color:var(--accent);color:var(--ink)}
+.tgt.t-real{color:var(--good)} .tgt.t-false{text-decoration:line-through} .tgt.t-wrong_species{color:#d9822b}
+.tgt.inh{font-style:italic}
 dialog .boxtag[hidden],.spin[hidden],.lblset[hidden],.boxbtn[hidden]{display:none}
 .spin{font-family:var(--mono);font-size:.72rem;width:11rem;padding:.12rem .4rem;border:1px solid var(--line);border-radius:6px;
   background:var(--frame);color:var(--ink)}
@@ -256,9 +261,10 @@ dialog .boxtag[hidden],.spin[hidden],.lblset[hidden],.boxbtn[hidden]{display:non
     <video controls style="display:none"></video>
     <svg class="boxov" id="boxov" viewBox="0 0 100 100" preserveAspectRatio="none"></svg></div></div>
   <div class="vmeta"><span id="clipmeta"></span>
+  <div class="boxtag" id="boxtag" hidden><span>tag</span><span id="tgts"></span>
+    <button class="boxbtn" id="boxclear" hidden title="remove this box's own tag (it takes the visit's again, where that holds)">clear</button></div>
   <span class="vact">
-    <button class="boxbtn" id="playbtn">watch clip &#9654;</button>
-    <span class="lblset" id="lblset" title="was this detection correct?">
+    <span class="lblset" id="lblset" title="was this detection correct? (the whole visit, or the box picked above)">
       <button class="lblbtn" data-v="real">&check; real</button>
       <button class="lblbtn" data-v="false">&times; false</button>
       <button class="lblbtn" data-v="wrong_species">&times; wrong sp.</button></span>
@@ -268,17 +274,11 @@ dialog .boxtag[hidden],.spin[hidden],.lblset[hidden],.boxbtn[hidden]{display:non
     <button class="boxbtn" id="nextbtn" title="the next visit in the grid you haven't labelled">next unlabelled &rsaquo;</button>
     <button class="boxbtn" id="usebtn" title="the untagged visit the tag model would learn most from: where it contradicts the log's name, then where it's least sure">most useful next &rsaquo;</button>
     <button class="boxbtn" id="boxqbtn" title="the next visit you tagged real whose still has a box with no tag yet (narrowed to the camera filter)">next box to tag &rsaquo;</button>
+    <button class="boxbtn" id="playbtn">watch clip &#9654;</button>
     <button class="boxbtn favbtn" id="favbtn" title="keep this one: star it as a favourite. While the clip plays, the star remembers that moment">&#9734; favourite</button>
     <button class="boxbtn" id="hidebtn" title="hide this visit, or show one the gate or a zone hid (undo a mistake)">hide</button>
     <button class="boxbtn on" id="boxbtn">hide boxes</button> &middot; <a id="cliplink" target="_blank" rel="noopener" title="the full-resolution still in its own tab: scroll to zoom, drag to pan">full-res image</a>
   </span></div>
-  <div class="boxtag" id="boxtag" hidden><span id="boxtagwhat"></span>
-    <span class="lblset" id="boxtagset" hidden title="tag just this box">
-      <button class="lblbtn" data-v="real">&check; real</button>
-      <button class="lblbtn" data-v="false">&times; false</button>
-      <button class="lblbtn" data-v="wrong_species">&times; wrong sp.</button></span>
-    <input class="spin" id="boxsp" list="spplist" hidden placeholder="what was it?" title="what this box's animal actually was">
-    <button class="boxbtn" id="boxclear" hidden title="remove this box's own tag (it takes the visit's again, where that holds)">clear</button></div>
 </dialog><div id="queuegrid" hidden></div><datalist id="spplist"></datalist>
 <script>
 // The time window: a "last ..." choice, or a from-to range (from&ndash;to&hellip;; an empty "to" means now).
@@ -475,7 +475,9 @@ async function postLabel(v,species){const res=await fetch('/api/visit/'+curVisit
   if(res.ok){curLabel={verdict:v,species:v==='false'?null:species||null}; if(species)SPP=false;
     if(curClip){boxData=null; loadBoxData().then(drawBoxes);} refreshBoxQueue();}  // inherited box tags follow the visit's
   return res.ok;}
-$('#vsp').addEventListener('change',()=>{if(!(labelEditable&&curVisit&&curLabel))return; const v=curLabel.verdict, sp=$('#vsp').value.trim();
+$('#vsp').addEventListener('change',()=>{if(selBox){const {boxes}=stillBoxes(), b=boxes.find(x=>x.i===selBox.i);
+    if(b&&b.tag&&b.tag.source==='box')setBoxTag(b.tag.verdict,$('#vsp').value.trim()); return;}  // naming the picked box
+  if(!(labelEditable&&curVisit&&curLabel))return; const v=curLabel.verdict, sp=$('#vsp').value.trim();
   postLabel(v,sp).then(ok=>{loadPickerSpecies();
     if(ok&&v==='wrong_species'&&sp&&VIEW!=='map')setTimeout(advance,350);});});  // wrong sp., once named: move on
 async function setLabel(v){if(!labelEditable||!curVisit)return;
@@ -492,7 +494,8 @@ function advance(){if(QMODE==='useful')nextUseful(); else nextUnlabelled();}
 function nextUnlabelled(){const ts=[...document.querySelectorAll('#grid .tile')], i=ts.indexOf(tileOf(curVisit));
   const t=[...ts.slice(i+1),...ts.slice(0,Math.max(i,0))].find(x=>!x.dataset.verdict);
   if(t)openVisit(t); else $('#clipmeta').textContent='every visit in the grid is labelled';}
-$('#lblset').querySelectorAll('.lblbtn').forEach(b=>b.onclick=()=>setLabel(b.dataset.v));
+$('#lblset').querySelectorAll('.lblbtn').forEach(b=>b.onclick=()=>selBox?setBoxTag(b.dataset.v,b.dataset.v==='false'?'':$('#vsp').value.trim())
+  :setLabel(b.dataset.v));
 // A visit opens on a full-res still (zoom/pan); "watch clip" swaps to the video. Boxes on by default.
 let curVisit=null, curClip=false, mode='image', boxesOn=true, boxData=null, stillFB=false;
 let zs=1, ztx=0, zty=0;
@@ -536,8 +539,9 @@ function openVisit(t){const id=t.dataset.id; curVisit=id; curClip=t.dataset.clip
   $('#clipmeta').textContent=t.querySelector('.sp').firstChild.textContent+' — '+t.querySelector('.sub').textContent+
     (t.dataset.sup?' · hidden: '+t.dataset.sup.replace('_',' '):'');
   $('#cliplink').href='/visit/'+id+'/image';  // full window, scroll-zoom (the clip has "watch clip")
-  loadLabel(id); loadPickerSpecies(); refreshBoxQueue(); refreshUseful(); if(!$('#clip').open)$('#clip').showModal();
-  if(curClip) loadBoxData().then(drawBoxes);
+  const labelled=loadLabel(id); loadPickerSpecies(); refreshBoxQueue(); refreshUseful(); if(!$('#clip').open)$('#clip').showModal();
+  if(curClip) Promise.all([labelled,loadBoxData()]).then(()=>{if(curVisit!==id)return;
+    if(!curLabel&&stillBoxes().boxes.length>1)selBox=untaggedBox(); drawBoxes();});
   if(curClip&&t.dataset.fav==='clip'){seekTo=t.dataset.favat!==''?+t.dataset.favat:null; playClip();}}  // a favourite clip opens at its moment
 async function loadBoxData(){if(boxData)return; try{boxData=await (await fetch('/api/visit/'+curVisit+'/boxes')).json();}catch(e){boxData={frames:[]};}}
 function drawBoxes(){const svg=$('#boxov'), m=activeMedia();
@@ -556,28 +560,38 @@ const TAGTXT={real:'real',false:'false',wrong_species:'wrong sp.'}, TAGMARK={rea
 let selBox=null, SPP=false, BOXQ=null;
 function stillBoxes(){const f=boxData&&boxData.frames&&(boxData.frames[boxData.best]||boxData.frames[0]);
   return f?{ts:f.ts,boxes:f.boxes||[]}:{ts:null,boxes:[]};}
-function renderBoxTag(){const bar=$('#boxtag'), {ts,boxes}=stillBoxes(), set=$('#boxtagset'), sp=$('#boxsp'), clr=$('#boxclear');
-  if(mode!=='image'||!boxesOn||!curClip||!boxes.length){bar.hidden=true;return;}
-  bar.hidden=false; const b=selBox&&selBox.ts===ts&&boxes.find(x=>x.i===selBox.i);
-  if(!b){selBox=null; const n=boxes.filter(x=>!x.tag).length;
-    $('#boxtagwhat').textContent=n?n+' of '+boxes.length+(boxes.length>1?' boxes':' box')+' on this still '+(n>1?'have':'has')+' no tag: click one to tag it'
-      :'click a box to tag it on its own'; set.hidden=sp.hidden=clr.hidden=true; return;}
-  const t=b.tag;
-  $('#boxtagwhat').textContent='box '+(b.i+1)+' · '+Math.round((b.conf||0)*100)+'% · '+
-    (t?(t.source==='box'?'tagged ':'from the visit: ')+TAGTXT[t.verdict]:'no tag');
-  set.hidden=false; set.querySelectorAll('.lblbtn').forEach(x=>{x.disabled=!labelEditable;
-    x.classList.toggle('on',!!t&&t.source==='box'&&t.verdict===x.dataset.v);});
-  sp.hidden=!(t&&t.verdict!=='false'); sp.disabled=!labelEditable; sp.value=t&&t.species||''; clr.hidden=!(t&&t.source==='box');}
+function renderBoxTag(){const bar=$('#boxtag'), {boxes}=stillBoxes(), clr=$('#boxclear');
+  const show=mode==='image'&&boxesOn&&curClip&&boxes.length&&(boxes.length>1||selBox);
+  if(!show){bar.hidden=true; markTarget(); return;}
+  bar.hidden=false; const b=selBox&&boxes.find(x=>x.i===selBox.i); if(!b)selBox=null;
+  const chip=(k,txt,cls,tip)=>'<button class="tgt '+cls+'" data-k="'+k+'" title="'+esc(tip)+'">'+esc(txt)+'</button>';
+  let h=chip('all','whole visit'+(curLabel?' '+TAGMARK[curLabel.verdict]:''),selBox?'':'on','tag the whole visit: every box takes it where it must hold');
+  [...boxes].sort((x,y)=>(y.conf||0)-(x.conf||0)).forEach(x=>{const t=x.tag;
+    h+=chip(x.i,'box '+(x.i+1)+' · '+Math.round((x.conf||0)*100)+'%'+(t?' '+TAGMARK[t.verdict]+(t.species?' '+t.species:''):''),
+      (t?'t-'+t.verdict+(t.source==='visit'?' inh':''):'')+(selBox&&selBox.i===x.i?' on':''),
+      t?(t.source==='box'?'tagged ':'from the visit: ')+TAGTXT[t.verdict]:'no tag yet');});
+  $('#tgts').innerHTML=h; clr.hidden=!(b&&b.tag&&b.tag.source==='box'); markTarget();}
+$('#tgts').addEventListener('click',e=>{const c=e.target.closest('.tgt'); if(!c)return; const {ts}=stillBoxes();
+  selBox=c.dataset.k==='all'?null:{ts,i:+c.dataset.k}; drawBoxes();});
+// The tag buttons mark the target's own tag: the box picked, or the visit's.
+function markTarget(){const {boxes}=stillBoxes(), b=selBox&&boxes.find(x=>x.i===selBox.i);
+  if(b){const t=b.tag&&b.tag.source==='box'?b.tag:null; markLabel(t&&t.verdict,t?t.species:'');}
+  else markLabel(curLabel&&curLabel.verdict,curLabel?curLabel.species:'');}
+// The first box on the still (most confident first) with no tag of its own.
+function untaggedBox(){const {ts,boxes}=stillBoxes();
+  const b=[...boxes].sort((x,y)=>(y.conf||0)-(x.conf||0)).find(x=>!(x.tag&&x.tag.source==='box')); return b?{ts,i:b.i}:null;}
+// Tag the box picked. Once every box on the still has its own tag they tag the visit (the server
+// says so: `complete`) and the viewer moves on; until then it picks the next box. Wrong sp. waits for its species.
 async function setBoxTag(v,species){if(!labelEditable||!selBox||!curVisit)return;
   try{const r=await fetch('/api/visit/'+curVisit+'/box-label',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({ts:selBox.ts,box:selBox.i,verdict:v,species:v&&v!=='false'?species||'':''})});
-    if(!r.ok)return;
-    // a visit with no tag yet becomes real when one of its boxes is tagged real
-    if(v==='real'&&!curLabel&&await postLabel('real','')){markLabel('real'); const t=tileOf(curVisit); if(t)t.dataset.verdict='real';}
-    if(species)SPP=false; boxData=null; await loadBoxData(); drawBoxes(); refreshBoxQueue(); loadPickerSpecies();}catch(e){}}
-$('#boxtagset').querySelectorAll('.lblbtn').forEach(x=>x.onclick=()=>setBoxTag(x.dataset.v,x.dataset.v==='false'?'':$('#boxsp').value.trim()));
-$('#boxsp').addEventListener('change',()=>{const {boxes}=stillBoxes(), b=selBox&&boxes.find(x=>x.i===selBox.i);
-  if(b&&b.tag)setBoxTag(b.tag.verdict,$('#boxsp').value.trim());});  // naming an inherited tag makes it the box's own
+    if(!r.ok)return; const d=await r.json(), named=v!=='wrong_species'||!!species;
+    if(species)SPP=false; curLabel=d.label||curLabel; boxData=null; await loadBoxData();
+    if(d.complete){const t=tileOf(curVisit); if(t)t.dataset.verdict=d.label.verdict;
+      const md=document.querySelector('.mdot[data-id="'+curVisit+'"]'); if(md)md.className='mdot v-'+d.label.verdict;
+      if(named&&VIEW!=='map'&&t)setTimeout(advance,350);}
+    else if(named&&v)selBox=untaggedBox()||selBox;
+    drawBoxes(); refreshBoxQueue(); loadPickerSpecies();}catch(e){}}
 $('#boxclear').onclick=()=>setBoxTag(null,'');
 async function loadPickerSpecies(){if(SPP)return; SPP=true;
   try{const d=await (await fetch('/api/labels/species')).json();
