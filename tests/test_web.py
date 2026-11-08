@@ -984,3 +984,15 @@ def test_visits_open_by_number_from_the_ask_box_and_a_link(tmp_path):
     assert "const ids=visitIds(q); if(ids){await lookUpVisits(ids); return;}" in page  # before any model call
     assert "new URLSearchParams(location.search).get('visit')" in page and "openLinkedVisit();" in page
     assert "$('#tag').href='/?visit='+id" in c.get("/visit/3/image").text
+
+
+def test_on_a_phone_the_feeds_top_stays_short(client):
+    """Paused cameras share one chip; on a phone the filters fold behind a button that says what
+    they're set to; the visit-number box shows only on feeds, where its answers appear."""
+    page = client.get("/").text
+    assert "+${paused.length} paused" in page and "' (paused)'" not in page
+    assert 'id="ftog"' in page and 'class="fset" id="fset"' in page
+    assert ".filters.open .fset{display:flex" in page and "@media(max-width:560px){.ftog{display:inline-block} .fset{display:none}" in page
+    fset = page[page.index('id="fset"'):page.index('id="askbox"')]
+    assert all(f'id="{i}"' in fset for i in ("since", "taxon", "camera", "showhidden", "favonly"))
+    assert "$('#askbox').style.display=VIEW==='feeds'?'':'none';" in page

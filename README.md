@@ -251,6 +251,9 @@ Counts follow the tags, in Analytics' timeline and in `activity_summary` (so in 
 too): a visit tagged false is left out, and one you named counts under that name and its group
 (a group or class name as itself, otherwise the group the log files that name under).
 
+On a phone the feeds page keeps its top short: paused cameras share one chip, and the filters fold
+behind one button that says what they're set to (tap it to change them).
+
 The viewer's own tools sit small and together above the tags: **▶ clip**, **☆**, **hide**, **boxes**
 and **full-res ↗**.
 
