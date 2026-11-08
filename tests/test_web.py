@@ -354,6 +354,22 @@ def test_dashboard_has_the_hidden_toggle_and_label_queue(client):
     assert 'id="hidnote"' in page
 
 
+def test_the_viewer_has_one_next_through_a_chosen_queue(client):
+    """One "next" walks the queue picked beside it (grid / most useful / boxes to tag), remembered; a tag
+    moves on through the same queue. The viewer's own tools sit together apart from tagging, and the
+    visit-number box is in the filter row, not a block above the grid."""
+    page = client.get("/").text
+    assert page.count("next &rsaquo;") == 1 and 'id="usebtn"' not in page and 'id="boxqbtn"' not in page
+    for q in ('value="grid"', 'value="useful"', 'value="boxes"'):
+        assert q in page[page.index('id="qsel"'):page.index('id="nextbtn"')]
+    assert "function advance(){if(qsel.value==='useful')nextUseful(); else if(qsel.value==='boxes')nextBoxToTag(); else nextUnlabelled();}" in page
+    assert "$('#nextbtn').onclick=advance;" in page and "localStorage.setItem(QKEY,qsel.value)" in page
+    vsec = page[page.index('class="vsec"'):page.index('id="boxtag"')]
+    assert all(f'id="{b}"' in vsec for b in ("playbtn", "favbtn", "hidebtn", "boxbtn", "cliplink"))
+    filters = page[page.index('class="filters"'):page.index('id="view-feeds"')]
+    assert 'id="askform"' in filters and 'id="askans"' not in filters
+
+
 def test_visits_come_before_live_on_the_feeds_view(client):
     page = client.get("/").text
     assert page.index('id="grid"') < page.index('id="live"')
@@ -361,7 +377,7 @@ def test_visits_come_before_live_on_the_feeds_view(client):
 
 def test_viewer_links_the_full_res_still_not_the_clip(client):
     page = client.get("/").text
-    assert ">full-res image</a>" in page and "open raw" not in page
+    assert ">full-res &nearr;</a>" in page and "open raw" not in page
     assert "$('#cliplink').href='/visit/'+id+'/image'" in page  # a zoomable page over /frame/boxed, not the clip
 
 
@@ -782,11 +798,11 @@ def test_the_viewer_tags_single_boxes_and_names_species(client):
     clicked on the still (a click, not a drag; the smallest box under the pointer). An untagged
     visit with several boxes starts on its first box; each tag moves to the next, and once all are
     tagged the visit is and the viewer moves on. Boxes are coloured by their tag, dashed when it
-    comes from the visit's; wrong sp. waits for its species; "next box to tag" walks the revisit
-    list; suggestions come from /api/labels/species."""
+    comes from the visit's; wrong sp. waits for its species; the "boxes to tag" queue walks the
+    revisit list; suggestions come from /api/labels/species."""
     page = client.get("/").text
     assert 'id="boxtag"' in page and 'id="tgts"' in page and 'id="vsp"' in page and "function untaggedBox" in page
-    assert 'id="boxqbtn"' in page and "function nextBoxToTag" in page and "/api/labels/needs-box-tags" in page
+    assert 'id="qopt-boxes"' in page and "function nextBoxToTag" in page and "/api/labels/needs-box-tags" in page
     assert "if(moved>5||pinched||mode!=='image'||!boxesOn||!boxData)return;" in page
     assert ".sort((a,b)=>a.w*a.h-b.w*b.h)[0]" in page
     assert ".boxov rect.inh{stroke-dasharray:6 4}" in page and "t.source==='visit'?' inh'" in page
@@ -949,7 +965,7 @@ def test_the_viewer_shows_the_tag_models_suggestion_and_its_queue(tmp_path):
     assert [v["id"] for v in q["visits"]] == [ids[1], ids[0]] and q["count"] == 2  # the tagged one is gone
     assert q["visits"][0]["suggestion"]["logged"] == "songbirds"
     html = c.get("/").text
-    assert 'id="suggok"' in html and 'id="usebtn"' in html and "function advance()" in html
+    assert 'id="suggok"' in html and 'id="qopt-useful"' in html and "function advance()" in html
 
 
 def test_visits_open_by_number_from_the_ask_box_and_a_link(tmp_path):
