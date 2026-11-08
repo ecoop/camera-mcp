@@ -20,7 +20,7 @@
 <div id="stage"><img id="img" alt="visit still"></div>
 <div class="bar"><span class="cap" id="cap"></span>
   <button id="zout" title="zoom out">&minus;</button><span class="lvl" id="lvl"></span><button id="zin" title="zoom in">+</button>
-  <button id="fit" title="fit the whole picture (or double-click)">fit</button>
+  <button id="fit" title="fit the whole picture (or double-click / double-tap)">fit</button>
   <button id="boxes" class="on" title="the detector's boxes and confidences">boxes</button>
   <a id="raw" target="_blank" rel="noopener" title="the JPEG itself, e.g. to save it">jpeg &nearr;</a>
   <a id="tag" title="open this visit in the dashboard, to tag it">tag &rsaquo;</a></div>
@@ -42,14 +42,22 @@ img.onload=()=>{$('#msg').style.display='none'; const keep=fit!==1&&s!==fit; if(
 img.onerror=()=>{if(!triedThumb){triedThumb=true; boxes=false; $('#boxes').style.display='none';
   img.src='/media/visit/'+id+'/thumb'; return;} $('#msg').textContent='no image for this visit';};
 stage.addEventListener('wheel',e=>{e.preventDefault(); zoomAt(Math.exp(-e.deltaY*(e.ctrlKey?0.01:0.0015)),e.clientX,e.clientY);},{passive:false});
-stage.addEventListener('pointerdown',e=>{pan={x:e.clientX,y:e.clientY}; stage.classList.add('panning');
-  try{stage.setPointerCapture(e.pointerId);}catch(_){}});
-stage.addEventListener('pointermove',e=>{if(!pan)return; tx+=e.clientX-pan.x; ty+=e.clientY-pan.y; pan={x:e.clientX,y:e.clientY}; place();});
-let lastUp=0, downAt=null;  // a double click/tap fits (counted here: pointer capture can eat dblclick)
-stage.addEventListener('pointerdown',e=>{downAt={x:e.clientX,y:e.clientY};});
-stage.addEventListener('pointerup',e=>{pan=null; stage.classList.remove('panning');
-  const still=downAt&&Math.abs(e.clientX-downAt.x)+Math.abs(e.clientY-downAt.y)<6, now=Date.now();
-  if(still&&now-lastUp<350){fitAll(); lastUp=0;} else lastUp=still?now:0;});
+// One finger or the mouse pans; two fingers pinch (and pan). A double click or tap zooms in at that
+// spot, or fits again once zoomed (counted here: pointer capture can eat dblclick).
+const pts=new Map(); let pd=0, pinched=false, lastUp=0, downAt=null;
+const mid=()=>{const [a,b]=[...pts.values()]; return {x:(a.x+b.x)/2,y:(a.y+b.y)/2,d:Math.hypot(a.x-b.x,a.y-b.y)};};
+stage.addEventListener('pointerdown',e=>{if(!pts.size){pinched=false; downAt={x:e.clientX,y:e.clientY};}
+  pts.set(e.pointerId,{x:e.clientX,y:e.clientY}); stage.classList.add('panning'); try{stage.setPointerCapture(e.pointerId);}catch(_){}
+  if(pts.size===2){pinched=true; const m=mid(); pan={x:m.x,y:m.y}; pd=m.d;} else pan={x:e.clientX,y:e.clientY};});
+stage.addEventListener('pointermove',e=>{if(!pts.has(e.pointerId))return; pts.set(e.pointerId,{x:e.clientX,y:e.clientY});
+  if(pts.size===2){const m=mid(); tx+=m.x-pan.x; ty+=m.y-pan.y; pan={x:m.x,y:m.y}; zoomAt(m.d/(pd||m.d),m.x,m.y); pd=m.d;}
+  else if(pan){tx+=e.clientX-pan.x; ty+=e.clientY-pan.y; pan={x:e.clientX,y:e.clientY}; place();}});
+function lift(e){if(!pts.delete(e.pointerId))return false;
+  if(pts.size){const [p]=pts.values(); pan={x:p.x,y:p.y};} else{pan=null; stage.classList.remove('panning');} return true;}
+stage.addEventListener('pointerup',e=>{const last=pts.size===1; if(!lift(e)||!last)return;
+  const still=!pinched&&downAt&&Math.abs(e.clientX-downAt.x)+Math.abs(e.clientY-downAt.y)<6, now=Date.now();
+  if(still&&now-lastUp<350){if(s>fit*1.01)fitAll(); else zoomAt(2.5,e.clientX,e.clientY); lastUp=0;} else lastUp=still?now:0;});
+stage.addEventListener('pointercancel',lift);
 addEventListener('resize',()=>{const was=s===fit; fit=Math.min(innerWidth/img.naturalWidth,innerHeight/img.naturalHeight); if(was)s=fit; s=Math.max(s,fit); place();});
 addEventListener('keydown',e=>{if(e.key==='+'||e.key==='=')zoomAt(1.5); else if(e.key==='-')zoomAt(1/1.5); else if(e.key==='0')fitAll();});
 $('#zin').onclick=()=>zoomAt(1.5); $('#zout').onclick=()=>zoomAt(1/1.5); $('#fit').onclick=fitAll;

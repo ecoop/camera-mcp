@@ -72,6 +72,17 @@ dialog{border:1px solid var(--line);border-radius:12px;background:var(--frame);c
 .stage.pan{cursor:grab} .stage.panning{cursor:grabbing}
 .pz{position:relative;transform-origin:0 0;line-height:0;will-change:transform}
 .pz img,.pz video{display:block;max-width:86vw;max-height:76vh}
+.pz img.small{width:min(86vw,900px);height:auto;max-height:76vh;object-fit:contain}  /* the thumbnail, when there's no full frame */
+.clipx.clipfull{right:2.8rem}
+dialog.full{width:100vw;max-width:100vw;height:100dvh;max-height:100dvh;margin:0;border:0;border-radius:0;overflow-y:auto}
+dialog.full .stage{max-width:100vw;max-height:calc(100dvh - 7.5rem);border-radius:0}
+dialog.full .pz img,dialog.full .pz video{max-width:100vw;max-height:calc(100dvh - 7.5rem)}
+dialog.full .pz img.small{width:100vw}
+@media(max-width:760px){.clipx.clipfull{display:none}
+  dialog#clip{width:100vw;max-width:100vw;height:100dvh;max-height:100dvh;margin:0;border:0;border-radius:0;overflow-y:auto}
+  dialog#clip .stage{max-width:100vw;max-height:62dvh;border-radius:0}
+  dialog#clip .pz img,dialog#clip .pz video{max-width:100vw;max-height:62dvh}
+  dialog#clip .pz img.small{width:100vw}}
 dialog .vmeta{font-family:var(--mono);font-size:.74rem;padding:.6rem .8rem;display:flex;justify-content:space-between;gap:.8rem;align-items:center;flex-wrap:wrap}
 dialog .vmeta a{color:var(--accent);cursor:pointer}
 .vact{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
@@ -256,7 +267,7 @@ dialog .boxtag[hidden],.spin[hidden],.lblset[hidden],.boxbtn[hidden]{display:non
   <div class="chart vtl" id="vtl"></div>
 </section>
 <div class="vtip" id="vtip"></div>
-<dialog id="clip"><div class="stage pan" id="stage"><button class="clipx" id="clipclose" aria-label="close">&times;</button><div class="pz" id="pz">
+<dialog id="clip"><div class="stage pan" id="stage"><button class="clipx" id="clipclose" aria-label="close">&times;</button><button class="clipx clipfull" id="fullbtn" aria-label="full screen" title="fill the window (tags and all); again to shrink">&#10530;</button><div class="pz" id="pz">
     <img id="still" alt="frame">
     <video controls style="display:none"></video>
     <svg class="boxov" id="boxov" viewBox="0 0 100 100" preserveAspectRatio="none"></svg></div></div>
@@ -491,7 +502,7 @@ async function loadLabel(id){curLabel=null; markLabel(null,'');
 async function postLabel(v,species){const res=await fetch('/api/visit/'+curVisit+'/label',{method:'POST',
     headers:{'Content-Type':'application/json'},body:JSON.stringify({verdict:v,species:v==='false'?'':species||''})});
   if(res.ok){curLabel={verdict:v,species:v==='false'?null:species||null}; if(species)SPP=false;
-    if(curClip){boxData=null; loadBoxData().then(drawBoxes);} refreshBoxQueue();}  // inherited box tags follow the visit's
+    boxData=null; loadBoxData().then(drawBoxes); refreshBoxQueue();}  // inherited box tags follow the visit's
   return res.ok;}
 $('#vsp').addEventListener('change',()=>{if(selBox){const {boxes}=stillBoxes(), b=boxes.find(x=>x.i===selBox.i);
     if(b&&b.tag&&b.tag.source==='box')setBoxTag(b.tag.verdict,$('#vsp').value.trim()); return;}  // naming the picked box
@@ -544,27 +555,31 @@ async function toggleFav(){const t=tileOf(curVisit); if(!t||!labelEditable)retur
     t.dataset.fav=on?kind:''; t.dataset.favat=on&&at!=null?at:''; markFav(t);
     const g=document.querySelector('#grid .tile[data-id="'+curVisit+'"]'); if(g&&g!==t){g.dataset.fav=t.dataset.fav;g.dataset.favat=t.dataset.favat;}}catch(e){}}
 $('#favbtn').onclick=toggleFav;
+// The still opens on the full frame (/frame: the saved still, else one from the clip); only if there's
+// neither (a visit still going on) does it show the thumbnail, scaled up, with no boxes. Whether there's
+// a clip comes from the visit's record, not the tile: the grid may have loaded before the clip was kept.
 function openVisit(t){const id=t.dataset.id; curVisit=id; curClip=t.dataset.clip==='1'; markHidden(t); markFav(t);
   QMODE=t.parentElement&&t.parentElement.id==='queuegrid'?($('#queuegrid').dataset.q||''):''; loadSuggestion(id);
-  boxData=null; selBox=null; mode='image'; boxesOn=curClip; stillFB=false; resetZoom(); $('#boxtag').hidden=true;
+  boxData=null; selBox=null; mode='image'; boxesOn=true; stillFB=false; resetZoom(); $('#boxtag').hidden=true;
   const img=$('#still'), vid=$('#clip video');
   img.style.display=''; vid.pause(); vid.removeAttribute('src'); vid.style.display='none';
-  img.src=(curClip?'/media/visit/'+id+'/frame':'/media/visit/'+id+'/thumb');
+  img.classList.remove('small'); img.src='/media/visit/'+id+'/frame';
   $('#stage').classList.add('pan');
   $('#playbtn').style.display=curClip?'':'none'; $('#playbtn').textContent='watch clip ▶';
-  $('#boxbtn').style.display=curClip?'':'none';
+  $('#boxbtn').style.display='';
   $('#boxbtn').classList.toggle('on',boxesOn); $('#boxbtn').textContent=boxesOn?'hide boxes':'show boxes';
   $('#clipmeta').textContent=t.querySelector('.sp').firstChild.textContent+' — '+t.querySelector('.sub').textContent+
     (t.dataset.sup?' · hidden: '+t.dataset.sup.replace('_',' '):'');
   $('#cliplink').href='/visit/'+id+'/image';  // full window, scroll-zoom (the clip has "watch clip")
   const labelled=loadLabel(id); loadPickerSpecies(); refreshBoxQueue(); refreshUseful(); if(!$('#clip').open)$('#clip').showModal();
-  if(curClip) Promise.all([labelled,loadBoxData()]).then(()=>{if(curVisit!==id)return;
+  Promise.all([labelled,loadBoxData()]).then(()=>{if(curVisit!==id)return;
+    curClip=!!boxData.has_clip; t.dataset.clip=curClip?'1':'0'; $('#playbtn').style.display=curClip?'':'none';
     if(!curLabel&&stillBoxes().boxes.length>1)selBox=untaggedBox(); drawBoxes();});
   if(curClip&&t.dataset.fav==='clip'){seekTo=t.dataset.favat!==''?+t.dataset.favat:null; playClip();}}  // a favourite clip opens at its moment
 async function loadBoxData(){if(boxData)return; try{boxData=await (await fetch('/api/visit/'+curVisit+'/boxes')).json();}catch(e){boxData={frames:[]};}}
 function drawBoxes(){const svg=$('#boxov'), m=activeMedia();
   svg.style.width=(m.clientWidth||m.offsetWidth)+'px'; svg.style.height=(m.clientHeight||m.offsetHeight)+'px';
-  if(!boxesOn||!boxData){svg.style.display='none';renderBoxTag();return;}
+  if(!boxesOn||!boxData||(stillFB&&mode==='image')){svg.style.display='none';renderBoxTag();return;}  // the thumbnail is a crop
   if(!boxData.frames||!boxData.frames.length){svg.innerHTML='<text x="2" y="7">no boxes stored</text>';svg.style.display='block';return;}
   const f=boxData.frames[boxData.best]||boxData.frames[0]; let s='';
   (f.boxes||[]).forEach(b=>{const x=b.x*100,y=b.y*100,w=b.w*100,h=b.h*100, t=b.tag;
@@ -579,7 +594,7 @@ let selBox=null, SPP=false, BOXQ=null;
 function stillBoxes(){const f=boxData&&boxData.frames&&(boxData.frames[boxData.best]||boxData.frames[0]);
   return f?{ts:f.ts,boxes:f.boxes||[]}:{ts:null,boxes:[]};}
 function renderBoxTag(){const bar=$('#boxtag'), {boxes}=stillBoxes(), clr=$('#boxclear');
-  const show=mode==='image'&&boxesOn&&curClip&&boxes.length&&(boxes.length>1||selBox);
+  const show=mode==='image'&&boxesOn&&!stillFB&&boxes.length&&(boxes.length>1||selBox);
   if(!show){bar.hidden=true; markTarget(); return;}
   bar.hidden=false; const b=selBox&&boxes.find(x=>x.i===selBox.i); if(!b)selBox=null;
   const chip=(k,txt,cls,tip)=>'<button class="tgt '+cls+'" data-k="'+k+'" title="'+esc(tip)+'">'+esc(txt)+'</button>';
@@ -646,7 +661,7 @@ $('#uselink').onclick=e=>{e.preventDefault(); curVisit=null; nextUseful();};
 (function(){let down=null; const st=$('#stage');
   st.addEventListener('pointerdown',e=>{down={x:e.clientX,y:e.clientY};});
   st.addEventListener('pointerup',e=>{if(!down)return; const moved=Math.abs(e.clientX-down.x)+Math.abs(e.clientY-down.y); down=null;
-    if(moved>5||mode!=='image'||!boxesOn||!boxData)return;
+    if(moved>5||pinched||mode!=='image'||!boxesOn||!boxData)return;
     const r=$('#boxov').getBoundingClientRect(); if(!r.width)return;
     const px=(e.clientX-r.left)/r.width, py=(e.clientY-r.top)/r.height, k=0.01, {ts,boxes}=stillBoxes();
     const hit=boxes.filter(b=>px>=b.x-k&&px<=b.x+b.w+k&&py>=b.y-k&&py<=b.y+b.h+k).sort((a,b)=>a.w*a.h-b.w*b.h)[0];
@@ -662,21 +677,38 @@ function playClip(){if(!curClip)return; const img=$('#still'), vid=$('#clip vide
     $('#playbtn').textContent='watch clip ▶'; drawBoxes();}}
 $('#playbtn').onclick=playClip; $('#boxbtn').onclick=toggleBoxes; $('#nextbtn').onclick=nextUnlabelled; $('#hidebtn').onclick=toggleHidden;
 $('#still').addEventListener('load',()=>{if(mode==='image')drawBoxes();});
-$('#still').addEventListener('error',()=>{if(curClip&&!stillFB){stillFB=true;$('#still').src='/media/visit/'+curVisit+'/thumb';}});
+$('#still').addEventListener('error',()=>{if(stillFB)return; stillFB=true; $('#still').classList.add('small');
+  $('#boxbtn').style.display='none'; $('#still').src='/media/visit/'+curVisit+'/thumb';});
 $('#clip video').addEventListener('loadeddata',()=>{if(mode!=='video')return;
   const vid=$('#clip video'), f=boxData&&boxData.frames&&boxData.frames[boxData.best];
   if(seekTo!=null){try{vid.pause();vid.currentTime=seekTo;}catch(e){} seekTo=null;}
   else if(f){try{vid.pause();if(f.offset)vid.currentTime=f.offset;}catch(e){}} drawBoxes();});
-(function(){const stage=$('#stage'); let drag=false,lx=0,ly=0;
+// Zoom: the wheel, or on a touch screen a pinch (two fingers, which pan too) and a double tap (in at
+// that spot, or back out). One finger or the mouse pans once zoomed in.
+let pinched=false;  // a pinch since the first finger went down: not a tap on a box
+(function(){const stage=$('#stage'), pts=new Map(); let lx=0,ly=0,pd=0,lastTap=0;
+  const local=(x,y)=>{const r=stage.getBoundingClientRect(); return [x-r.left,y-r.top];};
+  function zoomTo(ns,cx,cy){ns=Math.min(8,Math.max(1,ns)); ztx=cx-(cx-ztx)*(ns/zs); zty=cy-(cy-zty)*(ns/zs); zs=ns;
+    if(zs===1){ztx=0;zty=0;} applyZoom();}
+  const mid=()=>{const [a,b]=[...pts.values()]; return [(a.x+b.x)/2,(a.y+b.y)/2,Math.hypot(a.x-b.x,a.y-b.y)];};
   stage.addEventListener('wheel',e=>{if(mode!=='image')return; e.preventDefault();
-    const r=stage.getBoundingClientRect(),cx=e.clientX-r.left,cy=e.clientY-r.top;
-    const f=e.deltaY<0?1.15:1/1.15,ns=Math.min(8,Math.max(1,zs*f));
-    ztx=cx-(cx-ztx)*(ns/zs); zty=cy-(cy-zty)*(ns/zs); zs=ns; if(zs===1){ztx=0;zty=0;} applyZoom();},{passive:false});
-  stage.addEventListener('pointerdown',e=>{if(mode!=='image'||zs===1)return; drag=true;lx=e.clientX;ly=e.clientY;
-    stage.classList.add('panning'); try{stage.setPointerCapture(e.pointerId);}catch(_){}});
-  stage.addEventListener('pointermove',e=>{if(!drag)return; ztx+=e.clientX-lx; zty+=e.clientY-ly; lx=e.clientX; ly=e.clientY; applyZoom();});
-  stage.addEventListener('pointerup',()=>{drag=false;stage.classList.remove('panning');});
+    zoomTo(zs*(e.deltaY<0?1.15:1/1.15),...local(e.clientX,e.clientY));},{passive:false});
+  stage.addEventListener('pointerdown',e=>{if(mode!=='image')return; if(!pts.size)pinched=false;
+    pts.set(e.pointerId,{x:e.clientX,y:e.clientY}); try{stage.setPointerCapture(e.pointerId);}catch(_){}
+    if(pts.size===2){pinched=true; [lx,ly,pd]=mid();} else{lx=e.clientX; ly=e.clientY; if(zs>1)stage.classList.add('panning');}});
+  stage.addEventListener('pointermove',e=>{if(!pts.has(e.pointerId))return; pts.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    if(pts.size===2){const [mx,my,d]=mid(); ztx+=mx-lx; zty+=my-ly; zoomTo(zs*d/(pd||d),...local(mx,my)); lx=mx; ly=my; pd=d;}
+    else if(pts.size===1&&zs>1){ztx+=e.clientX-lx; zty+=e.clientY-ly; lx=e.clientX; ly=e.clientY; applyZoom();}});
+  function lift(e){if(!pts.delete(e.pointerId))return false; stage.classList.remove('panning');
+    if(pts.size){const [p]=pts.values(); lx=p.x; ly=p.y;} return true;}
+  stage.addEventListener('pointerup',e=>{const last=pts.size===1; if(!lift(e)||!last||pinched||e.pointerType==='mouse')return;
+    const now=Date.now(); if(now-lastTap<300){if(zs>1)resetZoom(); else zoomTo(2.5,...local(e.clientX,e.clientY)); lastTap=0;}
+    else lastTap=now;});
+  stage.addEventListener('pointercancel',lift);
   stage.addEventListener('dblclick',()=>{if(mode==='image')resetZoom();});})();
+// Full screen: the viewer fills the window, tags and all (a phone always shows it this way).
+$('#fullbtn').addEventListener('pointerdown',e=>e.stopPropagation());
+$('#fullbtn').onclick=e=>{e.stopPropagation(); $('#clip').classList.toggle('full'); resetZoom(); requestAnimationFrame(drawBoxes);};
 $('#clip').onclick=e=>{if(e.target.id==='clip')$('#clip').close();};
 $('#clipclose').addEventListener('pointerdown',e=>e.stopPropagation());  // don't start a pan
 $('#clipclose').onclick=e=>{e.stopPropagation();$('#clip').close();};
