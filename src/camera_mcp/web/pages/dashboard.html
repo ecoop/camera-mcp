@@ -54,6 +54,13 @@
 .clabel{display:flex;justify-content:space-between;gap:1rem;font-family:var(--mono);font-size:.66rem;color:var(--muted);margin-top:.35rem;flex-wrap:wrap}
 .xax{display:flex;justify-content:space-between;font-family:var(--mono);font-size:.62rem;color:var(--muted);margin-top:.15rem;padding:0 3px}
 .filters{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-bottom:1rem}
+.fset{display:contents}  /* on a phone, folded behind the filters button */
+.ftog{display:none;font-family:var(--mono);font-size:.74rem;background:var(--frame);color:var(--ink);border:1px solid var(--line);
+  border-radius:7px;padding:.3rem .55rem;cursor:pointer;max-width:62%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ftog::before{content:"\25B8  "} .filters.open .ftog::before{content:"\25BE  "}
+@media(max-width:560px){.ftog{display:inline-block} .fset{display:none}
+  .filters.open .fset{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;width:100%;order:3}
+  .filters .ask.on{flex:1 1 8rem}}
 .filters select,.filters input{font-family:var(--mono);font-size:.78rem;background:var(--frame);
   color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:.3rem .5rem}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:.8rem}
@@ -199,7 +206,9 @@ dialog .boxtag[hidden],.spin[hidden],.lblset[hidden],.boxbtn[hidden]{display:non
     <a href="/zones">zones</a></nav>
   <div class="who"><span id="clock"></span></div></div>
 <div class="health" id="health">loading&hellip;</div>
-<div class="filters">
+<div class="filters" id="filters">
+  <button type="button" class="ftog" id="ftog" aria-expanded="false" aria-controls="fset" title="show the filters"></button>
+  <div class="fset" id="fset">
   <select id="since"><option value="2h">last 2h</option><option value="12h">12h</option>
     <option value="24h" selected>24h</option><option value="3d">3 days</option><option value="7d">7 days</option><option value="30d">30 days</option><option value="range">from&ndash;to&hellip;</option></select>
   <span class="range" id="range" hidden><input type="datetime-local" id="from" title="from (local time)">&ndash;<input
@@ -210,6 +219,7 @@ dialog .boxtag[hidden],.spin[hidden],.lblset[hidden],.boxbtn[hidden]{display:non
     <input type="checkbox" id="showhidden"> + hidden</label>
   <label class="hidtog" id="favtoglbl" title="just your favourites, from any time (the time window is ignored), hidden or not">
     <input type="checkbox" id="favonly"> &#9733; favourites</label>
+  </div>
   <div class="ask" id="askbox"><form id="askform"><input id="askq" maxlength="500" autocomplete="off"
       placeholder="visit #" aria-label="look up visits by number"><button id="askbtn">go</button></form></div>
 </div>
@@ -324,8 +334,9 @@ async function loadHealth(){try{const label=winLabel();
   const watching=st.filter(c=>c.watching_now).length, total=st.filter(c=>c.state!=='never seen by the monitor').length;
   let s;
   st.forEach(c=>CAMSTATE[c.camera]=c.state);
-  s=`<span class="cams">`+st.map(c=>`<span class="chip ${c.watching_now?'live':(c.state==='paused'?'off':'')}">`+
-    `${c.camera}${c.state==='paused'?' (paused)':''}</span>`).join('')+`</span>`;
+  const paused=st.filter(c=>c.state==='paused').map(c=>c.camera);  // paused ones share one chip
+  s=`<span class="cams">`+st.filter(c=>c.state!=='paused').map(c=>`<span class="chip ${c.watching_now?'live':''}">${c.camera}</span>`).join('')+
+    (paused.length?`<span class="chip off" title="paused: ${paused.join(', ')}">+${paused.length} paused</span>`:'')+`</span>`;
   if(h.samples){const dr=h.segments_dropped, th=h.segments_thinned||0;
     s+=`<span title="analysis over ${label}: ${h.frames_analyzed.toLocaleString()} frames">`+
     (th?`<span title="segments analysed at one frame while the queue was behind">${th.toLocaleString()} thinned</span> &middot; `:'')+
@@ -856,6 +867,8 @@ function setView(v,push){VIEW=['analytics','map'].includes(v)?v:'feeds';
   $('#view-feeds').hidden=VIEW!=='feeds'; $('#view-analytics').hidden=VIEW!=='analytics'; $('#view-map').hidden=VIEW!=='map';
   $('#hidtoglbl').style.display=VIEW==='feeds'?'':'none';  // it filters the visits grid, which only feeds shows
   $('#favtoglbl').style.display=VIEW==='feeds'?'':'none';
+  $('#askbox').style.display=VIEW==='feeds'?'':'none';  // its answers show above the visits grid
+  fsum();
   document.querySelectorAll('.tabs a[data-view]').forEach(a=>a.classList.toggle('active',a.dataset.view===VIEW));
   if(push)history.pushState({v:VIEW},'',VIEW==='feeds'?'/':'/'+VIEW);
   renderView();}
@@ -863,6 +876,13 @@ document.querySelectorAll('a[data-view]').forEach(a=>a.addEventListener('click',
 addEventListener('popstate',()=>setView(viewOf(location.pathname),false));
 
 $('.hmode').querySelectorAll('button').forEach(b=>b.onclick=()=>{$('.hmode .on').classList.remove('on');b.classList.add('on');loadHeatmap();});
+// On a phone the filters fold behind one button, which says what they're set to.
+function fsum(){const sel=id=>{const e=$('#'+id); return e.value?e.options[e.selectedIndex].text:'';};
+  const parts=[ranged()?winLabel():sel('since'),sel('taxon'),sel('camera')];
+  if(VIEW==='feeds'){if($('#showhidden').checked)parts.push('+ hidden'); if($('#favonly').checked)parts.push('\u2605');}
+  $('#ftog').textContent=parts.filter(Boolean).join(' \u00b7 ');}
+$('#ftog').onclick=()=>{const o=$('#filters').classList.toggle('open'); $('#ftog').setAttribute('aria-expanded',o);};
+['since','from','until','taxon','camera','showhidden','favonly'].forEach(id=>$('#'+id).addEventListener('change',fsum));
 // filters are global; a change refreshes the header and whichever view is showing
 ['since','from','until','taxon','camera','showhidden','favonly'].forEach(id=>$('#'+id).addEventListener('change',()=>{
   if(id==='since'&&ranged()&&!$('#from').value){const at=d=>new Date(d-new Date().getTimezoneOffset()*6e4).toISOString().slice(0,16);
