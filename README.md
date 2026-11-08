@@ -4,7 +4,7 @@
 ![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13-blue)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
-_Last updated: 2026-11-07_
+_Last updated: 2026-11-08_
 
 An MCP server and an always-on monitor for home IP cameras, built to watch for wildlife on one
 machine without saturating it.
@@ -224,7 +224,8 @@ against the camera's own history first (read-only):
 
 To check the gate by eye, pick species "animal" and tick **+ hidden** on the dashboard: hidden
 visits show a badge with the reason. Open one and mark it real or false; the viewer moves on to
-the next unlabelled visit (or press **next unlabelled ›**). Wrong sp. moves on once you've said
+the next visit in the queue picked beside **next ›** (unlabelled in the grid, most useful, or boxes to
+tag; the choice is remembered), or press **next ›**. Wrong sp. moves on once you've said
 what it was. The backtest's `lbl_real` column then
 counts real animals the rules would hide. A label is per visit, but a visit you mark real
 can still have a junk box or two (a bird on the feeder plus a box on the clothesline), so single
@@ -242,7 +243,7 @@ shared verdict and species if the animal boxes agree, else real with no species 
 each box keeps its own); then the viewer moves on. Boxes are outlined by their tag (green real, grey
 false, amber wrong species, red none yet; dashed when the tag comes from the visit's), with a
 ✓ / ✗ / ≠ mark. A real or wrong-species tag has a **what was it?** field, suggesting names you've
-used and groups seen here; a wrong-species tag waits for it instead of moving on. **next box to tag ›**
+used and groups seen here; a wrong-species tag waits for it instead of moving on. The **boxes to tag** queue
 walks the real visits whose still still has an untagged box (narrowed to the camera filter): the
 ones to revisit before the stills are used as training data.
 
@@ -250,7 +251,10 @@ Counts follow the tags, in Analytics' timeline and in `activity_summary` (so in 
 too): a visit tagged false is left out, and one you named counts under that name and its group
 (a group or class name as itself, otherwise the group the log files that name under).
 
-**Favourites.** Separate from tags, **☆ favourite** in the viewer stars a visit as a keeper. Starred
+The viewer's own tools sit small and together above the tags: **▶ clip**, **☆**, **hide**, **boxes**
+and **full-res ↗**.
+
+**Favourites.** Separate from tags, **☆** in the viewer stars a visit as a keeper. Starred
 while its clip plays, it keeps that moment and reopens there (paused); starred on the image, it
 opens on the still. Starred visits show ★ after their name, and **★ favourites** in the filter bar
 lists them all, from any time (the window is ignored) and hidden or not. Nothing cleans up visit
@@ -260,7 +264,7 @@ A visit opens on its full-resolution still, even when the grid loaded before the
 visit with no frame kept shows its thumbnail (scaled up, without boxes). In the viewer, scroll or
 pinch to zoom, and drag to pan once zoomed; on a touch screen a double tap zooms in at that spot,
 or back out. **⤢** fills the window with the viewer, tags and all; a phone always shows it that
-way. **full-res image** opens the still in its own tab, filling the window, with the same zoom and
+way. **full-res ↗** opens the still in its own tab, filling the window, with the same zoom and
 pan (a double click or tap zooms in, or fits again; **boxes** turns the detector's boxes off;
 **jpeg ↗** is the file itself; **tag ›** opens the visit here).
 
@@ -425,9 +429,9 @@ scores the untagged visits since then with the newest model and writes
 `data/tagmodel/suggestions.json`. The visit viewer then shows "suggests **cat** 92% (log: bird)"
 with an **accept** button, which records the tag that suggestion implies: real if the log said the
 same, real and named if the log only said animal or bird, wrong species and named otherwise. It
-moves on like any tag. **most useful next ›** (also above the visits grid) walks the untagged
-visits the model would learn most from: first those where it contradicts the log's name, then
-those it's least sure of. It stays in that queue until it's empty. A nightly retrain-and-suggest
+moves on like any tag. The **most useful** queue for **next ›** (or the link above the visits grid) walks the
+untagged visits the model would learn most from: first those where it contradicts the log's name,
+then those it's least sure of. A nightly retrain-and-suggest
 comes next (#153 step 4); until then run both by hand.
 
 ## Benchmark

@@ -22,10 +22,9 @@
 .morelink{font-family:var(--mono);font-size:.72rem;color:var(--accent);text-decoration:none;white-space:nowrap}
 .morelink:hover{text-decoration:underline}
 #featsel{font-family:var(--mono);font-size:.72rem;background:var(--frame);color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:.2rem .4rem;text-transform:none;letter-spacing:0}
-.health{font-family:var(--mono);font-size:.74rem;color:var(--muted);border:1px solid var(--line);
-  border-radius:8px;padding:.5rem .7rem;background:var(--frame);margin-bottom:1rem}
+.health{font-family:var(--mono);font-size:.7rem;color:var(--muted);display:flex;gap:.3rem .8rem;align-items:center;flex-wrap:wrap;margin-bottom:.8rem}
 .health b{color:var(--ink)} .ok{color:var(--good)} .bad{color:var(--warn)}
-.cams{display:flex;gap:.4rem;flex-wrap:wrap;margin:.4rem 0 0}
+.cams{display:flex;gap:.3rem;flex-wrap:wrap}
 .chip{font-family:var(--mono);font-size:.68rem;border:1px solid var(--line);border-radius:999px;
   padding:.1rem .5rem;color:var(--muted)} .chip.live{color:var(--good);border-color:var(--good)}
 .chip.off{opacity:.55}
@@ -85,7 +84,17 @@ dialog.full .pz img.small{width:100vw}
   dialog#clip .pz img.small{width:100vw}}
 dialog .vmeta{font-family:var(--mono);font-size:.74rem;padding:.6rem .8rem;display:flex;justify-content:space-between;gap:.8rem;align-items:center;flex-wrap:wrap}
 dialog .vmeta a{color:var(--accent);cursor:pointer}
-.vact{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
+.vact{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;width:100%}
+/* the viewer's own tools (clip, star, hide, boxes, full-res): small and together, apart from tagging */
+.vsec{display:inline-flex;gap:.25rem;align-items:center;flex-wrap:wrap}
+.vsec .boxbtn{font-size:.68rem;padding:.1rem .4rem;text-decoration:none} .vsec #boxbtn.on{color:var(--accent);border-color:var(--accent)}
+/* a phone: tabs under the name, two tiles a row */
+@media(max-width:560px){.tabs{margin-left:0} .grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:.5rem}
+  .tile .meta{padding:.35rem .45rem;font-size:.66rem} .tile .sub{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
+/* one "next", and the queue it walks */
+.nextq{display:inline-flex;gap:.3rem;align-items:center;margin-left:auto}
+.nextq select{font-family:var(--mono);font-size:.7rem;background:var(--frame);color:var(--muted);border:1px solid var(--line);border-radius:6px;padding:.12rem .3rem;max-width:12rem}
+.nextbtn{font-family:var(--mono);font-size:.76rem;background:var(--accent);color:#fff;border:1px solid var(--accent);border-radius:6px;padding:.18rem .75rem;cursor:pointer}
 .clipx{position:absolute;top:.4rem;right:.4rem;z-index:3;width:2rem;height:2rem;border-radius:50%;
   border:1px solid var(--line);background:rgba(0,0,0,.55);color:#fff;font-size:1rem;line-height:1;cursor:pointer}
 .lblset{display:inline-flex;gap:.3rem}
@@ -147,12 +156,13 @@ dialog .vmeta a{color:var(--accent);cursor:pointer}
 .v-none{background:rgba(160,160,160,.55);border-color:rgba(255,255,255,.6)}
 .mdot.v-none{width:8px;height:8px;margin:-4px 0 0 -4px}
 /* the ask box: a question about the visit log, answered with linked visits */
-.ask{margin:0 0 1rem}
-.ask form{display:flex;gap:.5rem}
-.ask input{flex:1;min-width:0;font-family:var(--sans);font-size:.9rem;background:var(--frame);color:var(--ink);
-  border:1px solid var(--line);border-radius:9px;padding:.5rem .7rem}
-.ask button{font-family:var(--mono);font-size:.8rem;background:var(--accent);color:#fff;border:1px solid var(--accent);
-  border-radius:9px;padding:.45rem .9rem;cursor:pointer}
+.ask{margin-left:auto;flex:0 1 9rem;min-width:7rem} .ask.on{flex:1 1 18rem}  /* a visit number; a question where asking is on */
+.ask form{display:flex;gap:.3rem}
+.ask input{flex:1;min-width:0;font-family:var(--mono);font-size:.78rem;background:var(--frame);color:var(--ink);
+  border:1px solid var(--line);border-radius:7px;padding:.3rem .5rem}
+.ask button{font-family:var(--mono);font-size:.74rem;background:none;color:var(--accent);border:1px solid var(--line);
+  border-radius:7px;padding:.25rem .55rem;cursor:pointer}
+.askout:has(.askans:empty):has(.askgrid:empty):has(.askmeta:empty){display:none} .askout{margin:0 0 1rem}
 .ask button:disabled{opacity:.6;cursor:default}
 .askans{font-size:.92rem;line-height:1.5;margin:.6rem 0 0;white-space:normal}
 .askans:empty{display:none}
@@ -200,12 +210,12 @@ dialog .boxtag[hidden],.spin[hidden],.lblset[hidden],.boxbtn[hidden]{display:non
     <input type="checkbox" id="showhidden"> + hidden</label>
   <label class="hidtog" id="favtoglbl" title="just your favourites, from any time (the time window is ignored), hidden or not">
     <input type="checkbox" id="favonly"> &#9733; favourites</label>
+  <div class="ask" id="askbox"><form id="askform"><input id="askq" maxlength="500" autocomplete="off"
+      placeholder="visit #" aria-label="look up visits by number"><button id="askbtn">go</button></form></div>
 </div>
 
 <section id="view-feeds">
-  <div class="ask" id="askbox">
-    <form id="askform"><input id="askq" maxlength="500" autocomplete="off"
-      placeholder="Look up visits by number, e.g. #15779"><button id="askbtn">go</button></form>
+  <div class="askout">
     <div class="askans" id="askans"></div>
     <div class="grid askgrid" id="askgrid"></div>
     <div class="askmeta" id="askmeta"></div>
@@ -217,9 +227,9 @@ dialog .boxtag[hidden],.spin[hidden],.lblset[hidden],.boxbtn[hidden]{display:non
   <div class="more" id="more" hidden><span id="morenote"></span> <button class="lblbtn" id="morebtn">load more</button></div>
   <div class="sect">Live</div>
   <div class="grid" id="live"></div>
-  <div class="sect" style="display:flex;justify-content:space-between;align-items:center;gap:1rem">
+  <div class="sect" style="display:flex;justify-content:space-between;align-items:center;gap:.4rem 1rem;flex-wrap:wrap">
     <span>At a glance</span>
-    <span style="display:flex;gap:.6rem;align-items:center">
+    <span style="display:flex;gap:.6rem;align-items:center;flex-wrap:wrap">
       <select id="featsel"><option value="timeline">visits over time</option>
         <option value="throughput">throughput &amp; backlog</option>
         <option value="heatmap">hourly load</option></select>
@@ -272,6 +282,12 @@ dialog .boxtag[hidden],.spin[hidden],.lblset[hidden],.boxbtn[hidden]{display:non
     <video controls style="display:none"></video>
     <svg class="boxov" id="boxov" viewBox="0 0 100 100" preserveAspectRatio="none"></svg></div></div>
   <div class="vmeta"><span id="clipmeta"></span>
+  <span class="vsec" title="this visit">
+    <button class="boxbtn" id="playbtn" title="watch the clip (again to go back to the still)">&#9654; clip</button>
+    <button class="boxbtn favbtn" id="favbtn" title="keep this one: star it as a favourite. While the clip plays, the star remembers that moment">&#9734;</button>
+    <button class="boxbtn" id="hidebtn" title="hide this visit, or show one the gate or a zone hid (undo a mistake)">hide</button>
+    <button class="boxbtn on" id="boxbtn" title="the detector's boxes on the still">boxes</button>
+    <a class="boxbtn" id="cliplink" target="_blank" rel="noopener" title="the full-resolution still in its own tab: scroll to zoom, drag to pan">full-res &nearr;</a></span>
   <div class="boxtag" id="boxtag" hidden><span>tag</span><span id="tgts"></span>
     <button class="boxbtn" id="boxclear" hidden title="remove this box's own tag (it takes the visit's again, where that holds)">clear</button></div>
   <span class="vact">
@@ -282,13 +298,12 @@ dialog .boxtag[hidden],.spin[hidden],.lblset[hidden],.boxbtn[hidden]{display:non
     <input class="spin" id="vsp" list="spplist" hidden placeholder="what was it?" title="what the animal actually was; saved when you leave the field">
     <span class="sugg" id="sugg" hidden title="the tag model's guess, from your earlier tags (camera-tagmodel)">suggests <b id="suggwhat"></b>
       <span id="suggp"></span> <button class="lblbtn" id="suggok" title="tag it as suggested and move on">accept</button></span>
-    <button class="boxbtn" id="nextbtn" title="the next visit in the grid you haven't labelled">next unlabelled &rsaquo;</button>
-    <button class="boxbtn" id="usebtn" title="the untagged visit the tag model would learn most from: where it contradicts the log's name, then where it's least sure">most useful next &rsaquo;</button>
-    <button class="boxbtn" id="boxqbtn" title="the next visit you tagged real whose still has a box with no tag yet (narrowed to the camera filter)">next box to tag &rsaquo;</button>
-    <button class="boxbtn" id="playbtn">watch clip &#9654;</button>
-    <button class="boxbtn favbtn" id="favbtn" title="keep this one: star it as a favourite. While the clip plays, the star remembers that moment">&#9734; favourite</button>
-    <button class="boxbtn" id="hidebtn" title="hide this visit, or show one the gate or a zone hid (undo a mistake)">hide</button>
-    <button class="boxbtn on" id="boxbtn">hide boxes</button> &middot; <a id="cliplink" target="_blank" rel="noopener" title="the full-resolution still in its own tab: scroll to zoom, drag to pan">full-res image</a>
+    <span class="nextq" title="where a tag (or next) moves on to">
+      <select id="qsel" aria-label="next from">
+        <option value="grid">unlabelled in the grid</option>
+        <option value="useful" id="qopt-useful" title="the untagged visits the tag model would learn most from: where it contradicts the log's name, then where it's least sure">most useful</option>
+        <option value="boxes" id="qopt-boxes" title="visits you tagged real whose still has a box with no tag yet (narrowed to the camera filter)">boxes to tag</option></select>
+      <button class="nextbtn" id="nextbtn">next &rsaquo;</button></span>
   </span></div>
 </dialog><div id="queuegrid" hidden></div><datalist id="spplist"></datalist>
 <script>
@@ -308,13 +323,14 @@ async function loadHealth(){try{const label=winLabel();
   const st=await (await fetch('/api/status')).json();
   const watching=st.filter(c=>c.watching_now).length, total=st.filter(c=>c.state!=='never seen by the monitor').length;
   let s;
-  if(h.samples){const dr=h.segments_dropped, th=h.segments_thinned||0; s=`<b>Analysis (${label}):</b> ${h.frames_analyzed.toLocaleString()} frames &middot; `+
-    (th?`<span title="segments analysed at one frame while the queue was behind">${th.toLocaleString()} thinned</span> &middot; `:'')+
-    `<span class="${dr?'bad':'ok'}">${dr?dr+' dropped':'none dropped'}</span> &middot; peak lag ${Math.round(h.peak_lag_seconds)}s`;}
-  else s='<b>Analysis:</b> no stats yet';
   st.forEach(c=>CAMSTATE[c.camera]=c.state);
-  s+=`<div class="cams">`+st.map(c=>`<span class="chip ${c.watching_now?'live':(c.state==='paused'?'off':'')}">`+
-    `${c.camera}${c.state==='paused'?' (paused)':''}</span>`).join('')+`</div>`;
+  s=`<span class="cams">`+st.map(c=>`<span class="chip ${c.watching_now?'live':(c.state==='paused'?'off':'')}">`+
+    `${c.camera}${c.state==='paused'?' (paused)':''}</span>`).join('')+`</span>`;
+  if(h.samples){const dr=h.segments_dropped, th=h.segments_thinned||0;
+    s+=`<span title="analysis over ${label}: ${h.frames_analyzed.toLocaleString()} frames">`+
+    (th?`<span title="segments analysed at one frame while the queue was behind">${th.toLocaleString()} thinned</span> &middot; `:'')+
+    `<span class="${dr?'bad':'ok'}">${dr?dr+' dropped':'none dropped'}</span> &middot; peak lag ${Math.round(h.peak_lag_seconds)}s</span>`;}
+  else s+='<span>analysis: no stats yet</span>';
   $('#health').innerHTML=s;}catch(e){$('#health').textContent='health unavailable';}}
 let CAMS=[], CAMSTATE={};  // the enabled live cameras, and each one's monitor state (watching / paused / ...)
 const idleOn=()=>$('#showidle').checked;
@@ -458,7 +474,7 @@ let ASKON=false;
 const visitIds=q=>/^#?\d+(?:[\s,]+#?\d+)*$/.test(q)?q.match(/\d+/g).slice(0,50):null;
 async function visitsById(ids){const d=await (await fetch('/api/visits/by-id?ids='+ids.join(','))).json(); return d.visits||[];}
 async function askInit(){try{const d=await (await fetch('/api/ask')).json(); if(!d.enabled)return; ASKON=true;
-  $('#askq').placeholder='Ask about your cameras (e.g. all skunks in the last 24 hours?), or #15779 for a visit';
+  $('#askbox').classList.add('on'); $('#askq').placeholder='Ask about your cameras, or #15779 for a visit';
   $('#askbtn').textContent='ask'; askMeta(d.spent_today,d.cap);}catch(e){}}
 async function lookUpVisits(ids){$('#askans').className='askans'; $('#askgrid').innerHTML='';
   try{const v=await visitsById(ids), found=new Set(v.map(x=>String(x.id))), missing=ids.filter(i=>!found.has(i));
@@ -518,14 +534,18 @@ async function setLabel(v){if(!labelEditable||!curVisit)return;
         if(v!=='wrong_species'||keep)setTimeout(advance,350);}}}catch(e){}}  // a tag moves on (wrong sp. once it's named)
 function tileOf(id){return document.querySelector('#grid .tile[data-id="'+id+'"]')||document.querySelector('#askgrid .tile[data-id="'+id+'"]')
   ||document.querySelector('#mapgrid .tile[data-id="'+id+'"]')||document.querySelector('#queuegrid .tile[data-id="'+id+'"]');}
-// After a tag: on through the queue the visit came from (most useful next), else the grid.
-function advance(){if(QMODE==='useful')nextUseful(); else nextUnlabelled();}
+// One "next", through the queue picked beside it (remembered): the grid's unlabelled visits, the most
+// useful to tag, or the visits with boxes still to tag. A tag moves on through the same queue.
+const QKEY='ys.queue', qsel=$('#qsel');
+try{const q=localStorage.getItem(QKEY); if(q&&qsel.querySelector('option[value="'+q+'"]'))qsel.value=q;}catch(e){}
+qsel.onchange=()=>{try{localStorage.setItem(QKEY,qsel.value);}catch(e){}};
+function advance(){if(qsel.value==='useful')nextUseful(); else if(qsel.value==='boxes')nextBoxToTag(); else nextUnlabelled();}
 function nextUnlabelled(){const ts=[...document.querySelectorAll('#grid .tile')], i=ts.indexOf(tileOf(curVisit));
   const t=[...ts.slice(i+1),...ts.slice(0,Math.max(i,0))].find(x=>!x.dataset.verdict);
   if(t)openVisit(t); else $('#clipmeta').textContent='every visit in the grid is labelled';}
 $('#lblset').querySelectorAll('.lblbtn').forEach(b=>b.onclick=()=>selBox?setBoxTag(b.dataset.v,b.dataset.v==='false'?'':$('#vsp').value.trim())
   :setLabel(b.dataset.v));
-// A visit opens on a full-res still (zoom/pan); "watch clip" swaps to the video. Boxes on by default.
+// A visit opens on a full-res still (zoom/pan); "clip" swaps to the video. Boxes on by default.
 let curVisit=null, curClip=false, mode='image', boxesOn=true, boxData=null, stillFB=false;
 let zs=1, ztx=0, zty=0;
 function applyZoom(){$('#pz').style.transform='translate('+ztx+'px,'+zty+'px) scale('+zs+')';}
@@ -546,7 +566,7 @@ async function toggleHidden(){const t=tileOf(curVisit); if(!t||!labelEditable)re
 let seekTo=null;
 const fmtAt=s=>Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0');
 function markFav(t){const k=t&&t.dataset.fav, b=$('#favbtn'); b.classList.toggle('on',!!k);
-  b.innerHTML=k?'&#9733; favourite'+(k==='clip'&&t.dataset.favat!==''?' (clip '+fmtAt(+t.dataset.favat)+')':''):'&#9734; favourite';
+  b.innerHTML=k?'&#9733;'+(k==='clip'&&t.dataset.favat!==''?' '+fmtAt(+t.dataset.favat):''):'&#9734;';
   b.disabled=!labelEditable;}
 async function toggleFav(){const t=tileOf(curVisit); if(!t||!labelEditable)return; const on=!t.dataset.fav, vid=$('#clip video');
   const kind=mode==='video'?'clip':'still', at=kind==='clip'?Math.round((vid.currentTime||0)*10)/10:null;
@@ -559,18 +579,17 @@ $('#favbtn').onclick=toggleFav;
 // neither (a visit still going on) does it show the thumbnail, scaled up, with no boxes. Whether there's
 // a clip comes from the visit's record, not the tile: the grid may have loaded before the clip was kept.
 function openVisit(t){const id=t.dataset.id; curVisit=id; curClip=t.dataset.clip==='1'; markHidden(t); markFav(t);
-  QMODE=t.parentElement&&t.parentElement.id==='queuegrid'?($('#queuegrid').dataset.q||''):''; loadSuggestion(id);
+  loadSuggestion(id);
   boxData=null; selBox=null; mode='image'; boxesOn=true; stillFB=false; resetZoom(); $('#boxtag').hidden=true;
   const img=$('#still'), vid=$('#clip video');
   img.style.display=''; vid.pause(); vid.removeAttribute('src'); vid.style.display='none';
   img.classList.remove('small'); img.src='/media/visit/'+id+'/frame';
   $('#stage').classList.add('pan');
-  $('#playbtn').style.display=curClip?'':'none'; $('#playbtn').textContent='watch clip ▶';
-  $('#boxbtn').style.display='';
-  $('#boxbtn').classList.toggle('on',boxesOn); $('#boxbtn').textContent=boxesOn?'hide boxes':'show boxes';
+  $('#playbtn').style.display=curClip?'':'none'; $('#playbtn').innerHTML='&#9654; clip';
+  $('#boxbtn').style.display=''; $('#boxbtn').classList.toggle('on',boxesOn);
   $('#clipmeta').textContent=t.querySelector('.sp').firstChild.textContent+' — '+t.querySelector('.sub').textContent+
     (t.dataset.sup?' · hidden: '+t.dataset.sup.replace('_',' '):'');
-  $('#cliplink').href='/visit/'+id+'/image';  // full window, scroll-zoom (the clip has "watch clip")
+  $('#cliplink').href='/visit/'+id+'/image';  // full window, scroll-zoom (the clip has its own button)
   const labelled=loadLabel(id); loadPickerSpecies(); refreshBoxQueue(); refreshUseful(); if(!$('#clip').open)$('#clip').showModal();
   Promise.all([labelled,loadBoxData()]).then(()=>{if(curVisit!==id)return;
     curClip=!!boxData.has_clip; t.dataset.clip=curClip?'1':'0'; $('#playbtn').style.display=curClip?'':'none';
@@ -629,17 +648,17 @@ $('#boxclear').onclick=()=>setBoxTag(null,'');
 async function loadPickerSpecies(){if(SPP)return; SPP=true;
   try{const d=await (await fetch('/api/labels/species')).json();
     $('#spplist').innerHTML=(d.species||[]).map(n=>'<option value="'+esc(n)+'">').join('');}catch(e){SPP=false;}}
-async function refreshBoxQueue(){const b=$('#boxqbtn');
+async function refreshBoxQueue(){const b=$('#qopt-boxes');
   try{const cam=$('#camera').value, d=await (await fetch('/api/labels/needs-box-tags'+(cam?'?camera='+encodeURIComponent(cam):''))).json();
     BOXQ=d.visits||[]; const left=BOXQ.filter(v=>String(v.id)!==String(curVisit)).length;
-    b.innerHTML='next box to tag ('+left+') &rsaquo;'; b.disabled=!left;}catch(e){}}
-function nextBoxToTag(){const v=(BOXQ||[]).find(x=>String(x.id)!==String(curVisit)); if(!v)return;
-  const g=$('#queuegrid'); g.dataset.q=''; g.innerHTML=tileHTML(v); openVisit(g.querySelector('.tile'));}
-$('#boxqbtn').onclick=nextBoxToTag;
+    b.textContent='boxes to tag ('+left+')';}catch(e){}}
+function nextBoxToTag(){const v=(BOXQ||[]).find(x=>String(x.id)!==String(curVisit));
+  if(!v){$('#clipmeta').textContent='no boxes left to tag'; return;}
+  const g=$('#queuegrid'); g.innerHTML=tileHTML(v); openVisit(g.querySelector('.tile'));}
 // The tag model (tagmodel.suggest): a visit's suggested group, how sure, and the log's name when it
 // differs; accept records the tag it implies (tagmodel.accept_label) and moves on like any tag.
-// "most useful next" walks the untagged visits it would learn most from, staying in that queue.
-let SUGG=null, USEQ=[], QMODE='';
+// "most useful" (a queue for next) walks the untagged visits it would learn most from.
+let SUGG=null, USEQ=[];
 async function loadSuggestion(id){SUGG=null; $('#sugg').hidden=true;
   try{const d=await (await fetch('/api/visit/'+id+'/suggestion')).json();
     if(String(id)!==String(curVisit)||!d.suggestion)return; SUGG=d; const s=d.suggestion;
@@ -650,13 +669,12 @@ $('#suggok').onclick=()=>{if(!SUGG||!SUGG.accept)return; $('#vsp').value=SUGG.ac
 async function refreshUseful(){try{const cam=$('#camera').value;
     const d=await (await fetch('/api/labels/suggested'+(cam?'?camera='+encodeURIComponent(cam):''))).json();
     USEQ=d.visits||[]; const left=Math.max(0,(d.count||0)-(USEQ.some(v=>String(v.id)===String(curVisit))?1:0));
-    $('#usebtn').innerHTML='most useful next ('+left+') &rsaquo;'; $('#usebtn').disabled=!left;
+    $('#qopt-useful').textContent='most useful ('+left+')';
     $('#uselink').innerHTML='most useful to tag ('+(d.count||0)+') &rsaquo;'; $('#uselink').hidden=!d.count;}catch(e){}}
 async function nextUseful(){await refreshUseful(); const v=USEQ.find(x=>String(x.id)!==String(curVisit));
   if(!v){$('#clipmeta').textContent='nothing left in the most-useful queue'; return;}
-  const g=$('#queuegrid'); g.dataset.q='useful'; g.innerHTML=tileHTML(v); openVisit(g.querySelector('.tile'));}
-$('#usebtn').onclick=nextUseful;
-$('#uselink').onclick=e=>{e.preventDefault(); curVisit=null; nextUseful();};
+  const g=$('#queuegrid'); g.innerHTML=tileHTML(v); openVisit(g.querySelector('.tile'));}
+$('#uselink').onclick=e=>{e.preventDefault(); curVisit=null; qsel.value='useful'; qsel.onchange(); nextUseful();};
 // a click (not a drag) on the still picks the smallest box under it, with a little slack for tiny boxes
 (function(){let down=null; const st=$('#stage');
   st.addEventListener('pointerdown',e=>{down={x:e.clientX,y:e.clientY};});
@@ -666,16 +684,15 @@ $('#uselink').onclick=e=>{e.preventDefault(); curVisit=null; nextUseful();};
     const px=(e.clientX-r.left)/r.width, py=(e.clientY-r.top)/r.height, k=0.01, {ts,boxes}=stillBoxes();
     const hit=boxes.filter(b=>px>=b.x-k&&px<=b.x+b.w+k&&py>=b.y-k&&py<=b.y+b.h+k).sort((a,b)=>a.w*a.h-b.w*b.h)[0];
     selBox=hit?{ts,i:hit.i}:null; drawBoxes();});})();
-function toggleBoxes(){boxesOn=!boxesOn; $('#boxbtn').classList.toggle('on',boxesOn);
-  $('#boxbtn').textContent=boxesOn?'hide boxes':'show boxes'; drawBoxes();}
+function toggleBoxes(){boxesOn=!boxesOn; $('#boxbtn').classList.toggle('on',boxesOn); drawBoxes();}
 function playClip(){if(!curClip)return; const img=$('#still'), vid=$('#clip video');
   if(mode==='image'){mode='video'; resetZoom(); $('#stage').classList.remove('pan');
     img.style.display='none'; vid.style.display=''; vid.src='/media/visit/'+curVisit+'/clip'; renderBoxTag();
-    $('#playbtn').textContent='◀ back to image';}
+    $('#playbtn').innerHTML='&#9664; still';}
   else{mode='image'; resetZoom(); $('#stage').classList.add('pan');
     vid.pause(); vid.removeAttribute('src'); vid.style.display='none'; img.style.display='';
-    $('#playbtn').textContent='watch clip ▶'; drawBoxes();}}
-$('#playbtn').onclick=playClip; $('#boxbtn').onclick=toggleBoxes; $('#nextbtn').onclick=nextUnlabelled; $('#hidebtn').onclick=toggleHidden;
+    $('#playbtn').innerHTML='&#9654; clip'; drawBoxes();}}
+$('#playbtn').onclick=playClip; $('#boxbtn').onclick=toggleBoxes; $('#nextbtn').onclick=advance; $('#hidebtn').onclick=toggleHidden;
 $('#still').addEventListener('load',()=>{if(mode==='image')drawBoxes();});
 $('#still').addEventListener('error',()=>{if(stillFB)return; stillFB=true; $('#still').classList.add('small');
   $('#boxbtn').style.display='none'; $('#still').src='/media/visit/'+curVisit+'/thumb';});
