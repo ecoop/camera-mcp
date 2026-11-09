@@ -806,7 +806,7 @@ def test_the_viewer_tags_single_boxes_and_names_species(client):
     assert "if(moved>5||pinched||mode!=='image'||!boxesOn||!boxData)return;" in page
     assert ".sort((a,b)=>a.w*a.h-b.w*b.h)[0]" in page
     assert ".boxov rect.inh{stroke-dasharray:6 4}" in page and "t.source==='visit'?' inh'" in page
-    assert "if(v!=='wrong_species'||keep)setTimeout(advance,350)" in page
+    assert "if(!waitsForName(v,keep))setTimeout(advance,350); else askName();" in page
     assert "if(d.complete){" in page and "else if(named&&v)selBox=untaggedBox()||selBox;" in page  # every box tagged: move on
     assert "if(!curLabel&&stillBoxes().boxes.length>1)selBox=untaggedBox();" in page  # several boxes: start on the first
     assert '<datalist id="spplist">' in page and client.get("/api/labels/species").json() == {"species": []}
@@ -927,10 +927,10 @@ def test_zone_editor_resizes_rectangles_and_moves_any_zone(client):
 
 def test_every_visit_tag_moves_on_to_the_next_visit(client):
     """Real and false move on at once, even when the visit was already tagged (a real box tag makes
-    it real first); wrong sp. moves on once it's named."""
+    it real first); wrong sp., and real on a visit the log left vague, move on once named."""
     html = client.get("/").text
-    assert "if(v!=='wrong_species'||keep)setTimeout(advance" in html and "!had&&" not in html
-    assert "v==='wrong_species'&&sp&&VIEW!=='map')setTimeout(advance" in html
+    assert "if(!waitsForName(v,keep))setTimeout(advance" in html and "!had&&" not in html
+    assert "const go=ok&&sp&&(v==='wrong_species'||(v==='real'&&refining));" in html
 
 
 def test_the_viewer_shows_the_tag_models_suggestion_and_its_queue(tmp_path):
@@ -996,3 +996,16 @@ def test_on_a_phone_the_feeds_top_stays_short(client):
     fset = page[page.index('id="fset"'):page.index('id="askbox"')]
     assert all(f'id="{i}"' in fset for i in ("since", "taxon", "camera", "showhidden", "favonly"))
     assert "$('#askbox').style.display=VIEW==='feeds'?'':'none';" in page
+
+
+def test_more_precise_is_real_and_waits_for_a_name(client):
+    """"more precise…" says the log was right but could say more (animal -> doves/pigeons): it tags
+    real (the visit or a box) and waits for a name, as wrong sp. does; naming it (Enter) moves on,
+    next › skips. Plain real still moves on at once."""
+    page = client.get("/").text
+    assert 'data-v="real" data-refine="1"' in page and "more precise&hellip;</button>" in page
+    assert "const waitsForName=(v,sp)=>!sp&&(v==='wrong_species'||(v==='real'&&refining));" in page
+    assert "b.onclick=()=>(refining=!!b.dataset.refine,selBox)?" in page
+    assert "named=!waitsForName(v,species); if(named)refining=false;" in page and "if(v&&!named)askName();" in page
+    assert "const go=ok&&sp&&(v==='wrong_species'||(v==='real'&&refining));" in page
+    assert "selBox=null; refining=false;" in page  # a new visit starts plain
