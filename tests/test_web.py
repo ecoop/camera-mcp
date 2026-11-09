@@ -362,7 +362,7 @@ def test_the_viewer_has_one_next_through_a_chosen_queue(client):
     assert page.count("next &rsaquo;") == 1 and 'id="usebtn"' not in page and 'id="boxqbtn"' not in page
     for q in ('value="grid"', 'value="useful"', 'value="boxes"'):
         assert q in page[page.index('id="qsel"'):page.index('id="nextbtn"')]
-    assert "function advance(){if(qsel.value==='useful')nextUseful(); else if(qsel.value==='boxes')nextBoxToTag(); else nextUnlabelled();}" in page
+    assert "function advance(){if(mapQ())nextOnMap(); else if(qsel.value==='useful')nextUseful(); else if(qsel.value==='boxes')nextBoxToTag(); else nextUnlabelled();}" in page
     assert "$('#nextbtn').onclick=advance;" in page and "localStorage.setItem(QKEY,qsel.value)" in page
     vsec = page[page.index('class="vsec"'):page.index('id="boxtag"')]
     assert all(f'id="{b}"' in vsec for b in ("playbtn", "favbtn", "hidebtn", "boxbtn", "cliplink"))
@@ -806,7 +806,7 @@ def test_the_viewer_tags_single_boxes_and_names_species(client):
     assert "if(moved>5||pinched||mode!=='image'||!boxesOn||!boxData)return;" in page
     assert ".sort((a,b)=>a.w*a.h-b.w*b.h)[0]" in page
     assert ".boxov rect.inh{stroke-dasharray:6 4}" in page and "t.source==='visit'?' inh'" in page
-    assert "if(!waitsForName(v,keep))setTimeout(advance,350); else askName();" in page
+    assert "if(waitsForName(v,keep))askName();" in page and "(VIEW!=='map'||mapQ()))setTimeout(advance,350);" in page
     assert "if(d.complete){" in page and "else if(named&&v)selBox=untaggedBox()||selBox;" in page  # every box tagged: move on
     assert "if(!curLabel&&stillBoxes().boxes.length>1)selBox=untaggedBox();" in page  # several boxes: start on the first
     assert '<datalist id="spplist">' in page and client.get("/api/labels/species").json() == {"species": []}
@@ -929,7 +929,7 @@ def test_every_visit_tag_moves_on_to_the_next_visit(client):
     """Real and false move on at once, even when the visit was already tagged (a real box tag makes
     it real first); wrong sp., and real on a visit the log left vague, move on once named."""
     html = client.get("/").text
-    assert "if(!waitsForName(v,keep))setTimeout(advance" in html and "!had&&" not in html
+    assert "if(waitsForName(v,keep))askName();" in html and "!had&&" not in html
     assert "const go=ok&&sp&&(v==='wrong_species'||(v==='real'&&refining));" in html
 
 
@@ -1009,3 +1009,19 @@ def test_more_precise_is_real_and_waits_for_a_name(client):
     assert "named=!waitsForName(v,species); if(named)refining=false;" in page and "if(v&&!named)askName();" in page
     assert "const go=ok&&sp&&(v==='wrong_species'||(v==='real'&&refining));" in page
     assert "selBox=null; refining=false;" in page  # a new visit starts plain
+
+
+def test_next_from_the_map_walks_the_maps_dots(client):
+    """A visit opened from the map moves on through the map's own dots (its camera, window, ticks and
+    day/night), newest first or nearest the visit you're on, not the feeds grid or an all-camera queue.
+    A tag that no longer matches the ticks takes its dot off; a visit opened elsewhere goes back to grid."""
+    page = client.get("/").text
+    assert '<option value="map" id="qopt-map" disabled' in page and '<option value="mapnear" id="qopt-mapnear" disabled' in page
+    assert "function advance(){if(mapQ())nextOnMap();" in page
+    assert "if(t.closest('#mapgrid')){MAPSEEN.add(String(id)); if(!mapQ())qsel.value=MAPMODE;}" in page
+    assert "else if(mapQ())qsel.value='grid';" in page
+    assert "el.onclick=()=>{hideTip(); openMapDot(v.id);};" in page
+    assert "if(!document.querySelector('.mv[value=\"'+(v||'none')+'\"]:checked'))md.remove();" in page
+    assert "else if(t&&(VIEW!=='map'||mapQ()))setTimeout(advance,350);" in page  # on the map, only through the map
+    assert "Math.hypot((v.x-c.x)*ar,v.y-c.y)" in page  # nearest, in picture proportions
+    assert "fsum(); refreshMapQ();" in page

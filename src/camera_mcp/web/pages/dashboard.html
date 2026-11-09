@@ -162,6 +162,7 @@ dialog .vmeta a{color:var(--accent);cursor:pointer}
 .v-false{background:#d6453d} .v-real{background:#3da35a} .v-wrong_species{background:#e0a020}
 .v-none{background:rgba(160,160,160,.55);border-color:rgba(255,255,255,.6)}
 .mdot.v-none{width:8px;height:8px;margin:-4px 0 0 -4px}
+.mdot.cur{box-shadow:0 0 0 2px #000,0 0 0 4px var(--accent);opacity:1;z-index:3}  /* the visit open in the viewer */
 /* the ask box: a question about the visit log, answered with linked visits */
 .ask{margin-left:auto;flex:0 1 9rem;min-width:7rem} .ask.on{flex:1 1 18rem}  /* a visit number; a question where asking is on */
 .ask form{display:flex;gap:.3rem}
@@ -313,7 +314,9 @@ dialog .boxtag[hidden],.spin[hidden],.lblset[hidden],.boxbtn[hidden]{display:non
       <select id="qsel" aria-label="next from">
         <option value="grid">unlabelled in the grid</option>
         <option value="useful" id="qopt-useful" title="the untagged visits the tag model would learn most from: where it contradicts the log's name, then where it's least sure">most useful</option>
-        <option value="boxes" id="qopt-boxes" title="visits you tagged real whose still has a box with no tag yet (narrowed to the camera filter)">boxes to tag</option></select>
+        <option value="boxes" id="qopt-boxes" title="visits you tagged real whose still has a box with no tag yet (narrowed to the camera filter)">boxes to tag</option>
+        <option value="map" id="qopt-map" disabled title="the map's dots (its camera, window, ticked labels and day/night), newest first">this map, newest</option>
+        <option value="mapnear" id="qopt-mapnear" disabled title="the map's dots, the one nearest the visit you're on first: for clearing a cluster">this map, nearest</option></select>
       <button class="nextbtn" id="nextbtn">next &rsaquo;</button></span>
   </span></div>
 </dialog><div id="queuegrid" hidden></div><datalist id="spplist"></datalist>
@@ -431,17 +434,38 @@ async function loadMap(){const cam=$('#camera').value, dots=$('#mapdots'), stage
     img.onload=()=>{if(mapCam!==key||mapPic!==pic)return; stage.style.setProperty('--ar',img.naturalWidth+'/'+img.naturalHeight);
       stage.classList.remove('loading'); mapZoomReset(); const n=$('#mappic'); if(n)n.textContent='picture: '+mapPicNote;};
     img.onerror=next; next(); mapZoomReset();}
-  dots.innerHTML=''; MAPV={}; const counts={};
+  dots.innerHTML=''; MAPV={}; const counts={}; MAPSEEN=new Set();
+  MAPORDER=vs.slice().sort((a,b)=>(b.started||'').localeCompare(a.started||'')).map(v=>String(v.id));  // newest first
   vs.slice().reverse().forEach(v=>{MAPV[v.id]=v; const k=v.verdict||'none'; counts[k]=(counts[k]||0)+1;  // newest on top
-    const el=document.createElement('div'); el.className='mdot v-'+k; el.dataset.id=v.id;
+    const el=document.createElement('div'); el.className='mdot v-'+k+(String(v.id)===String(curVisit)?' cur':''); el.dataset.id=v.id;
     el.style.left=(v.x*100)+'%'; el.style.top=(v.y*100)+'%';
     el.addEventListener('mousemove',e=>{const w=MAPV[v.id];showTip(e,`<b>${esc(w.label)}</b> &middot; #${w.id}<br>${(w.started||'').slice(5,16).replace('T',' ')} &middot; ${w.frames} frames<br>your label: ${VLABEL[w.verdict||'none']}${w.suppressed?'<br>hidden: '+w.suppressed:''}${w.spread>0.05?'<br><i>boxes in more than one place; the dot is its most confident box</i>':''}`);});
     el.addEventListener('mouseleave',hideTip);
-    el.onclick=()=>{hideTip(); const box=$('#mapgrid'); box.innerHTML=tileHTML(MAPV[v.id]); openVisit(box.querySelector('.tile'));};
+    el.onclick=()=>{hideTip(); openMapDot(v.id);};
     dots.appendChild(el);});
   $('#maplegend').innerHTML=`<span>${Object.entries(counts).map(([k,n])=>`${n} ${VLABEL[k]}`).join(' &middot; ')||'no visits match'} &middot; ${esc(cam)}</span>`+
     `<span id="mappic">${mapPicNote&&!stage.classList.contains('loading')?'picture: '+esc(mapPicNote):''}</span>`+
-    `<span>${(d.from||'').slice(0,10)} &rarr; ${(d.to||'').slice(0,10)}</span>`;}
+    `<span>${(d.from||'').slice(0,10)} &rarr; ${(d.to||'').slice(0,10)}</span>`; refreshMapQ();}
+// "next" through the map: its dots (what the filters and ticks show), newest first or nearest the visit
+// you're on (for clearing a cluster). Opening a dot picks this queue; a dot opened once isn't offered
+// again until the map reloads; a tag that no longer matches the ticks takes its dot off the map.
+let MAPORDER=[], MAPSEEN=new Set();
+const mapQ=()=>qsel.value==='map'||qsel.value==='mapnear';
+const mapLeft=()=>MAPORDER.filter(i=>!MAPSEEN.has(i)&&i!==String(curVisit)&&document.querySelector('.mdot[data-id="'+i+'"]'));
+function openMapDot(id){const box=$('#mapgrid'); box.innerHTML=tileHTML(MAPV[id]); openVisit(box.querySelector('.tile'));}
+function refreshMapQ(){const on=VIEW==='map'&&MAPORDER.length>0, n=mapLeft().length;
+  $('#qopt-map').disabled=$('#qopt-mapnear').disabled=!on;
+  $('#qopt-map').textContent='this map, newest ('+n+')'; $('#qopt-mapnear').textContent='this map, nearest ('+n+')';
+  if(!on&&mapQ())qsel.value='grid';}
+function mapRetag(id,v){if(MAPV[id])MAPV[id].verdict=v; const md=document.querySelector('.mdot[data-id="'+id+'"]'); if(!md)return;
+  md.className='mdot v-'+(v||'none')+(md.classList.contains('cur')?' cur':'');
+  if(!document.querySelector('.mv[value="'+(v||'none')+'"]:checked'))md.remove(); refreshMapQ();}
+function nextOnMap(){const left=mapLeft(), c=MAPV[curVisit]; let id=null;
+  if(qsel.value==='mapnear'&&c){const im=$('#mapimg'), ar=im.naturalWidth?im.naturalWidth/im.naturalHeight:16/9; let best=Infinity;
+    left.forEach(i=>{const v=MAPV[i], d=Math.hypot((v.x-c.x)*ar,v.y-c.y); if(d<best){best=d;id=i;}});}
+  else{const i=MAPORDER.indexOf(String(curVisit)); id=[...MAPORDER.slice(i+1),...MAPORDER.slice(0,Math.max(i,0))].find(x=>left.includes(x))||null;}
+  if(!id){$('#clipmeta').textContent='every dot on this map has been opened'; return;}
+  openMapDot(id);}
 document.querySelectorAll('.mv,.mdn').forEach(c=>c.onchange=()=>{if(VIEW==='map')loadMap();});
 // zoom & pan the map: the picture and dots scale together; dots are counter-scaled (--iz) so they grow
 // far less than the picture (~2x at 800%): tight clusters still spread apart, and dots stay easy to hit
@@ -543,22 +567,23 @@ $('#vsp').addEventListener('change',()=>{if(selBox){const {boxes}=stillBoxes(), 
   if(!(labelEditable&&curVisit&&curLabel))return; const v=curLabel.verdict, sp=$('#vsp').value.trim();
   postLabel(v,sp).then(ok=>{loadPickerSpecies();
     const go=ok&&sp&&(v==='wrong_species'||(v==='real'&&refining)); if(go)refining=false;
-    if(go&&VIEW!=='map')setTimeout(advance,350);});});  // once named: move on
+    if(go&&(VIEW!=='map'||mapQ()))setTimeout(advance,350);});});  // once named: move on
 async function setLabel(v){if(!labelEditable||!curVisit)return;
   try{const keep=v!=='false'?$('#vsp').value.trim():'';
-    if(await postLabel(v,keep)){markLabel(v); const t=tileOf(curVisit);
-      const md=document.querySelector('.mdot[data-id="'+curVisit+'"]'); if(md){md.className='mdot v-'+v; MAPV[curVisit]&&(MAPV[curVisit].verdict=v);}
-      if(VIEW==='map'){if(t)t.dataset.verdict=v;}  // map view: recolour only; never auto-advance through another view's grid
-      else if(t){t.dataset.verdict=v;  // CSS restyles the tile from this
-        if(!waitsForName(v,keep))setTimeout(advance,350); else askName();}}}catch(e){}}  // a tag moves on (once named, where it needs one)
+    if(await postLabel(v,keep)){markLabel(v); const t=tileOf(curVisit); mapRetag(String(curVisit),v);
+      if(t)t.dataset.verdict=v;  // CSS restyles the tile from this
+      if(waitsForName(v,keep))askName();
+      else if(t&&(VIEW!=='map'||mapQ()))setTimeout(advance,350);}}catch(e){}}  // a tag moves on (once named, where it needs one); on the map only through the map
 function tileOf(id){return document.querySelector('#grid .tile[data-id="'+id+'"]')||document.querySelector('#askgrid .tile[data-id="'+id+'"]')
   ||document.querySelector('#mapgrid .tile[data-id="'+id+'"]')||document.querySelector('#queuegrid .tile[data-id="'+id+'"]');}
 // One "next", through the queue picked beside it (remembered): the grid's unlabelled visits, the most
 // useful to tag, or the visits with boxes still to tag. A tag moves on through the same queue.
 const QKEY='ys.queue', qsel=$('#qsel');
-try{const q=localStorage.getItem(QKEY); if(q&&qsel.querySelector('option[value="'+q+'"]'))qsel.value=q;}catch(e){}
-qsel.onchange=()=>{try{localStorage.setItem(QKEY,qsel.value);}catch(e){}};
-function advance(){if(qsel.value==='useful')nextUseful(); else if(qsel.value==='boxes')nextBoxToTag(); else nextUnlabelled();}
+let MAPMODE='map';  // which map order opening a dot picks (remembered); the map queue itself needs the map loaded
+try{const q=localStorage.getItem(QKEY); if(q==='map'||q==='mapnear')MAPMODE=q; else if(q&&qsel.querySelector('option[value="'+q+'"]'))qsel.value=q;
+  const m=localStorage.getItem(QKEY+'.map'); if(m==='map'||m==='mapnear')MAPMODE=m;}catch(e){}
+qsel.onchange=()=>{if(mapQ())MAPMODE=qsel.value; try{localStorage.setItem(QKEY,qsel.value); if(mapQ())localStorage.setItem(QKEY+'.map',qsel.value);}catch(e){}};
+function advance(){if(mapQ())nextOnMap(); else if(qsel.value==='useful')nextUseful(); else if(qsel.value==='boxes')nextBoxToTag(); else nextUnlabelled();}
 function nextUnlabelled(){const ts=[...document.querySelectorAll('#grid .tile')], i=ts.indexOf(tileOf(curVisit));
   const t=[...ts.slice(i+1),...ts.slice(0,Math.max(i,0))].find(x=>!x.dataset.verdict);
   if(t)openVisit(t); else $('#clipmeta').textContent='every visit in the grid is labelled';}
@@ -598,6 +623,10 @@ $('#favbtn').onclick=toggleFav;
 // neither (a visit still going on) does it show the thumbnail, scaled up, with no boxes. Whether there's
 // a clip comes from the visit's record, not the tile: the grid may have loaded before the clip was kept.
 function openVisit(t){const id=t.dataset.id; curVisit=id; curClip=t.dataset.clip==='1'; markHidden(t); markFav(t);
+  if(t.closest('#mapgrid')){MAPSEEN.add(String(id)); if(!mapQ())qsel.value=MAPMODE;}  // from the map: next walks the map
+  else if(mapQ())qsel.value='grid';
+  document.querySelectorAll('.mdot.cur').forEach(d=>d.classList.remove('cur'));
+  const dot=document.querySelector('.mdot[data-id="'+id+'"]'); if(dot)dot.classList.add('cur'); refreshMapQ();
   loadSuggestion(id);
   boxData=null; selBox=null; refining=false; mode='image'; boxesOn=true; stillFB=false; resetZoom(); $('#boxtag').hidden=true;
   const img=$('#still'), vid=$('#clip video');
@@ -659,8 +688,8 @@ async function setBoxTag(v,species){if(!labelEditable||!selBox||!curVisit)return
     if(!r.ok)return; const d=await r.json(), named=!waitsForName(v,species); if(named)refining=false;
     if(species)SPP=false; curLabel=d.label||curLabel; boxData=null; await loadBoxData();
     if(d.complete){const t=tileOf(curVisit); if(t)t.dataset.verdict=d.label.verdict;
-      const md=document.querySelector('.mdot[data-id="'+curVisit+'"]'); if(md)md.className='mdot v-'+d.label.verdict;
-      if(named&&VIEW!=='map'&&t)setTimeout(advance,350);}
+      mapRetag(String(curVisit),d.label.verdict);
+      if(named&&(VIEW!=='map'||mapQ())&&t)setTimeout(advance,350);}
     else if(named&&v)selBox=untaggedBox()||selBox;
     drawBoxes(); refreshBoxQueue(); loadPickerSpecies(); if(v&&!named)askName();}catch(e){}}
 $('#boxclear').onclick=()=>setBoxTag(null,'');
@@ -876,7 +905,7 @@ function setView(v,push){VIEW=['analytics','map'].includes(v)?v:'feeds';
   $('#hidtoglbl').style.display=VIEW==='feeds'?'':'none';  // it filters the visits grid, which only feeds shows
   $('#favtoglbl').style.display=VIEW==='feeds'?'':'none';
   $('#askbox').style.display=VIEW==='feeds'?'':'none';  // its answers show above the visits grid
-  fsum();
+  fsum(); refreshMapQ();  // the map queue is offered only on the map
   document.querySelectorAll('.tabs a[data-view]').forEach(a=>a.classList.toggle('active',a.dataset.view===VIEW));
   if(push)history.pushState({v:VIEW},'',VIEW==='feeds'?'/':'/'+VIEW);
   renderView();}
