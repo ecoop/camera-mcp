@@ -303,6 +303,7 @@ dialog .boxtag[hidden],.spin[hidden],.lblset[hidden],.boxbtn[hidden]{display:non
   <span class="vact">
     <span class="lblset" id="lblset" title="was this detection correct? (the whole visit, or the box picked above)">
       <button class="lblbtn" data-v="real">&check; real</button>
+      <button class="lblbtn" data-v="real" data-refine="1" title="right, but it could be more precise (animal &rarr; doves/pigeons, songbirds &rarr; house finch): tag it real and say what exactly; Enter saves and moves on">&check; more precise&hellip;</button>
       <button class="lblbtn" data-v="false">&times; false</button>
       <button class="lblbtn" data-v="wrong_species">&times; wrong sp.</button></span>
     <input class="spin" id="vsp" list="spplist" hidden placeholder="what was it?" title="what the animal actually was; saved when you leave the field">
@@ -517,9 +518,9 @@ $('#askform').addEventListener('submit',async ev=>{ev.preventDefault(); const q=
 askInit();
 let labelEditable=true, curLabel=null;
 // the visit's tag; real and wrong sp. can also say what it was (the species field)
-function markLabel(v,species){$('#lblset').querySelectorAll('.lblbtn').forEach(b=>b.classList.toggle('on',b.dataset.v===v));
+function markLabel(v,species){$('#lblset').querySelectorAll('.lblbtn').forEach(b=>b.classList.toggle('on',b.dataset.v===v&&!b.dataset.refine));
   const sp=$('#vsp'); sp.hidden=!(v==='real'||v==='wrong_species'); sp.disabled=!labelEditable;
-  sp.placeholder=v==='wrong_species'?'what was it?':'species (optional)'; if(species!==undefined)sp.value=species||'';}
+  sp.placeholder=v==='wrong_species'||refining?'what was it? (Enter; next › to skip)':'species (optional)'; if(species!==undefined)sp.value=species||'';}
 async function loadLabel(id){curLabel=null; markLabel(null,'');
   $('#lblset').querySelectorAll('.lblbtn').forEach(b=>b.disabled=true);
   try{const d=await (await fetch('/api/visit/'+id+'/label')).json();
@@ -531,18 +532,25 @@ async function postLabel(v,species){const res=await fetch('/api/visit/'+curVisit
   if(res.ok){curLabel={verdict:v,species:v==='false'?null:species||null}; if(species)SPP=false;
     boxData=null; loadBoxData().then(drawBoxes); refreshBoxQueue();}  // inherited box tags follow the visit's
   return res.ok;}
+// "more precise…" is real, but waits for a name, as wrong sp. does: the log was right but could say more
+// (animal -> doves/pigeons). The field takes focus; Enter (or leaving it) saves and moves on; next › skips.
+let refining=false;
+const waitsForName=(v,sp)=>!sp&&(v==='wrong_species'||(v==='real'&&refining));
+function askName(){const f=$('#vsp'); f.hidden=false; f.focus();}
+$('#vsp').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault(); $('#vsp').blur();}});
 $('#vsp').addEventListener('change',()=>{if(selBox){const {boxes}=stillBoxes(), b=boxes.find(x=>x.i===selBox.i);
     if(b&&b.tag&&b.tag.source==='box')setBoxTag(b.tag.verdict,$('#vsp').value.trim()); return;}  // naming the picked box
   if(!(labelEditable&&curVisit&&curLabel))return; const v=curLabel.verdict, sp=$('#vsp').value.trim();
   postLabel(v,sp).then(ok=>{loadPickerSpecies();
-    if(ok&&v==='wrong_species'&&sp&&VIEW!=='map')setTimeout(advance,350);});});  // wrong sp., once named: move on
+    const go=ok&&sp&&(v==='wrong_species'||(v==='real'&&refining)); if(go)refining=false;
+    if(go&&VIEW!=='map')setTimeout(advance,350);});});  // once named: move on
 async function setLabel(v){if(!labelEditable||!curVisit)return;
   try{const keep=v!=='false'?$('#vsp').value.trim():'';
     if(await postLabel(v,keep)){markLabel(v); const t=tileOf(curVisit);
       const md=document.querySelector('.mdot[data-id="'+curVisit+'"]'); if(md){md.className='mdot v-'+v; MAPV[curVisit]&&(MAPV[curVisit].verdict=v);}
       if(VIEW==='map'){if(t)t.dataset.verdict=v;}  // map view: recolour only; never auto-advance through another view's grid
       else if(t){t.dataset.verdict=v;  // CSS restyles the tile from this
-        if(v!=='wrong_species'||keep)setTimeout(advance,350);}}}catch(e){}}  // a tag moves on (wrong sp. once it's named)
+        if(!waitsForName(v,keep))setTimeout(advance,350); else askName();}}}catch(e){}}  // a tag moves on (once named, where it needs one)
 function tileOf(id){return document.querySelector('#grid .tile[data-id="'+id+'"]')||document.querySelector('#askgrid .tile[data-id="'+id+'"]')
   ||document.querySelector('#mapgrid .tile[data-id="'+id+'"]')||document.querySelector('#queuegrid .tile[data-id="'+id+'"]');}
 // One "next", through the queue picked beside it (remembered): the grid's unlabelled visits, the most
@@ -554,7 +562,7 @@ function advance(){if(qsel.value==='useful')nextUseful(); else if(qsel.value==='
 function nextUnlabelled(){const ts=[...document.querySelectorAll('#grid .tile')], i=ts.indexOf(tileOf(curVisit));
   const t=[...ts.slice(i+1),...ts.slice(0,Math.max(i,0))].find(x=>!x.dataset.verdict);
   if(t)openVisit(t); else $('#clipmeta').textContent='every visit in the grid is labelled';}
-$('#lblset').querySelectorAll('.lblbtn').forEach(b=>b.onclick=()=>selBox?setBoxTag(b.dataset.v,b.dataset.v==='false'?'':$('#vsp').value.trim())
+$('#lblset').querySelectorAll('.lblbtn').forEach(b=>b.onclick=()=>(refining=!!b.dataset.refine,selBox)?setBoxTag(b.dataset.v,b.dataset.v==='false'?'':$('#vsp').value.trim())
   :setLabel(b.dataset.v));
 // A visit opens on a full-res still (zoom/pan); "clip" swaps to the video. Boxes on by default.
 let curVisit=null, curClip=false, mode='image', boxesOn=true, boxData=null, stillFB=false;
@@ -591,7 +599,7 @@ $('#favbtn').onclick=toggleFav;
 // a clip comes from the visit's record, not the tile: the grid may have loaded before the clip was kept.
 function openVisit(t){const id=t.dataset.id; curVisit=id; curClip=t.dataset.clip==='1'; markHidden(t); markFav(t);
   loadSuggestion(id);
-  boxData=null; selBox=null; mode='image'; boxesOn=true; stillFB=false; resetZoom(); $('#boxtag').hidden=true;
+  boxData=null; selBox=null; refining=false; mode='image'; boxesOn=true; stillFB=false; resetZoom(); $('#boxtag').hidden=true;
   const img=$('#still'), vid=$('#clip video');
   img.style.display=''; vid.pause(); vid.removeAttribute('src'); vid.style.display='none';
   img.classList.remove('small'); img.src='/media/visit/'+id+'/frame';
@@ -648,13 +656,13 @@ function untaggedBox(){const {ts,boxes}=stillBoxes();
 async function setBoxTag(v,species){if(!labelEditable||!selBox||!curVisit)return;
   try{const r=await fetch('/api/visit/'+curVisit+'/box-label',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({ts:selBox.ts,box:selBox.i,verdict:v,species:v&&v!=='false'?species||'':''})});
-    if(!r.ok)return; const d=await r.json(), named=v!=='wrong_species'||!!species;
+    if(!r.ok)return; const d=await r.json(), named=!waitsForName(v,species); if(named)refining=false;
     if(species)SPP=false; curLabel=d.label||curLabel; boxData=null; await loadBoxData();
     if(d.complete){const t=tileOf(curVisit); if(t)t.dataset.verdict=d.label.verdict;
       const md=document.querySelector('.mdot[data-id="'+curVisit+'"]'); if(md)md.className='mdot v-'+d.label.verdict;
       if(named&&VIEW!=='map'&&t)setTimeout(advance,350);}
     else if(named&&v)selBox=untaggedBox()||selBox;
-    drawBoxes(); refreshBoxQueue(); loadPickerSpecies();}catch(e){}}
+    drawBoxes(); refreshBoxQueue(); loadPickerSpecies(); if(v&&!named)askName();}catch(e){}}
 $('#boxclear').onclick=()=>setBoxTag(null,'');
 async function loadPickerSpecies(){if(SPP)return; SPP=true;
   try{const d=await (await fetch('/api/labels/species')).json();

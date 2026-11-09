@@ -243,7 +243,10 @@ shared verdict and species if the animal boxes agree, else real with no species 
 each box keeps its own); then the viewer moves on. Boxes are outlined by their tag (green real, grey
 false, amber wrong species, red none yet; dashed when the tag comes from the visit's), with a
 ✓ / ✗ / ≠ mark. A real or wrong-species tag has a **what was it?** field, suggesting names you've
-used and groups seen here; a wrong-species tag waits for it instead of moving on. The **boxes to tag** queue
+used and groups seen here; a wrong-species tag waits for it instead of moving on. **✓ more precise…**
+is for a log that was right but could say more (animal → doves/pigeons, songbirds → house finch):
+it tags real and waits for the name too (Enter saves and moves on; **next ›** skips), where plain
+**✓ real** moves straight on. The **boxes to tag** queue
 walks the real visits whose still still has an untagged box (narrowed to the camera filter): the
 ones to revisit before the stills are used as training data.
 
