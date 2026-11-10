@@ -4,7 +4,7 @@
 ![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13-blue)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
-_Last updated: 2026-11-08_
+_Last updated: 2026-11-09_
 
 An MCP server and an always-on monitor for home IP cameras, built to watch for wildlife on one
 machine without saturating it.
@@ -358,6 +358,14 @@ the visit in the usual viewer and re-check or re-label it (the dot recolours). S
 to pan. It uses the dashboard's camera, species and time filters. Clusters of "false" dots are where
 an exclusion zone may belong; a "real" dot inside one is where a zone would cost you. After a camera
 is re-aimed, older visits plot against the new view, so narrow the time window to after the change.
+
+A visit opened from the map moves on through the map's own dots: **next ›** (and a tag) goes to the
+next dot the map shows, so its camera, time window, ticked labels and day/night all hold. Tick only
+**unlabelled** to work through just those. The queue beside **next ›** offers **this map, newest**
+(newest first) or **this map, nearest** (the dot nearest the visit you're on, for clearing a
+cluster); the order you pick is remembered. The open visit's dot is ringed; a dot opened once
+isn't offered again until the map reloads, and a tag that no longer matches the ticks takes its dot
+off the map. Opening a visit from the visits grid goes back to the grid's queue.
 
 **day** / **night (IR)** show visits seen in colour or under the camera's infrared light apart
 (junk behaves differently in each). With only one ticked, the picture is the newest still of that
