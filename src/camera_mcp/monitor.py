@@ -429,7 +429,8 @@ class CameraWorker:
                     log.exception("%s: couldn't save media for the %s visit", self.camera.name, visit.key)
             night = is_infrared(visit.thumbnail) if visit.thumbnail is not None and visit.thumbnail.size else None
             self.store.add_visit(visit, model=self.analyzer.model if self.analyzer else "",
-                                 thumbnail=thumbnail, clip=clip, still=still, suppressed=visit.suppressed, night=night)
+                                 thumbnail=thumbnail, clip=clip, still=still, suppressed=visit.suppressed, night=night,
+                                 roi=self.camera.roi)  # the crop its boxes are fractions of
             with self.lock:
                 self.pending_visits.remove(visit)
 
@@ -760,7 +761,7 @@ class Analyzer:
                 if visit.db_id is None:  # arrived (or took over an unidentified visit's row)
                     if key not in before:
                         log.info("%s: %s arrived", worker.camera.name, key)
-                    visit.db_id = worker.store.open_visit(visit, model=self.model)
+                    visit.db_id = worker.store.open_visit(visit, model=self.model, roi=worker.camera.roi)
                 elif visit.last_seen == t:
                     worker.store.update_open_visit(visit)
             if self.alerter is not None:  # after the visits have rows, so an alert can link to its visit

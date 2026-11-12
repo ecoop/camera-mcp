@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Eric Cooper.
 """The tag model (camera_mcp.tagmodel): examples come from the tagged visits' stills with the tags
-box_tags gives them, features are cached by box, the test set is the most recent days, and the
+box_tags gives them, features are cached by box and crop position, the test set is the most recent days, and the
 heads learn the owner's tags. SpeciesNet is a stand-in that reads a crop's mean colour."""
 
 from __future__ import annotations
@@ -107,6 +107,26 @@ def test_features_are_cached_by_box(log):
     tagmodel.run(history, data, test_days=4, make_featurizer=colour_featurizer(calls))
     tagmodel.run(history, data, test_days=4, make_featurizer=colour_featurizer(calls))
     assert sum(calls) == 14 * 7  # the second run featurized nothing
+
+
+def test_a_box_placed_differently_is_featurized_again(log):
+    """The cache is keyed by where a box was cropped too: when a visit's recorded analysis crop is
+    corrected (backfill_roi), its box lands elsewhere on the still and is featurized again, rather than
+    read back from the wrong crop. A cache from before (keyed by box alone) is not trusted."""
+    history, data = log
+    calls = []
+    tagmodel.run(history, data, test_days=4, make_featurizer=colour_featurizer(calls))
+    db = sqlite3.connect(data / "monitor.db")
+    db.execute("UPDATE visits SET roi = '[0.0, 0.0, 0.5, 0.5]' WHERE id = 1")
+    db.commit(); db.close()
+    calls.clear()
+    tagmodel.run(history, data, test_days=4, make_featurizer=colour_featurizer(calls))
+    assert calls == [1]  # just that visit's box
+    z = np.load(data / "tagmodel" / "features.npz")
+    np.savez(data / "tagmodel" / "features.npz", keys=np.array([k.split("@")[0] for k in z["keys"]]), feats=z["feats"])
+    calls.clear()
+    tagmodel.run(history, data, test_days=4, make_featurizer=colour_featurizer(calls))
+    assert sum(calls) == 14 * 7  # a box-only cache is redone once
 
 
 def test_too_few_days_to_hold_a_week_out(log):

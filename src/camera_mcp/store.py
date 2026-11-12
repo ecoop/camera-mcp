@@ -136,6 +136,8 @@ ADDED_COLUMNS = {
         "still": "TEXT",  # full-res frame aligned to the detection (path); the viewer's default image
         "suppressed": "TEXT",  # why the unnamed-visit gate hid it ('low_conf', 'stationary'); NULL: shown
         "night": "INTEGER",  # 1: seen under the camera's infrared light, 0: in colour (daylight); NULL: unknown
+        "roi": "TEXT",  # JSON [x, y, w, h]: the analysis crop its boxes are fractions of ([0,0,1,1]: the whole
+        # frame); NULL: not recorded (visits from before this column; readers fall back to the camera's roi)
     },
     "visit_labels": {
         "species": "TEXT",  # what it actually was, if the human said: the right name for 'wrong_species',
@@ -164,6 +166,11 @@ def _species(verdict: str, species: str | None) -> str | None:
     return species
 
 
+def roi_json(roi) -> str:
+    """How a visit records its analysis crop: JSON [x, y, w, h], the whole frame when roi is None."""
+    return json.dumps([round(float(v), 4) for v in (roi or (0.0, 0.0, 1.0, 1.0))])
+
+
 class Store:
     def __init__(self, path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -179,6 +186,20 @@ class Store:
                     if name not in have:
                         self._db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {kind}")
 
+    def backfill_roi(self, camera: str, roi, *, since: str | None = None, until: str | None = None) -> int:
+        """Record `roi` (None: the whole frame) on `camera`'s visits that have none, started at or
+        after `since` and before `until` (UTC ISO; None: no limit). For visits from before the roi
+        column, once it's been checked which crop was in effect when (for example by drawing their
+        boxes on their stills). Never overwrites a recorded roi. Returns how many visits it set."""
+        where, params = ["camera = ?", "roi IS NULL"], [camera]
+        if since:
+            where.append("started_at >= ?"); params.append(since)
+        if until:
+            where.append("started_at < ?"); params.append(until)
+        with self._lock:
+            cur = self._db.execute(f"UPDATE visits SET roi = ? WHERE {' AND '.join(where)}", (roi_json(roi), *params))
+            return cur.rowcount
+
     def add_window(self, camera: str, start: float, end: float, peak: float, frames: int,
                    clip: str | None) -> int:
         with self._lock:
@@ -189,15 +210,16 @@ class Store:
             )
             return int(cur.lastrowid)
 
-    def open_visit(self, visit, *, model: str) -> int:
-        """Record a visit as soon as its animal arrives, so "is anything there now?" sees it."""
+    def open_visit(self, visit, *, model: str, roi=None) -> int:
+        """Record a visit as soon as its animal arrives, so "is anything there now?" sees it. `roi`:
+        the analysis crop its boxes are fractions of (None: the whole frame)."""
         label = visit.label
         with self._lock:
             cur = self._db.execute(
                 "INSERT INTO visits (camera, started_at, ended_at, label, taxonomy, grp, score, frames,"
-                " max_count, model, open) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)",
+                " max_count, model, open, roi) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)",
                 (visit.camera, iso(visit.start), iso(visit.last_seen), label.name, label.taxonomy, visit.key,
-                 round(label.score, 3), visit.frames, visit.max_count, model),
+                 round(label.score, 3), visit.frames, visit.max_count, model, roi_json(roi)),
             )
             return int(cur.lastrowid)
 
@@ -260,26 +282,29 @@ class Store:
                                  " VALUES (?, ?, ?, ?, ?, ?, ?, ?)", values)
 
     def add_visit(self, visit, *, model: str, thumbnail: str | None, clip: str | None,
-                  still: str | None = None, suppressed: str | None = None, night: bool | None = None) -> int:
+                  still: str | None = None, suppressed: str | None = None, night: bool | None = None,
+                  roi=None) -> int:
         """Store a closed visits.Visit and its per-frame detections (completing its open row, if any).
         `suppressed`: the gate's reason for hiding it (see gate.py); None shows it. `night`: whether it
-        was seen under infrared (view.is_infrared of its thumbnail); None when unknown."""
+        was seen under infrared (view.is_infrared of its thumbnail); None when unknown. `roi`: the
+        analysis crop its boxes are fractions of (None: the whole frame), recorded with the visit so its
+        boxes can be placed on the frame after the camera's roi changes."""
         label = visit.label
         values = (visit.camera, iso(visit.start), iso(visit.last_seen), label.name, label.taxonomy, visit.key,
                   round(label.score, 3), visit.frames, visit.max_count, thumbnail, clip, still, model, suppressed,
-                  None if night is None else int(bool(night)))
+                  None if night is None else int(bool(night)), roi_json(roi))
         with self._lock:
             if getattr(visit, "db_id", None):
                 self._db.execute(
                     "UPDATE visits SET camera = ?, started_at = ?, ended_at = ?, label = ?, taxonomy = ?, grp = ?,"
                     " score = ?, frames = ?, max_count = ?, thumbnail = ?, clip = ?, still = ?, model = ?,"
-                    " suppressed = ?, night = ?, open = 0 WHERE id = ?", (*values, visit.db_id))
+                    " suppressed = ?, night = ?, roi = ?, open = 0 WHERE id = ?", (*values, visit.db_id))
                 visit_id = visit.db_id
             else:
                 cur = self._db.execute(
                     "INSERT INTO visits (camera, started_at, ended_at, label, taxonomy, grp, score, frames,"
-                    " max_count, thumbnail, clip, still, model, suppressed, night)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", values)
+                    " max_count, thumbnail, clip, still, model, suppressed, night, roi)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", values)
                 visit_id = int(cur.lastrowid)
             rows = []
             for t, dets in visit.log:
@@ -419,3 +444,32 @@ class Store:
     def close(self) -> None:
         with self._lock:
             self._db.close()
+
+
+def main(argv: list[str] | None = None) -> None:
+    """python -m camera_mcp.store backfill-roi --camera C [--roi x,y,w,h] [--since T] [--until T]:
+    record the analysis crop on a camera's older visits that have none (see Store.backfill_roi).
+    Without --roi, the whole frame. Prints how many visits it set."""
+    import argparse
+    from pathlib import Path
+
+    from camera_mcp.config import default_data_dir
+
+    parser = argparse.ArgumentParser(prog="python -m camera_mcp.store")
+    parser.add_argument("step", choices=["backfill-roi"])
+    parser.add_argument("--camera", required=True)
+    parser.add_argument("--roi", default=None, help="x,y,w,h fractions of the frame (default: the whole frame)")
+    parser.add_argument("--since", default=None, help="UTC ISO, inclusive")
+    parser.add_argument("--until", default=None, help="UTC ISO, exclusive")
+    parser.add_argument("--data-dir", type=Path, default=None)
+    args = parser.parse_args(argv)
+    roi = tuple(float(v) for v in args.roi.split(",")) if args.roi else None
+    if roi is not None and len(roi) != 4:
+        parser.error("--roi takes four numbers: x,y,w,h")
+    n = Store((args.data_dir or default_data_dir()) / "monitor.db").backfill_roi(
+        args.camera, roi, since=args.since, until=args.until)
+    print(f"{args.camera}: roi {roi_json(roi)} set on {n} visits")
+
+
+if __name__ == "__main__":
+    main()

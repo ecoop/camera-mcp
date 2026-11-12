@@ -29,7 +29,7 @@ def routes(ctx: Context) -> list[Route]:
         `tag` (history.box_tags), and `best`: the frame with the most confident box. Raises HistoryError."""
         d = history.visit_boxes(vid)
         cam = find_camera(ctx.cameras, d["camera"])
-        roi = cam.roi if cam else None  # boxes are fractions of the roi crop; map to the full frame
+        roi = d["roi"]  # boxes are fractions of the crop in effect then; map to the full frame
         pre = cam.monitor.pre_seconds if cam else 5.0
         try:
             start = datetime.fromisoformat(d["started_at"]).timestamp()

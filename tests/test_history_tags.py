@@ -27,7 +27,7 @@ def test_label_map_places_each_visit_where_it_was_boxed(tmp_path):
         v = Visit("backyard", "animal", start=NOW - 600, last_seen=NOW - 590, frames=2)
         v.votes[("animal", "")] = 1.0
         v.log = [(NOW - 600 + i, [Detection(Box(x, 0.5, 0.1, 0.2, 0.6), Label("animal", "", 0.5), "animal")]) for i in range(2)]
-        ids.append(store.add_visit(v, model="m", thumbnail="t.jpg", clip="c.mp4"))
+        ids.append(store.add_visit(v, model="m", thumbnail="t.jpg", clip="c.mp4", roi=(0.2, 0.0, 0.5, 1.0)))
     store.set_visit_label(ids[0], "false")
     store.close()
     roi = (0.2, 0.0, 0.5, 1.0)  # analysis crop: x 0.2-0.7 of the full frame
@@ -207,3 +207,44 @@ def test_a_visit_tag_follows_from_its_boxes_once_each_has_its_own():
     assert visit_from_boxes([own("false"), own("false")]) == {"verdict": "false", "species": None}
     assert visit_from_boxes([own("wrong_species", "rat"), own("false")]) == {"verdict": "wrong_species", "species": "rat"}
     assert visit_from_boxes([own("real", "rat"), own("real", "songbirds")]) == {"verdict": "real", "species": None}
+
+
+def test_each_visit_keeps_the_crop_it_was_analysed_in(tmp_path):
+    """Boxes are stored as fractions of the analysis crop in effect then. A visit records that crop,
+    so after the camera's roi changes, older visits are still placed where they were boxed (map,
+    viewer, tag model all read it through visit_boxes / label_map). A visit from before the crop was
+    recorded falls back to the camera's roi now, until backfill_roi records the one checked to have
+    been in effect; backfill never overwrites a recorded crop."""
+    from camera_mcp.taxa import Label
+    from camera_mcp.visits import Box, Detection
+    store = Store(tmp_path / "monitor.db")
+    old, new = (0.08, 0.13, 0.48, 0.43), (0.075, 0.029, 0.4892, 0.8599)
+
+    def visit(start, roi="unset"):
+        v = Visit("west_alley", "animal", start=start, last_seen=start + 5, frames=1)
+        v.votes[("animal", "")] = 1.0
+        v.log = [(start, [Detection(Box(0.5, 0.5, 0.1, 0.1, 0.9), Label("animal", "", 0.5), "animal")])]
+        vid = store.add_visit(v, model="m", thumbnail="t.jpg", clip=None, **({} if roi == "unset" else {"roi": roi}))
+        store.set_visit_label(vid, "false")
+        return vid
+
+    a, b = visit(NOW - 900, roi=old), visit(NOW - 600, roi=new)
+    legacy = visit(NOW - 300)
+    store._db.execute("UPDATE visits SET roi = NULL WHERE id = ?", (legacy,))  # as recorded before this column
+    h = History(tmp_path / "monitor.db", {"west_alley": Camera("west_alley", "x", roi=new)}, Site(timezone="UTC"))
+    dots = {d["id"]: d for d in h.label_map("west_alley", since="1h")["visits"]}
+    assert dots[a]["y"] == pytest.approx(0.13 + 0.55 * 0.43, abs=1e-4)  # the old crop, though the camera's is new
+    assert dots[b]["y"] == pytest.approx(0.029 + 0.55 * 0.8599, abs=1e-4)
+    assert dots[legacy]["y"] == pytest.approx(dots[b]["y"])  # not recorded: the camera's roi now
+    assert h.visit_boxes(a)["roi"] == pytest.approx(old) and h.visit_boxes(legacy)["roi"] == pytest.approx(new)
+    assert store.backfill_roi("west_alley", old, until="2099-01-01") == 1  # only the visit with none
+    assert h.visit_boxes(legacy)["roi"] == pytest.approx(old) and h.visit_boxes(b)["roi"] == pytest.approx(new)
+    assert store.backfill_roi("west_alley", None) == 0
+    store.close()
+
+
+def test_a_whole_frame_camera_records_the_whole_frame():
+    from camera_mcp.history.base import visit_roi
+    from camera_mcp.store import roi_json
+    assert roi_json(None) == "[0.0, 0.0, 1.0, 1.0]" and visit_roi(roi_json(None), Camera("c", "x", roi=(0.1, 0.1, 0.5, 0.5))) is None
+    assert visit_roi(None, Camera("c", "x", roi=(0.1, 0.1, 0.5, 0.5))) == (0.1, 0.1, 0.5, 0.5)

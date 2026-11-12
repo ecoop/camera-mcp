@@ -7,7 +7,8 @@ from contextlib import closing
 from pathlib import Path
 
 from camera_mcp.boxtags import best_frame, box_tags
-from camera_mcp.history.base import HistoryError, _tables
+from camera_mcp.config import find_camera
+from camera_mcp.history.base import HistoryError, _has_column, _tables, visit_roi
 
 
 class MediaQueries:
@@ -29,12 +30,14 @@ class MediaQueries:
     def visit_boxes(self, visit_id: int) -> dict:
         """A visit's per-frame detector boxes (the visit_frames table), with its camera, start time
         and whether a clip was kept. Each frame's `boxes` are fractions of the analysis frame — i.e.
-        the camera's roi crop if it has one; the web layer maps them to the full frame. Each frame
+        the crop in effect when it was analysed, given as `roi` (None: the whole frame; see
+        base.visit_roi); the web layer maps them to the full frame with it. Each frame
         also has `tags`, one per box (see box_tags), and `best` is the frame the still shows. Raises
         HistoryError if the visit is unknown."""
         import json
         with closing(self._db()) as db:
-            v = db.execute("SELECT camera, started_at, clip, label, taxonomy FROM visits WHERE id = ?",
+            roi = "roi" if _has_column(db, "roi") else "NULL AS roi"
+            v = db.execute(f"SELECT camera, started_at, clip, label, taxonomy, {roi} FROM visits WHERE id = ?",
                            (visit_id,)).fetchone()
             if v is None:
                 raise HistoryError(f"no visit {visit_id}")
@@ -56,7 +59,7 @@ class MediaQueries:
             f["tags"] = tags
         return {"camera": v["camera"], "started_at": v["started_at"], "has_clip": bool(v["clip"]),
                 "label": v["label"], "taxonomy": v["taxonomy"], "frames": frames, "best": best_frame(frames),
-                "visit_tag": label}
+                "visit_tag": label, "roi": visit_roi(v["roi"], find_camera(self.cameras, v["camera"]))}
 
     def visit_still(self, visit_id: int, data_dir: Path) -> Path:
         """The full-res still saved at detection time (aligned to the box). Raises HistoryError if the

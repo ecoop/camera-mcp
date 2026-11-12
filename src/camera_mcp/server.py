@@ -231,7 +231,7 @@ def main(argv: list[str] | None = None) -> None:
                         help="offer only the history tools that send no images, with trimmed visits")
     args = parser.parse_args(argv)
     try:
-        cameras = load_cameras(args.config, require_login=False)  # history needs no login; snapshot says so
+        cameras = load_cameras(args.config, require_login=False, zones=args.data_dir / "zones.json")  # no login: history needs none
         site = load_site(args.config)
     except ConfigError as e:
         print(f"camera-mcp: {e}", file=sys.stderr)
