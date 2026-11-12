@@ -456,7 +456,13 @@ with an **accept** button, which records the tag that suggestion implies: real i
 same, real and named if the log only said animal or bird, wrong species and named otherwise. It
 moves on like any tag. The **most useful** queue for **next ›** (or the link above the visits grid) walks the
 untagged visits the model would learn most from: first those where it contradicts the log's name,
-then those it's least sure of. A nightly retrain-and-suggest
+then those it's least sure of.
+
+Each tag records how it was made (`via`): `queue` (most useful), `accept`, `grid`, `map`, `link`
+(`/?visit=`), `ask` (a looked-up visit), `boxes` (boxes to tag) or `api`; tags from before that
+have none. A visit tag also keeps the suggestion that was on show when it was made (model, group,
+how sure), so how often you agree with the model can be measured. The training report splits its
+test boxes by `via`. A nightly retrain-and-suggest
 comes next (#153 step 4); until then run both by hand.
 
 ## Benchmark

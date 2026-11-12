@@ -44,9 +44,12 @@ class MediaQueries:
             rows = db.execute("SELECT ts, label, taxonomy, score, boxes FROM visit_frames"
                               " WHERE visit_id = ? ORDER BY ts", (visit_id,)).fetchall()
             label = self._label(db, visit_id)
-            explicit = {(r["frame_ts"], r["box"]): {"verdict": r["verdict"], "species": r["species"]}
-                        for r in db.execute("SELECT frame_ts, box, verdict, species FROM box_labels WHERE visit_id = ?",
-                                            (visit_id,))} if "box_labels" in _tables(db) else {}
+            explicit = {}
+            if "box_labels" in _tables(db):
+                via = "via" if "via" in {r[1] for r in db.execute("PRAGMA table_info(box_labels)")} else "NULL AS via"
+                explicit = {(r["frame_ts"], r["box"]): {"verdict": r["verdict"], "species": r["species"], "via": r["via"]}
+                            for r in db.execute(f"SELECT frame_ts, box, verdict, species, {via} FROM box_labels"
+                                                " WHERE visit_id = ?", (visit_id,))}
         frames = []
         for r in rows:
             try:

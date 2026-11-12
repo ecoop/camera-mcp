@@ -12,14 +12,33 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from camera_mcp.boxtags import visit_from_boxes
-from camera_mcp.store import VERDICTS, Store
+from camera_mcp.store import VERDICTS, VIAS, Store
 from camera_mcp.web.context import Context
 
 FROM_BOXES = "from boxes"  # the note on a visit tag its boxes set
 
 
+def _via(body: dict) -> str:
+    """How the tag was made (store.VIAS), from the request; "api" if it doesn't say."""
+    via = str(body.get("via") or "api")
+    if via not in VIAS:
+        raise ValueError(f"via must be one of {', '.join(VIAS)}")
+    return via
+
+
 def routes(ctx: Context) -> list[Route]:
     history = ctx.history
+
+    def suggestions() -> dict:
+        """The tag model's suggestions (data/tagmodel/suggestions.json, see tagmodel.suggest)."""
+        from camera_mcp.tagmodel import read_suggestions
+        return read_suggestions(ctx.data_dir)
+
+    def suggested(vid: int) -> dict | None:
+        """The suggestion on show for a visit now, as a tag records it (so agreement can be measured)."""
+        s = suggestions()
+        got = s["visits"].get(str(vid))
+        return {"model": s.get("model"), "group": got["group"], "p": got["p"], "real": got.get("real")} if got else None
 
     async def api_visit_label_get(request: Request):
         vid = int(request.path_params["vid"])
@@ -44,20 +63,25 @@ def routes(ctx: Context) -> list[Route]:
         species = (str(body.get("species") or "").strip() or None)
         if species and verdict == "false":
             return JSONResponse({"error": "a 'false' verdict can't name a species"}, status_code=400)
+        try:
+            via = _via(body)
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
         if not ctx.db_path.exists():
             return JSONResponse({"error": "there's no visit log yet: the monitor hasn't run"}, status_code=503)
         store = Store(ctx.db_path)
         try:
-            store.set_visit_label(vid, verdict, note, species)
+            store.set_visit_label(vid, verdict, note, species, via=via, suggested=suggested(vid))
         except ValueError as e:
             return JSONResponse({"error": str(e)}, status_code=404)
         finally:
             store.close()
-        return JSONResponse({"ok": True, "label": {"verdict": verdict, "note": note, "species": species}})
+        return JSONResponse({"ok": True, "label": {"verdict": verdict, "note": note, "species": species, "via": via}})
 
     async def api_box_label_set(request: Request):
         """Tag one box: {"ts": its frame's time, "box": its index (both from /api/visit/{id}/boxes),
-        "verdict": real | false | wrong_species | null to clear, "species": optional}. Once every box on
+        "verdict": real | false | wrong_species | null to clear, "species": optional, "via": how (store.VIAS;
+        default "api")}. Once every box on
         the still has its own tag, they tag the visit (boxtags.visit_from_boxes, noted "from boxes"):
         the reply's `complete` says so, and `label` is the visit's tag now."""
         if not ctx.editable:
@@ -68,6 +92,10 @@ def routes(ctx: Context) -> list[Route]:
             ts, box = str(body["ts"]), int(body["box"])
         except (ValueError, KeyError, TypeError, json.JSONDecodeError):
             return JSONResponse({"error": "send {ts, box, verdict}"}, status_code=400)
+        try:
+            via = _via(body)
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
         verdict = body.get("verdict") or None
         species = (str(body.get("species") or "").strip() or None)
         if verdict is not None and verdict not in VERDICTS:
@@ -78,13 +106,14 @@ def routes(ctx: Context) -> list[Route]:
             return JSONResponse({"error": "there's no visit log yet: the monitor hasn't run"}, status_code=503)
         store = Store(ctx.db_path)
         try:
-            store.set_box_label(vid, ts, box, verdict, species)
+            store.set_box_label(vid, ts, box, verdict, species, via=via)
             d = history.visit_boxes(vid)
             still = d["frames"][d["best"]] if d["frames"] else None
             derived = visit_from_boxes(still["tags"]) if still and still["ts"] == ts else None
             label = d["visit_tag"]
             if derived and (not label or (label["verdict"], label.get("species")) != (derived["verdict"], derived["species"])):
-                store.set_visit_label(vid, derived["verdict"], FROM_BOXES, derived["species"])
+                store.set_visit_label(vid, derived["verdict"], FROM_BOXES, derived["species"], via=via,
+                                      suggested=suggested(vid))
                 label = {**derived, "note": FROM_BOXES}
         except ValueError as e:
             return JSONResponse({"error": str(e)}, status_code=404)
@@ -100,11 +129,6 @@ def routes(ctx: Context) -> list[Route]:
         if isinstance(ids, Response):
             return ids
         return JSONResponse({"visits": history.visits_by_id(ids), "count": len(ids)})
-
-    def suggestions() -> dict:
-        """The tag model's suggestions (data/tagmodel/suggestions.json, see tagmodel.suggest)."""
-        from camera_mcp.tagmodel import read_suggestions
-        return read_suggestions(ctx.data_dir)
 
     async def api_visit_suggestion(request: Request) -> JSONResponse:
         """The tag model's suggestion for a visit, and the tag accepting it records; null if none."""

@@ -4,6 +4,8 @@ boxes still need tags."""
 
 from __future__ import annotations
 
+import json
+
 import time
 from contextlib import closing
 
@@ -95,12 +97,14 @@ class TagQueries:
     def _label(self, db, visit_id: int) -> dict | None:
         if "visit_labels" not in _tables(db):
             return None
-        species = "species" if "species" in {r[1] for r in db.execute("PRAGMA table_info(visit_labels)")} else "NULL"
-        r = db.execute(f"SELECT verdict, note, at, {species} AS species FROM visit_labels WHERE visit_id = ?",
+        have = {r[1] for r in db.execute("PRAGMA table_info(visit_labels)")}
+        cols = ", ".join(c if c in have else f"NULL AS {c}" for c in ("species", "via", "suggested"))
+        r = db.execute(f"SELECT verdict, note, at, {cols} FROM visit_labels WHERE visit_id = ?",
                        (visit_id,)).fetchone()
         if r is None:
             return None
-        return {"verdict": r["verdict"], "species": r["species"], "note": r["note"], "at": self._local(r["at"])}
+        return {"verdict": r["verdict"], "species": r["species"], "note": r["note"], "at": self._local(r["at"]),
+                "via": r["via"], "suggested": json.loads(r["suggested"]) if r["suggested"] else None}
 
     def visit_label(self, visit_id: int) -> dict | None:
         """The human correctness label on a visit (with the species they gave, if any), or None if it

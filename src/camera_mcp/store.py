@@ -17,6 +17,10 @@ from pathlib import Path
 from camera_mcp.times import iso
 
 VERDICTS = ("real", "false", "wrong_species")  # a human's correctness label on a visit
+# How a tag was made: from the most-useful queue, by accepting the tag model's suggestion, in the visits
+# grid, on the map, from a link (/?visit=), from a looked-up or asked-for visit, walking the boxes left to
+# tag, or straight through the API. NULL on tags from before it was recorded.
+VIAS = ("queue", "accept", "grid", "map", "link", "ask", "boxes", "api")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS motion_windows (
@@ -142,6 +146,12 @@ ADDED_COLUMNS = {
     "visit_labels": {
         "species": "TEXT",  # what it actually was, if the human said: the right name for 'wrong_species',
         # or a name for an unnamed 'real' visit (an "animal" that was a rat); never for 'false'
+        "via": "TEXT",  # how the tag was made (VIAS); NULL: from before it was recorded
+        "suggested": "TEXT",  # JSON {model, group, p, real}: the tag model's suggestion when it was tagged;
+        # kept through a re-tag that had none to show. NULL: there was none (or from before it was recorded)
+    },
+    "box_labels": {
+        "via": "TEXT",  # how the tag was made (VIAS); NULL: from before it was recorded
     },
     "analysis_stats": {
         "thinned": "INTEGER NOT NULL DEFAULT 0",  # segments analysed at one frame because the queue was behind
@@ -154,6 +164,12 @@ ADDED_COLUMNS = {
         "view_moved_since": "TEXT",  # set while the camera looks moved; NULL otherwise
     },
 }
+
+
+def _via(via: str | None) -> str | None:
+    if via is not None and via not in VIAS:
+        raise ValueError(f"via must be one of {', '.join(VIAS)}")
+    return via
 
 
 def _species(verdict: str, species: str | None) -> str | None:
@@ -317,27 +333,33 @@ class Store:
             return visit_id
 
     def set_visit_label(self, visit_id: int, verdict: str, note: str | None = None,
-                        species: str | None = None) -> None:
+                        species: str | None = None, *, via: str | None = None,
+                        suggested: dict | None = None) -> None:
         """Record a human's correctness verdict on a visit, upserting on visit_id so a re-label
-        replaces the old one; `species` is what it actually was, if they said. Raises ValueError for
-        an unknown verdict, a species on a 'false' verdict, or a visit that isn't there."""
-        species = _species(verdict, species)
+        replaces the old one; `species` is what it actually was, if they said; `via` how it was made
+        (VIAS); `suggested` the tag model's suggestion on show then, kept if a re-tag has none. Raises
+        ValueError for an unknown verdict or via, a species on a 'false' verdict, or a visit that isn't there."""
+        species, via = _species(verdict, species), _via(via)
         with self._lock:
             if self._db.execute("SELECT 1 FROM visits WHERE id = ?", (visit_id,)).fetchone() is None:
                 raise ValueError(f"no visit {visit_id}")
             self._db.execute(
-                "INSERT INTO visit_labels (visit_id, verdict, note, at, species) VALUES (?, ?, ?, ?, ?)"
-                " ON CONFLICT(visit_id) DO UPDATE SET"
-                " verdict = excluded.verdict, note = excluded.note, at = excluded.at, species = excluded.species",
-                (visit_id, verdict, note, iso(time.time()), species),
+                "INSERT INTO visit_labels (visit_id, verdict, note, at, species, via, suggested)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(visit_id) DO UPDATE SET"
+                " verdict = excluded.verdict, note = excluded.note, at = excluded.at, species = excluded.species,"
+                " via = excluded.via, suggested = COALESCE(excluded.suggested, visit_labels.suggested)",
+                (visit_id, verdict, note, iso(time.time()), species, via,
+                 json.dumps(suggested) if suggested else None),
             )
 
     def set_box_label(self, visit_id: int, frame_ts: str, box: int, verdict: str | None,
-                      species: str | None = None) -> None:
+                      species: str | None = None, *, via: str | None = None) -> None:
         """Record a human's verdict on one box: the `box`-th of the visit's frame at `frame_ts`
-        (visit_frames.ts), replacing any earlier one; verdict None removes it. Raises ValueError for
-        an unknown verdict, a species on 'false', or a frame or box the visit doesn't have."""
+        (visit_frames.ts), replacing any earlier one, and `via` how it was made (VIAS); verdict None
+        removes it. Raises ValueError for an unknown verdict or via, a species on 'false', or a frame or
+        box the visit doesn't have."""
         species = _species(verdict, species) if verdict is not None else None
+        via = _via(via)
         with self._lock:
             row = self._db.execute("SELECT boxes FROM visit_frames WHERE visit_id = ? AND ts = ?",
                                    (visit_id, frame_ts)).fetchone()
@@ -350,10 +372,10 @@ class Store:
                                  (visit_id, frame_ts, box))
                 return
             self._db.execute(
-                "INSERT INTO box_labels (visit_id, frame_ts, box, verdict, species, at) VALUES (?, ?, ?, ?, ?, ?)"
-                " ON CONFLICT(visit_id, frame_ts, box) DO UPDATE SET"
-                " verdict = excluded.verdict, species = excluded.species, at = excluded.at",
-                (visit_id, frame_ts, box, verdict, species, iso(time.time())),
+                "INSERT INTO box_labels (visit_id, frame_ts, box, verdict, species, at, via)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(visit_id, frame_ts, box) DO UPDATE SET"
+                " verdict = excluded.verdict, species = excluded.species, at = excluded.at, via = excluded.via",
+                (visit_id, frame_ts, box, verdict, species, iso(time.time()), via),
             )
 
     def set_favorite(self, visit_id: int, on: bool, kind: str = "still", clip_at: float | None = None,

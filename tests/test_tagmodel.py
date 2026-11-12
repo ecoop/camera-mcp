@@ -70,7 +70,7 @@ def log(tmp_path):
                 ("songbirds", "songbirds", "house finch", "real", None),
                 ("leaves", "animal", "animal", "false", None), ("leaves", "animal", "animal", "false", None)):
             vid = add_visit(store, db, tmp_path, kind, logged, name, now - (13 - day) * DAY)
-            store.set_visit_label(vid, verdict, species=species)
+            store.set_visit_label(vid, verdict, species=species, via="queue" if verdict == "wrong_species" else None)
     db.close()
     store.close()
     return History(tmp_path / "monitor.db", {"alley": Camera("alley", "a.mp4")}, Site(timezone="UTC")), tmp_path
@@ -95,6 +95,7 @@ def test_a_run_learns_the_tags_and_beats_the_log(log):
     assert js["group"]["right"] == js["group"]["total"] == 20
     assert js["group"]["log_right"] == 16 and js["group"]["fixed"] == 4  # the cats logged as birds
     assert js["group"]["by_log"] == {"same": [16, 16], "vague": [4, 4], "other": [0, 0]}  # "bird" is vague
+    assert js["group"]["by_via"] == {"queue": [4, 4], "not recorded": [16, 16]}  # how each was tagged
     md = (out / "report.md").read_text()
     assert "tested from" in md and "| cat |" in md
     saved = torch.load(out / "model.pt", weights_only=False)

@@ -521,7 +521,7 @@ async function lookUpVisits(ids){$('#askans').className='askans'; $('#askgrid').
   catch(e){$('#askans').className='askans err';$('#askans').textContent='network error: '+e;}}
 // /?visit=15779 (an alert's link) opens that visit, ready to tag
 async function openLinkedVisit(){const id=new URLSearchParams(location.search).get('visit'); if(!id||!/^\d+$/.test(id))return;
-  $('#askq').value='#'+id; await lookUpVisits([id]);}
+  LINKED=id; $('#askq').value='#'+id; await lookUpVisits([id]);}
 function askMeta(spent,cap,cost){$('#askmeta').textContent=(cost!=null?`this answer ≈ $${cost.toFixed(3)} · `:'')+
   `$${(+spent).toFixed(2)} of $${(+cap).toFixed(2)} used today · answers use the visit log only (no images)`;}
 $('#askform').addEventListener('submit',async ev=>{ev.preventDefault(); const q=$('#askq').value.trim(); if(!q)return;
@@ -551,8 +551,8 @@ async function loadLabel(id){curLabel=null; markLabel(null,'');
     labelEditable=d.editable; curLabel=d.label; markLabel(d.label&&d.label.verdict,d.label&&d.label.species);
     $('#lblset').querySelectorAll('.lblbtn').forEach(b=>b.disabled=!d.editable);
   }catch(e){}}
-async function postLabel(v,species){const res=await fetch('/api/visit/'+curVisit+'/label',{method:'POST',
-    headers:{'Content-Type':'application/json'},body:JSON.stringify({verdict:v,species:v==='false'?'':species||''})});
+async function postLabel(v,species,via=VIA){const res=await fetch('/api/visit/'+curVisit+'/label',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({verdict:v,species:v==='false'?'':species||'',via})});
   if(res.ok){curLabel={verdict:v,species:v==='false'?null:species||null}; if(species)SPP=false;
     boxData=null; loadBoxData().then(drawBoxes); refreshBoxQueue();}  // inherited box tags follow the visit's
   return res.ok;}
@@ -568,9 +568,9 @@ $('#vsp').addEventListener('change',()=>{if(selBox){const {boxes}=stillBoxes(), 
   postLabel(v,sp).then(ok=>{loadPickerSpecies();
     const go=ok&&sp&&(v==='wrong_species'||(v==='real'&&refining)); if(go)refining=false;
     if(go&&(VIEW!=='map'||mapQ()))setTimeout(advance,350);});});  // once named: move on
-async function setLabel(v){if(!labelEditable||!curVisit)return;
+async function setLabel(v,via=VIA){if(!labelEditable||!curVisit)return;
   try{const keep=v!=='false'?$('#vsp').value.trim():'';
-    if(await postLabel(v,keep)){markLabel(v); const t=tileOf(curVisit); mapRetag(String(curVisit),v);
+    if(await postLabel(v,keep,via)){markLabel(v); const t=tileOf(curVisit); mapRetag(String(curVisit),v);
       if(t)t.dataset.verdict=v;  // CSS restyles the tile from this
       if(waitsForName(v,keep))askName();
       else if(t&&(VIEW!=='map'||mapQ()))setTimeout(advance,350);}}catch(e){}}  // a tag moves on (once named, where it needs one); on the map only through the map
@@ -622,7 +622,12 @@ $('#favbtn').onclick=toggleFav;
 // The still opens on the full frame (/frame: the saved still, else one from the clip); only if there's
 // neither (a visit still going on) does it show the thumbnail, scaled up, with no boxes. Whether there's
 // a clip comes from the visit's record, not the tile: the grid may have loaded before the clip was kept.
-function openVisit(t){const id=t.dataset.id; curVisit=id; curClip=t.dataset.clip==='1'; markHidden(t); markFav(t);
+// How a tag here is made (store.VIAS), from where the visit was opened: the visits grid, the map, a
+// queue for next (most useful, or boxes to tag), a link (/?visit=) or a lookup; "accept" is the suggestion's button.
+let VIA='grid', QVIA='queue', LINKED=null;
+function viaOf(t){return t.closest('#mapgrid')?'map':t.closest('#queuegrid')?QVIA
+  :t.closest('#askgrid')?(String(t.dataset.id)===LINKED?'link':'ask'):'grid';}
+function openVisit(t){const id=t.dataset.id; curVisit=id; VIA=viaOf(t); curClip=t.dataset.clip==='1'; markHidden(t); markFav(t);
   if(t.closest('#mapgrid')){MAPSEEN.add(String(id)); if(!mapQ())qsel.value=MAPMODE;}  // from the map: next walks the map
   else if(mapQ())qsel.value='grid';
   document.querySelectorAll('.mdot.cur').forEach(d=>d.classList.remove('cur'));
@@ -684,7 +689,7 @@ function untaggedBox(){const {ts,boxes}=stillBoxes();
 // says so: `complete`) and the viewer moves on; until then it picks the next box. Wrong sp. waits for its species.
 async function setBoxTag(v,species){if(!labelEditable||!selBox||!curVisit)return;
   try{const r=await fetch('/api/visit/'+curVisit+'/box-label',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({ts:selBox.ts,box:selBox.i,verdict:v,species:v&&v!=='false'?species||'':''})});
+      body:JSON.stringify({ts:selBox.ts,box:selBox.i,verdict:v,species:v&&v!=='false'?species||'':'',via:VIA})});
     if(!r.ok)return; const d=await r.json(), named=!waitsForName(v,species); if(named)refining=false;
     if(species)SPP=false; curLabel=d.label||curLabel; boxData=null; await loadBoxData();
     if(d.complete){const t=tileOf(curVisit); if(t)t.dataset.verdict=d.label.verdict;
@@ -702,7 +707,7 @@ async function refreshBoxQueue(){const b=$('#qopt-boxes');
     b.textContent='boxes to tag ('+left+')';}catch(e){}}
 function nextBoxToTag(){const v=(BOXQ||[]).find(x=>String(x.id)!==String(curVisit));
   if(!v){$('#clipmeta').textContent='no boxes left to tag'; return;}
-  const g=$('#queuegrid'); g.innerHTML=tileHTML(v); openVisit(g.querySelector('.tile'));}
+  QVIA='boxes'; const g=$('#queuegrid'); g.innerHTML=tileHTML(v); openVisit(g.querySelector('.tile'));}
 // The tag model (tagmodel.suggest): a visit's suggested group, how sure, and the log's name when it
 // differs; accept records the tag it implies (tagmodel.accept_label) and moves on like any tag.
 // "most useful" (a queue for next) walks the untagged visits it would learn most from.
@@ -713,7 +718,7 @@ async function loadSuggestion(id){SUGG=null; $('#sugg').hidden=true;
     $('#suggwhat').textContent=s.group;
     $('#suggp').textContent=Math.round(s.p*100)+'%'+(s.logged!==s.group?' (log: '+s.logged+')':'');
     $('#sugg').hidden=false;}catch(e){}}
-$('#suggok').onclick=()=>{if(!SUGG||!SUGG.accept)return; $('#vsp').value=SUGG.accept.species||''; setLabel(SUGG.accept.verdict);};
+$('#suggok').onclick=()=>{if(!SUGG||!SUGG.accept)return; $('#vsp').value=SUGG.accept.species||''; setLabel(SUGG.accept.verdict,'accept');};
 async function refreshUseful(){try{const cam=$('#camera').value;
     const d=await (await fetch('/api/labels/suggested'+(cam?'?camera='+encodeURIComponent(cam):''))).json();
     USEQ=d.visits||[]; const left=Math.max(0,(d.count||0)-(USEQ.some(v=>String(v.id)===String(curVisit))?1:0));
@@ -721,7 +726,7 @@ async function refreshUseful(){try{const cam=$('#camera').value;
     $('#uselink').innerHTML='most useful to tag ('+(d.count||0)+') &rsaquo;'; $('#uselink').hidden=!d.count;}catch(e){}}
 async function nextUseful(){await refreshUseful(); const v=USEQ.find(x=>String(x.id)!==String(curVisit));
   if(!v){$('#clipmeta').textContent='nothing left in the most-useful queue'; return;}
-  const g=$('#queuegrid'); g.innerHTML=tileHTML(v); openVisit(g.querySelector('.tile'));}
+  QVIA='queue'; const g=$('#queuegrid'); g.innerHTML=tileHTML(v); openVisit(g.querySelector('.tile'));}
 $('#uselink').onclick=e=>{e.preventDefault(); curVisit=null; qsel.value='useful'; qsel.onchange(); nextUseful();};
 // a click (not a drag) on the still picks the smallest box under it, with a little slack for tiny boxes
 (function(){let down=null; const st=$('#stage');
