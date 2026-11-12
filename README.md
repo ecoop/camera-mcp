@@ -4,7 +4,7 @@
 ![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13-blue)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
-_Last updated: 2026-11-09_
+_Last updated: 2026-11-12_
 
 An MCP server and an always-on monitor for home IP cameras, built to watch for wildlife on one
 machine without saturating it.
@@ -339,6 +339,17 @@ throughput: motion zones are rasterised into a pixel mask once at startup (per f
 multiply, whatever the shape), and exclusion zones are checked once per visit. In `zones.json` a
 polygon is `{"poly": [[x, y], ...]}` beside the `[x, y, w, h]` rectangles.
 
+**Changing the analysis ROI.** A visit's boxes are stored as fractions of the analysis ROI in
+effect when it was analysed, and each visit records that ROI (`visits.roi`). So after the ROI
+changes, older visits still show their boxes where they were (viewer, labels map, tag model).
+Visits from before the ROI was recorded fall back to the camera's ROI now. Once it's known which
+ROI was in effect when (draw a few stored boxes on their stills under each), record it on them:
+
+    python -m camera_mcp.store backfill-roi --camera west_alley --roi 0.08,0.13,0.48,0.43 --until 2026-11-04T20:38:26Z
+
+`--since` / `--until` are UTC; no `--roi` means the whole frame. It only fills visits that have no
+ROI recorded, never overwrites one.
+
 **Moved-camera check.** Every 5 minutes, when nothing is moving, the monitor compares each
 camera's view with a stored reference (one for day, one for infrared night, in `data/views/`).
 If three checks in a row don't match, it logs a warning and sets `view_moved_since` in the
@@ -433,7 +444,7 @@ report compares the model with the detector's confidence and with what the log s
     camera-tagmodel [--device cpu] [--threads 4] [--test-days 7]
 
 It reads the visit log read-only and writes only under `data/tagmodel/`: a feature cache
-(`features.npz`, so a re-run featurizes only new boxes) and a versioned folder with `model.pt`,
+(`features.npz`, keyed by box and where it was cropped, so a re-run featurizes only new boxes or ones now placed differently) and a versioned folder with `model.pt`,
 `report.md` and `report.json`. The default runs on the CPU at 4 threads, leaving the GPU to the
 monitor.
 

@@ -32,6 +32,21 @@ def parse_when(text: str | None, now: float, tz) -> float:
         raise HistoryError(str(e)) from None
 
 
+def visit_roi(stored: str | None, cam: Camera | None) -> tuple[float, float, float, float] | None:
+    """The analysis crop a visit's stored boxes are fractions of: the one recorded with the visit
+    (visits.roi), else, for visits from before that was recorded, the camera's roi now. None: the
+    whole frame."""
+    if stored:
+        import json
+        try:
+            x, y, w, h = (float(v) for v in json.loads(stored))
+        except (ValueError, TypeError):
+            pass
+        else:
+            return None if (x, y, w, h) == (0.0, 0.0, 1.0, 1.0) else (x, y, w, h)
+    return tuple(cam.roi) if cam and cam.roi else None
+
+
 def _get(row: sqlite3.Row | None, key: str, default=None):
     """A column that an older monitor's log may not have yet (the server never alters the log)."""
     return row[key] if row is not None and key in row.keys() else default

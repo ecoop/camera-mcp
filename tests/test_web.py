@@ -49,7 +49,7 @@ def test_visit_boxes_maps_roi_to_full_frame(tmp_path):
     v = Visit("fence", "animal", start=time.time(), last_seen=time.time() + 5, frames=1)
     v.votes[("animal", "")] = 1.0
     v.log = [(v.start + 1, [Detection(Box(0.5, 0.5, 0.2, 0.2, 0.9), Label("animal", "", 0.5), "animal")])]
-    store.add_visit(v, model="m", thumbnail=None, clip="c.mp4")
+    store.add_visit(v, model="m", thumbnail=None, clip="c.mp4", roi=cam.roi)  # the monitor records the crop
     c = starlette_testclient.TestClient(build_app({"fence": cam}, tmp_path, None))
     d = c.get("/api/visit/1/boxes").json()
     assert d["roi"] == [0.0, 0.2, 1.0, 0.6] and d["has_clip"] is True and d["best"] == 0

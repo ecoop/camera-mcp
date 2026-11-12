@@ -9,8 +9,15 @@ from contextlib import closing
 
 from camera_mcp.boxtags import best_frame, box_tags
 from camera_mcp.config import find_camera
-from camera_mcp.history.base import HistoryError, _gated, _has_column, _tables, parse_when
+from camera_mcp.history.base import HistoryError, _gated, _has_column, _tables, parse_when, visit_roi
 
+
+
+def _placed(r, rx: float, ry: float, rw: float, rh: float) -> dict:
+    """A label-map row's best box placed on the full frame, from the crop it was analysed in."""
+    return {"x": round(rx + r["cx"] * rw, 4), "y": round(ry + r["cy"] * rh, 4),
+            "size": round(max(r["bw"] * rw, r["bh"] * rh), 4),
+            "spread": round(max(r["sx"] * rw, r["sy"] * rh), 4)}
 
 class TagQueries:
     """History's tags queries (a mixin over LogReader)."""
@@ -34,7 +41,7 @@ class TagQueries:
                   unlabelled: bool = False, limit: int = 3000) -> dict:
         """One entry per visit on a camera, placed at its most confident box (the box the visit viewer
         and thumbnail show), as fractions of the FULL frame (boxes are stored as fractions of the
-        camera's roi crop and mapped back here, using its current roi). An unnamed visit can collect
+        crop in effect when the visit was analysed, and mapped back here with it: base.visit_roi). An unnamed visit can collect
         boxes on different things, so `spread` says how far its box centres ranged; averaging them
         would place the dot where nothing was. With each visit's label, time and human verdict, so
         the dashboard can plot past labels over the camera's picture and open any one of them; `night`
@@ -45,7 +52,6 @@ class TagQueries:
         cam = find_camera(self.cameras, camera)
         if cam is None:
             raise HistoryError(f"unknown camera {camera!r}; known: {', '.join(sorted(self.cameras))}")
-        rx, ry, rw, rh = cam.roi or (0.0, 0.0, 1.0, 1.0)
         with closing(self._db()) as db:
             has_labels = "visit_labels" in _tables(db)
             if not has_labels and not unlabelled:
@@ -57,6 +63,7 @@ class TagQueries:
                 where += " AND l.verdict IS NOT NULL"
             sup = "v.suppressed" if _gated(db) else "NULL"
             night = "v.night" if _has_column(db, "night") else "NULL"
+            roi = "v.roi" if _has_column(db, "roi") else "NULL"
             rows = db.execute(f"""
                 WITH vs AS (SELECT v.id FROM visits v {join} WHERE {where} ORDER BY v.started_at DESC LIMIT ?),
                 b AS (SELECT f.visit_id AS vid, json_extract(je.value, '$.conf') AS c,
@@ -67,11 +74,12 @@ class TagQueries:
                 spread AS (SELECT vid, max(x + w / 2) - min(x + w / 2) AS sx, max(y + h / 2) - min(y + h / 2) AS sy
                            FROM b GROUP BY vid)
                 SELECT v.id, v.label, v.grp, v.started_at, v.frames, v.max_count, v.clip, v.thumbnail,
-                       {sup} AS suppressed, {verdict} AS verdict, {night} AS night,
+                       {sup} AS suppressed, {verdict} AS verdict, {night} AS night, {roi} AS roi,
                        best.x + best.w / 2 AS cx, best.y + best.h / 2 AS cy, best.w AS bw, best.h AS bh,
                        spread.sx, spread.sy
                 FROM vs JOIN visits v ON v.id = vs.id {join} JOIN best ON best.vid = v.id JOIN spread ON spread.vid = v.id
                 ORDER BY v.started_at DESC""", (*params, max(1, min(limit, 5000)))).fetchall()
+        crops = {r["id"]: visit_roi(r["roi"], cam) or (0.0, 0.0, 1.0, 1.0) for r in rows}
         return {
             "camera": cam.name, "from": self._local(self._iso(t0)), "to": self._local(self._iso(t1)),
             "visits": [{
@@ -80,9 +88,7 @@ class TagQueries:
                 "clip": r["clip"], "has_thumbnail": r["thumbnail"] is not None,
                 "suppressed": r["suppressed"], "verdict": r["verdict"],
                 "night": None if r["night"] in (None, -1) else bool(r["night"]),  # under infrared; None: unknown
-                "x": round(rx + r["cx"] * rw, 4), "y": round(ry + r["cy"] * rh, 4),
-                "size": round(max(r["bw"] * rw, r["bh"] * rh), 4),
-                "spread": round(max(r["sx"] * rw, r["sy"] * rh), 4),
+                **_placed(r, *crops[r["id"]]),
             } for r in rows if r["cx"] is not None],
         }
 

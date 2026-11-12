@@ -46,7 +46,7 @@ from pathlib import Path
 
 import numpy as np
 
-from camera_mcp.config import ConfigError, default_config_path, default_data_dir, find_camera, load_cameras, load_site
+from camera_mcp.config import ConfigError, default_config_path, default_data_dir, load_cameras, load_site
 from camera_mcp.history import History, HistoryError
 from camera_mcp.history.base import _named_as
 
@@ -105,8 +105,7 @@ def examples(history: History, data_dir: Path, untagged_since: float | None = No
             except HistoryError:
                 skipped["no still"] += 1
                 continue
-            cam = find_camera(history.cameras, v["camera"])
-            roi = cam.roi if cam else None
+            roi = d["roi"]  # the crop in effect when it was analysed (base.visit_roi)
             day = datetime.fromisoformat(v["started_at"]).astimezone(history.tz).date().isoformat()
             for fi, f in enumerate(d["frames"]):
                 for i, (b, tag) in enumerate(zip(f["boxes"], f["tags"])):
@@ -164,16 +163,18 @@ class Featurizer:
 def featurize(exs: list[Example], stills: dict[int, Path], cache: Path, make_featurizer=Featurizer,
               log=print) -> dict[str, np.ndarray]:
     """Each example's features, from the cache or (new boxes only) through a featurizer, made only
-    when there's something new (loading SpeciesNet takes a while)."""
+    when there's something new (loading SpeciesNet takes a while). The cache is keyed by the box AND
+    where it was cropped on the still (cache_key), so a box placed differently, as after a fix to the
+    crop it was analysed in, is featurized again rather than read back from the wrong crop."""
     from PIL import Image
 
     have: dict[str, np.ndarray] = {}
     if cache.exists():
         z = np.load(cache)
-        have = dict(zip(z["keys"].tolist(), z["feats"].astype(np.float32)))
+        have = {k: f for k, f in zip(z["keys"].tolist(), z["feats"].astype(np.float32)) if "@" in k}  # crop-keyed only
     todo: dict[int, list[Example]] = {}
     for e in exs:
-        if e.key not in have:
+        if cache_key(e) not in have:
             todo.setdefault(e.visit_id, []).append(e)
     if todo:
         featurizer = make_featurizer()
@@ -182,13 +183,18 @@ def featurize(exs: list[Example], stills: dict[int, Path], cache: Path, make_fea
         for k, (vid, es) in enumerate(todo.items(), 1):
             with Image.open(stills[vid]) as im:
                 feats = featurizer(im.convert("RGB"), [e.bbox for e in es])
-            have.update({e.key: f for e, f in zip(es, feats)})
+            have.update({cache_key(e): f for e, f in zip(es, feats)})
             if k % 100 == 0:
                 log(f"  {k}/{len(todo)} stills")
         cache.parent.mkdir(parents=True, exist_ok=True)
         keys = sorted(have)
         np.savez_compressed(cache, keys=np.array(keys), feats=np.stack([have[k] for k in keys]).astype(np.float16))
-    return {e.key: have[e.key] for e in exs}
+    return {e.key: have[cache_key(e)] for e in exs}
+
+
+def cache_key(e: Example) -> str:
+    """A box's feature-cache key: which box (visit:frame:index) and where on the still it was cropped."""
+    return e.key + "@" + ",".join(f"{v:.4f}" for v in e.bbox)
 
 
 def fit_linear(x: np.ndarray, y: np.ndarray, classes: int, l2: float, steps: int = 300):
@@ -470,7 +476,7 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     data_dir = args.data_dir or default_data_dir()
     try:
-        cameras = load_cameras(str(args.config), require_login=False)
+        cameras = load_cameras(str(args.config), require_login=False, zones=data_dir / "zones.json")
         history = History(data_dir / "monitor.db", cameras, load_site(str(args.config)))
         make = lambda: Featurizer(args.device, args.threads)  # noqa: E731
         if args.step == "suggest":
