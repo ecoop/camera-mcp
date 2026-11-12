@@ -195,6 +195,41 @@ def test_visit_label_rejects_bad_verdict_and_unknown_visit(tmp_path):
     assert c.post("/api/visit/999/label", json={"verdict": "real"}).status_code == 404
 
 
+def test_a_tag_records_how_it_was_made_and_the_suggestion_on_show(tmp_path):
+    import json
+    import sqlite3
+    from camera_mcp.config import Camera
+    from camera_mcp.web import build_app
+    _one_visit(tmp_path)
+    (tmp_path / "tagmodel").mkdir()
+    (tmp_path / "tagmodel" / "suggestions.json").write_text(json.dumps(
+        {"model": "20261111-2056", "visits": {"1": {"group": "rat", "p": 0.91, "real": 0.97, "logged": "animal"}}}))
+    c = starlette_testclient.TestClient(build_app({"fence": Camera("fence", "f.mp4")}, tmp_path, None))
+    assert c.post("/api/visit/1/label", json={"verdict": "real", "species": "rat", "via": "accept"}).status_code == 200
+    label = c.get("/api/visit/1/label").json()["label"]
+    assert label["via"] == "accept"
+    assert label["suggested"] == {"model": "20261111-2056", "group": "rat", "p": 0.91, "real": 0.97}
+    # a re-tag once the suggestion is gone keeps the one that was on show; no via says "api"
+    (tmp_path / "tagmodel" / "suggestions.json").write_text(json.dumps({"model": "x", "visits": {}}))
+    assert c.post("/api/visit/1/label", json={"verdict": "wrong_species", "species": "cat"}).status_code == 200
+    label = c.get("/api/visit/1/label").json()["label"]
+    assert label["via"] == "api" and label["suggested"]["group"] == "rat"
+    assert c.post("/api/visit/1/label", json={"verdict": "real", "via": "somewhere"}).status_code == 400
+    # a box tag records it too, and so does the visit tag its boxes then imply
+    ts = c.get("/api/visit/1/boxes").json()["frames"][0]["ts"]
+    r = c.post("/api/visit/1/box-label", json={"ts": ts, "box": 0, "verdict": "false", "via": "map"})
+    assert r.status_code == 200 and r.json()["complete"] is True
+    with sqlite3.connect(tmp_path / "monitor.db") as db:
+        assert db.execute("SELECT via FROM box_labels").fetchone() == ("map",)
+        assert db.execute("SELECT verdict, via FROM visit_labels").fetchone() == ("false", "map")
+    assert c.post("/api/visit/1/box-label", json={"ts": ts, "box": 0, "verdict": "real", "via": "x"}).status_code == 400
+
+
+def test_the_viewer_sends_how_each_tag_was_made(client):
+    page = client.get("/").text
+    assert "function viaOf(t)" in page and "via:VIA" in page and "'accept'" in page
+
+
 def test_visit_label_blocked_when_readonly(tmp_path, monkeypatch):
     monkeypatch.setenv("CAMERA_MCP_WEB_READONLY", "1")
     from camera_mcp.config import Camera
@@ -752,7 +787,7 @@ def test_tags_carry_a_species_and_boxes_can_be_tagged(tmp_path):
     r = c.post("/api/visit/1/box-label", json={"ts": frame["ts"], "box": 0, "verdict": "real", "species": "norway rat"})
     assert r.status_code == 200
     assert c.get("/api/visit/1/boxes").json()["frames"][0]["boxes"][0]["tag"] == \
-        {"verdict": "real", "species": "norway rat", "source": "box"}
+        {"verdict": "real", "species": "norway rat", "source": "box", "via": "api"}
     assert c.post("/api/visit/1/box-label", json={"ts": frame["ts"], "box": 3, "verdict": "real"}).status_code == 404
     assert c.post("/api/visit/1/box-label", json={"ts": frame["ts"], "box": 0, "verdict": "false",
                                                   "species": "rat"}).status_code == 400

@@ -69,6 +69,7 @@ class Example:
     group: str | None  # the owner's group for a real box; None if false, unnamed wrong_species or vague
     logged: str  # the group the log filed the visit under (what SpeciesNet's pipeline said)
     source: str  # "box" (the owner tagged this box), "visit" (inherited from the visit's tag), "none" (untagged)
+    via: str | None = None  # how the tag was made (store.VIAS); None: from before it was recorded, or untagged
 
 
 def examples(history: History, data_dir: Path, untagged_since: float | None = None
@@ -132,7 +133,7 @@ def examples(history: History, data_dir: Path, untagged_since: float | None = No
                         grp = v["grp"]  # tagged real and not renamed: the log's name was right
                     out.append(Example(f"{v['id']}:{f['ts']}:{i}", v["id"], v["camera"], day, (x, y, w, h),
                                        float(b.get("conf") or 0.0), real, None if grp in VAGUE else grp,
-                                       v["grp"], tag["source"]))
+                                       v["grp"], tag["source"], tag.get("via")))
     return out, stills, skipped
 
 
@@ -368,6 +369,20 @@ def report(exs, test, test_from, skipped, real_y, real_got, real_p, conf, cut, n
         lines.append(f"| {words} | {by_kind[k][0]} | {by_kind[k][1]} |")
     lines += [
         "",
+        "How these boxes were tagged (the most-useful queue serves the visits the model is least sure of,",
+        "and an accepted suggestion is the model's own answer, so compare their rows with care):",
+        "",
+        "| tagged | boxes | model right |",
+        "|---|---:|---:|",
+    ]
+    vias = np.array([e.via or "not recorded" for e in g_exs])
+    by_via = {}
+    for k in sorted(set(vias.tolist()), key=lambda k: (k == "not recorded", k)):
+        m = vias == k
+        by_via[k] = (int(m.sum()), int((g_got[m] == g_true[m]).sum()))
+        lines.append(f"| {k} | {by_via[k][0]} | {by_via[k][1]} |")
+    lines += [
+        "",
         "Most common mix-ups (owner said -> model said):",
     ]
     mix = Counter((names[t], names[p]) for t, p in zip(g_true, g_got) if t != p)
@@ -380,7 +395,7 @@ def report(exs, test, test_from, skipped, real_y, real_got, real_p, conf, cut, n
           "real": {"false_caught": caught, "false_total": int(false_y.sum()), "real_called_false": wrongly,
                    "conf_cut": float(cut), "conf_caught": cut_caught, "conf_dropped_real": cut_wrongly},
           "group": {"groups": names, "rows": rows, "right": right, "log_right": log_right, "total": total,
-                    "fixed": fixed, "broke": broke, "by_log": by_kind}}
+                    "fixed": fixed, "broke": broke, "by_log": by_kind, "by_via": by_via}}
     return {"md": "\n".join(lines) + "\n", "json": js}
 
 

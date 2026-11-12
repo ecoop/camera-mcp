@@ -125,7 +125,7 @@ def test_box_tags_inherit_the_visit_tag_only_where_it_must_hold(tmp_path):
     h = History(tmp_path / "monitor.db", {"backyard": Camera("backyard", "x")}, Site(timezone="UTC"))
     bird = h.visit_boxes(still_bird)
     assert {t["verdict"] for f in bird["frames"] for t in f["tags"]} == {"real"}
-    assert bird["frames"][0]["tags"][0] == {"verdict": "real", "species": "house finch", "source": "visit"}
+    assert bird["frames"][0]["tags"][0] == {"verdict": "real", "species": "house finch", "source": "visit", "via": None}
     assert h.visit_label(still_bird)["species"] == "house finch"
     assert all(t["verdict"] == "false" for f in h.visit_boxes(junk)["frames"] for t in f["tags"])
     roam = h.visit_boxes(roaming)
@@ -139,8 +139,8 @@ def test_box_tags_inherit_the_visit_tag_only_where_it_must_hold(tmp_path):
     store.set_box_label(roaming, ts, 1, "false")
     assert h.needs_box_tags() == []  # every box on the still is known now
     tags = h.visit_boxes(roaming)["frames"][1]["tags"]
-    assert tags == [{"verdict": "real", "species": "dark-eyed junco", "source": "box"},
-                    {"verdict": "false", "species": None, "source": "box"}]
+    assert tags == [{"verdict": "real", "species": "dark-eyed junco", "source": "box", "via": None},
+                    {"verdict": "false", "species": None, "source": "box", "via": None}]
     store.set_box_label(roaming, ts, 1, None)  # cleared: unknown again
     assert h.needs_box_tags() == [roaming]
     for bad in ((ts, 5, "real"), ("1999-01-01T00:00:00Z", 0, "real"), (ts, 0, "maybe")):

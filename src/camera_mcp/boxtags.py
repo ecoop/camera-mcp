@@ -21,7 +21,8 @@ def box_tags(frames: list[dict], label: dict | None, explicit: dict) -> list[lis
                                       max(c[1] for c in centres) - min(c[1] for c in centres)) <= ONE_PLACE
     inherited = None
     if label and (label["verdict"] != "real" or one_place):
-        inherited = {"verdict": label["verdict"], "species": label.get("species"), "source": "visit"}
+        inherited = {"verdict": label["verdict"], "species": label.get("species"), "source": "visit",
+                     "via": label.get("via")}
     return [[{**explicit[(f["ts"], i)], "source": "box"} if (f["ts"], i) in explicit else inherited
              for i in range(len(f["boxes"]))] for f in frames]
 
