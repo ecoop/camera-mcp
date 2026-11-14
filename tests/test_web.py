@@ -230,6 +230,26 @@ def test_the_viewer_sends_how_each_tag_was_made(client):
     assert "function viaOf(t)" in page and "via:VIA" in page and "'accept'" in page
 
 
+def test_an_alerts_link_opens_the_frame_the_email_showed(tmp_path):
+    from camera_mcp.alerts import alert_frame
+    from camera_mcp.config import Camera
+    from camera_mcp.web import build_app
+    _one_visit(tmp_path)
+    c = starlette_testclient.TestClient(build_app({"fence": Camera("fence", "f.mp4")}, tmp_path, None))
+    ts = c.get("/api/visit/1/boxes").json()["frames"][0]["ts"]
+    kept = alert_frame(tmp_path, 1, ts)
+    kept.parent.mkdir(parents=True)
+    kept.write_bytes(b"\xff\xd8alert frame")
+    r = c.get("/media/visit/1/frame", params={"at": ts})
+    assert r.status_code == 200 and r.content == b"\xff\xd8alert frame"
+    # a nearby time finds the nearest frame; a bad one falls back to the still (none here: 404)
+    near = ts.replace(".000Z", ".400Z")
+    assert c.get("/media/visit/1/frame", params={"at": near}).content == b"\xff\xd8alert frame"
+    assert c.get("/media/visit/1/frame", params={"at": "../../etc"}).status_code == 404
+    page = c.get("/").text
+    assert "LINKED_AT=q.get('at')" in page and "function shownFrame()" in page
+
+
 def test_visit_label_blocked_when_readonly(tmp_path, monkeypatch):
     monkeypatch.setenv("CAMERA_MCP_WEB_READONLY", "1")
     from camera_mcp.config import Camera
@@ -726,7 +746,7 @@ def test_the_viewer_opens_on_the_full_frame_zooms_by_touch_and_fills_the_screen(
     show the thumbnail, scaled up and without boxes. A pinch zooms and pans, a double tap zooms in or
     back out; full screen keeps the tags, and a phone always gets it."""
     page = client.get("/").text
-    assert "img.src='/media/visit/'+id+'/frame';" in page and "curClip=!!boxData.has_clip;" in page
+    assert "img.src='/media/visit/'+id+'/frame'+(AT?" in page and "curClip=!!boxData.has_clip;" in page
     assert "$('#still').classList.add('small');" in page and ".pz img.small{" in page
     assert "if(pts.size===2){pinched=true;" in page and "zoomTo(2.5,...local(e.clientX,e.clientY))" in page
     assert "if(moved>5||pinched||mode!=='image'" in page  # a pinch isn't a tap on a box
@@ -1017,7 +1037,7 @@ def test_visits_open_by_number_from_the_ask_box_and_a_link(tmp_path):
     page = c.get("/").text
     assert '<div class="ask" id="askbox">' in page  # shown even where asking is off
     assert "const ids=visitIds(q); if(ids){await lookUpVisits(ids); return;}" in page  # before any model call
-    assert "new URLSearchParams(location.search).get('visit')" in page and "openLinkedVisit();" in page
+    assert "q=new URLSearchParams(location.search), id=q.get('visit')" in page and "openLinkedVisit();" in page
     assert "$('#tag').href='/?visit='+id" in c.get("/visit/3/image").text
 
 

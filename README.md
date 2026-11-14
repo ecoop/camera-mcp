@@ -4,7 +4,7 @@
 ![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13-blue)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
-_Last updated: 2026-11-12_
+_Last updated: 2026-11-14_
 
 An MCP server and an always-on monitor for home IP cameras, built to watch for wildlife on one
 machine without saturating it.
@@ -328,7 +328,9 @@ shut their email-to-text gateways (AT&T's `txt.att.net` no longer delivers). An 
 alert as its subject, shows a close-up of the box that set it off at full resolution, and attaches
 the whole frame with the box drawn on it. Set `WEB_URL` (the dashboard's address as your phone
 reaches it, e.g. `http://studio.local:8080`) in the credentials file and it also links to the visit
-(`/?visit=<number>`), which opens it in the dashboard ready to tag.
+(`/?visit=<number>&at=<frame time>`), which opens it in the dashboard ready to tag, on the frame the
+email showed (kept under `data/alerts/`) rather than the visit's best frame, which in a long visit can be
+minutes away and somewhere else.
 
 **Drawing zones.** The editor zooms (wheel, trackpad pinch, or **+ / − / fit**) and pans
 (**Space**-drag, middle-drag or **✋**), on a full-resolution snapshot. Motion ROI, motion mask,

@@ -9,12 +9,23 @@ import logging
 import time
 from collections.abc import Callable
 from datetime import datetime, timezone
+from pathlib import Path
+from urllib.parse import quote
+
+from camera_mcp.times import iso
 
 log = logging.getLogger(__name__)
 
 # Called only when an alert is actually sent (encoding a full frame isn't free): returns
 # (close-up JPEG, full-resolution JPEG), either of which may be None.
 Photo = Callable[[], tuple["bytes | None", "bytes | None"]]
+
+
+def alert_frame(data_dir: Path, visit: int, ts: str) -> Path:
+    """Where the monitor keeps the full frame an alert was sent for (no boxes drawn): the visit and
+    the frame's time (visit_frames.ts, which the alert's link carries), so the viewer can open the
+    moment the email showed rather than the visit's best frame, which may be minutes away."""
+    return Path(data_dir) / "alerts" / f"{visit}-{ts.replace(':', '')}.jpg"
 
 
 class Alerter:
@@ -77,7 +88,8 @@ class Alerter:
                     close, full = photo()
                 except Exception:  # an alert without a picture beats no alert
                     log.exception("alert photo failed for %s", body)
-            link = f"{self.web_url}/?visit={visit}" if self.web_url and visit is not None else None  # opens it to tag
+            link = (f"{self.web_url}/?visit={visit}&at={quote(iso(t))}"  # opens it to tag, at this frame
+                    if self.web_url and visit is not None else None)
             attachments = ((f"{camera}-{self._local(t):%Y-%m-%d-%H%M%S}.jpg", full),) if full else ()
             text = body + (f" (visit {visit})" if visit is not None else "")
             try:
