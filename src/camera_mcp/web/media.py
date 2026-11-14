@@ -14,6 +14,7 @@ from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Route
 
+from camera_mcp.alerts import alert_frame
 from camera_mcp.capture import CaptureError, grab_any
 from camera_mcp.config import find_camera
 from camera_mcp.history import HistoryError
@@ -84,7 +85,6 @@ def routes(ctx: Context) -> list[Route]:
         """The full-resolution still of the visit's best-box moment, or an HTTP error status.
         Prefers the still the monitor saved at detection time (exactly aligned to the box); falls back
         to extracting a frame from the clip (approximate) for older visits that have no saved still."""
-        from camera_mcp.capture import FFMPEG
         try:  # the aligned still the monitor saved at detection time
             return history.visit_still(vid, data_dir)
         except HistoryError:
@@ -114,17 +114,53 @@ def routes(ctx: Context) -> list[Route]:
                 off = max(0.0, datetime.fromisoformat(best[1]).timestamp() - start + pre)
             except (ValueError, TypeError):
                 off = 0.0
-        cache.parent.mkdir(parents=True, exist_ok=True)
+        return cache if await clip_frame(clip, off, cache) else 502
+
+    async def clip_frame(clip: Path, offset: float, out: Path) -> bool:
+        """Extract the clip's frame at `offset` seconds to `out` (JPEG); False if ffmpeg couldn't."""
+        from camera_mcp.capture import FFMPEG
+        out.parent.mkdir(parents=True, exist_ok=True)
         r = await to_thread(lambda: subprocess.run(
-            [FFMPEG, "-y", "-ss", f"{off:.2f}", "-i", str(clip), "-frames:v", "1", "-q:v", "2", str(cache)],
+            [FFMPEG, "-y", "-ss", f"{offset:.2f}", "-i", str(clip), "-frames:v", "1", "-q:v", "2", str(out)],
             capture_output=True, timeout=30))
-        if r.returncode != 0 or not cache.exists():
-            return 502
-        return cache
+        return r.returncode == 0 and out.exists()
+
+    async def moment_path(vid: int, at: str) -> Path | None:
+        """The full-resolution picture of the visit's frame at `at` (its visit_frames.ts; the nearest
+        frame if not exact): the frame an alert kept (alerts.alert_frame), else one taken from the clip
+        at that frame's offset (approximate), else None. Only the visit's own frame times are used."""
+        try:
+            d = mapped_boxes(vid)
+            when = datetime.fromisoformat(at.replace("Z", "+00:00")).timestamp()
+        except (HistoryError, ValueError):
+            return None
+        frames = [f for f in d["frames"] if f.get("ts")]
+        if not frames:
+            return None
+        f = min(frames, key=lambda f: abs(datetime.fromisoformat(f["ts"].replace("Z", "+00:00")).timestamp() - when))
+        kept = alert_frame(data_dir, vid, f["ts"])
+        if kept.exists():
+            return kept
+        cache = data_dir / "frames" / f"{vid}-{f['ts'].replace(':', '')}.jpg"
+        if cache.exists():
+            return cache
+        try:
+            clip = history.visit_clip(vid, data_dir)
+        except HistoryError:
+            return None
+        return cache if await clip_frame(clip, f["offset"], cache) else None
 
     async def media_frame(request: Request):
-        """The full-resolution still, for zooming/panning in the viewer (see frame_path)."""
-        path = await frame_path(int(request.path_params["vid"]))
+        """The full-resolution still, for zooming/panning in the viewer (see frame_path). With
+        ?at=<a frame's ts>, that moment instead (moment_path), as an alert's link asks for; the still
+        if that moment can't be had."""
+        vid = int(request.path_params["vid"])
+        at = request.query_params.get("at")
+        if at:
+            path = await moment_path(vid, at)
+            if path is not None:
+                return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "max-age=86400"})
+        path = await frame_path(vid)
         if isinstance(path, int):
             return Response(status_code=path)
         return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "max-age=86400"})

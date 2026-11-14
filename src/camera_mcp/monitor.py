@@ -41,7 +41,7 @@ import cv2
 import numpy as np
 
 from camera_mcp import ringbuffer
-from camera_mcp.alerts import Alerter
+from camera_mcp.alerts import Alerter, alert_frame
 from camera_mcp.capture import FFMPEG
 from camera_mcp.config import (Camera, ConfigError, default_config_path, default_data_dir, find_camera, load_cameras,
                                load_site)
@@ -52,6 +52,7 @@ from camera_mcp.probe import ProbeError, probe_stream
 from camera_mcp.recorder import _tail, stop_process, stop_stale_recorder, watcher_args
 from camera_mcp.scenery import Scenery
 from camera_mcp.store import Store
+from camera_mcp.times import iso
 from camera_mcp.view import ViewCheck, is_colour, is_infrared
 from camera_mcp.visits import Visit, VisitTracker
 from camera_mcp.zones import alert_hits, frame_box, zone_drop
@@ -765,27 +766,42 @@ class Analyzer:
                 elif visit.last_seen == t:
                     worker.store.update_open_visit(visit)
             if self.alerter is not None:  # after the visits have rows, so an alert can link to its visit
-                self._alert(worker.camera, t, full, detections, still_open)
+                self._alert(worker.camera, t, full, detections, still_open, worker.data_dir)
             for visit in closed:
                 worker._visit_closed(visit)
         return len(proc.stdout) // size  # frames (inferences) run on this segment
 
-    def _alert(self, camera: Camera, t: float, full: np.ndarray, detections, still_open: dict) -> None:
+    def _alert(self, camera: Camera, t: float, full: np.ndarray, detections, still_open: dict,
+               data_dir: Path | None = None) -> None:
         """Real-time alerts for this frame: anything in an alert area, whatever it's labelled, and
         any open visit of a high-priority species. Each carries this frame (a close-up of the box
-        that set it off) and the visit it belongs to; the pictures are made only if it's sent."""
+        that set it off) and the visit it belongs to; the pictures are made only if it's sent. A sent
+        alert's frame is kept, unboxed (alerts.alert_frame), so its link opens this moment."""
         def ids(key):
             visit = still_open.get(key)
             return visit.db_id if visit is not None else None
 
+        def photo(box, visit):
+            if data_dir is not None and visit is not None:
+                try:
+                    jpeg = encode_still(full)
+                    if jpeg:
+                        path = alert_frame(data_dir, visit, iso(t))
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        path.write_bytes(jpeg)
+                except OSError:
+                    log.exception("couldn't keep the alert frame for visit %s", visit)
+            return alert_photo(full, box)
+
         for area, d in alert_hits(camera, detections):
-            box = frame_box(camera, d.box)
+            box, vid = frame_box(camera, d.box), ids(d.key)
             self.alerter.maybe_area_alert(camera.name, area.name, d.label.name, t,
-                                          photo=lambda b=box: alert_photo(full, b), visit=ids(d.key))
+                                          photo=lambda b=box, v=vid: photo(b, v), visit=vid)
         for key in sorted(still_open):  # the species alert: its biggest box in this frame, if any
             mine = [d for d in detections if d.key == key]
             box = frame_box(camera, max(mine, key=lambda d: d.box.w * d.box.h).box) if mine else None
-            self.alerter.maybe_alert(camera.name, key, t, photo=lambda b=box: alert_photo(full, b), visit=ids(key))
+            vid = ids(key)
+            self.alerter.maybe_alert(camera.name, key, t, photo=lambda b=box, v=vid: photo(b, v), visit=vid)
 
 
 def backfill_night(store: Store, data_dir: Path, stop: threading.Event | None = None) -> int:

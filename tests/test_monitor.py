@@ -511,7 +511,7 @@ def test_alert_email_carries_a_close_up_the_full_frame_and_a_link_to_the_visit(m
     assert made == [1]  # pictures are made only for an alert that's sent, not one the cooldown holds back
     subj, body, image, link, attachments = sent[0]
     assert subj == "cat on fence: bird at west_alley, 2:13pm" and body == subj + " (visit 15779)"
-    assert image == b"close" and link == "http://studio:8080/?visit=15779"
+    assert image == b"close" and link == "http://studio:8080/?visit=15779&at=2023-11-14T22%3A13%3A20.000Z"  # this frame
     assert attachments == (("west_alley-2023-11-14-141320.jpg", b"full"),)
 
     def broken():
@@ -561,6 +561,30 @@ def test_alerts_link_to_the_visit_the_detection_belongs_to():
                     still_open)
     assert calls == [("area", "yard", "domestic cat", 42, True),
                      ("species", "cat", 42, True), ("species", "coyote", 43, False)]  # coyote: no box this frame
+
+
+def test_a_sent_alert_keeps_its_frame_for_the_link(tmp_path):
+    # The link opens the frame the email showed; the visit's best frame may be minutes away.
+    from types import SimpleNamespace
+    import numpy as np
+    from camera_mcp.alerts import alert_frame
+    from camera_mcp.config import Camera
+    from camera_mcp.monitor import Analyzer
+    from camera_mcp.zones import AlertArea
+
+    class Fake:
+        def maybe_area_alert(self, camera, area, label, t, photo=None, visit=None):
+            photo()
+
+        def maybe_alert(self, camera, species, t, photo=None, visit=None):
+            pass
+    analyzer = Analyzer.__new__(Analyzer)
+    analyzer.alerter = Fake()
+    cam = Camera("west_alley", "rtsp://x", alert=(AlertArea((0.0, 0.0, 1.0, 1.0), "yard", 0.0),))
+    analyzer._alert(cam, 1_700_000_000.0, np.zeros((36, 64, 3), np.uint8), [_det(0.4, 0.4, 0.1, 0.1, "animal", "cat")],
+                    {"cat": SimpleNamespace(db_id=42)}, tmp_path)
+    kept = alert_frame(tmp_path, 42, "2023-11-14T22:13:20.000Z")
+    assert kept.exists() and kept.read_bytes()[:2] == b"\xff\xd8"
 
 
 def _det(x, y, w, h, name="animal", key=None):
