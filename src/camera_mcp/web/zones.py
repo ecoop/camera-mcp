@@ -64,7 +64,7 @@ def zone_state(cam) -> dict:
 
 
 def routes(ctx: Context) -> list[Route]:
-    async def api_zones(request: Request) -> JSONResponse:
+    def api_zones(request: Request) -> JSONResponse:
         return JSONResponse({"editable": ctx.editable,
                              "cameras": [zone_state(c) for c in ctx.cameras.values() if c.enabled]})
 

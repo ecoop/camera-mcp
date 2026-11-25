@@ -17,7 +17,7 @@ def routes(ctx: Context) -> list[Route]:
     from camera_mcp.ask import AskError, Budget, daily_cap, make_asker
     asker = make_asker(ctx.history, Budget(ctx.data_dir / "ask_usage.json", daily_cap()), ctx.config, ctx.data_dir)
 
-    async def api_ask_status(request: Request) -> JSONResponse:
+    def api_ask_status(request: Request) -> JSONResponse:
         """Whether asking is on here, and today's spend against the cap (the dashboard shows the box)."""
         return JSONResponse({"enabled": asker.enabled, "spent_today": round(asker.budget.spent(), 4),
                              "cap": asker.budget.cap})

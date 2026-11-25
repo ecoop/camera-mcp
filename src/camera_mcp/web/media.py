@@ -61,20 +61,20 @@ def routes(ctx: Context) -> list[Route]:
                 "label": d["label"], "taxonomy": d["taxonomy"], "best": d["best"], "frames": frames,
                 "visit_tag": d["visit_tag"]}
 
-    async def api_visit_boxes(request: Request):
+    def api_visit_boxes(request: Request):
         try:
             return JSONResponse(mapped_boxes(int(request.path_params["vid"])))
         except HistoryError as e:
             return JSONResponse({"error": str(e)}, status_code=404)
 
-    async def media_thumb(request: Request):
+    def media_thumb(request: Request):
         try:
             data, _ = history.visit_thumbnail(int(request.path_params["vid"]), data_dir)
         except HistoryError:
             return Response(status_code=404)
         return Response(data, media_type="image/jpeg", headers={"Cache-Control": "max-age=86400"})
 
-    async def media_clip(request: Request):
+    def media_clip(request: Request):
         try:
             path = history.visit_clip(int(request.path_params["vid"]), data_dir)
         except HistoryError:

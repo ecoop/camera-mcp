@@ -40,7 +40,7 @@ def routes(ctx: Context) -> list[Route]:
         got = s["visits"].get(str(vid))
         return {"model": s.get("model"), "group": got["group"], "p": got["p"], "real": got.get("real")} if got else None
 
-    async def api_visit_label_get(request: Request):
+    def api_visit_label_get(request: Request):
         vid = int(request.path_params["vid"])
         r = ctx.query(history.visit_label, vid)
         if isinstance(r, Response):
@@ -122,7 +122,7 @@ def routes(ctx: Context) -> list[Route]:
         return JSONResponse({"ok": True, "box": {"ts": ts, "i": box, "verdict": verdict, "species": species},
                              "complete": derived is not None, "label": label})
 
-    async def api_needs_box_tags(request: Request):
+    def api_needs_box_tags(request: Request):
         """Visits tagged real whose still has a box with no tag yet (history.needs_box_tags), newest
         first, as /api/visits returns them, so the viewer can open them in turn."""
         ids = ctx.query(history.needs_box_tags, request.query_params.get("camera") or None)
@@ -130,7 +130,7 @@ def routes(ctx: Context) -> list[Route]:
             return ids
         return JSONResponse({"visits": history.visits_by_id(ids), "count": len(ids)})
 
-    async def api_visit_suggestion(request: Request) -> JSONResponse:
+    def api_visit_suggestion(request: Request) -> JSONResponse:
         """The tag model's suggestion for a visit, and the tag accepting it records; null if none."""
         from camera_mcp.tagmodel import accept_label
         s = suggestions()
@@ -138,7 +138,7 @@ def routes(ctx: Context) -> list[Route]:
         accept = dict(zip(("verdict", "species"), accept_label(got))) if got else None
         return JSONResponse({"suggestion": got, "accept": accept, "model": s.get("model")})
 
-    async def api_suggested(request: Request):
+    def api_suggested(request: Request):
         """The untagged visits with a suggestion, most useful to tag first (see tagmodel.suggest),
         as /api/visits returns them, each with its `suggestion`: the "most useful next" queue."""
         s = suggestions()
@@ -175,7 +175,7 @@ def routes(ctx: Context) -> list[Route]:
             store.close()
         return JSONResponse({"ok": True, "favorite": {"kind": kind, "clip_at": clip_at if kind == "clip" else None} if on else None})
 
-    async def api_tag_species(request: Request):
+    def api_tag_species(request: Request):
         """Suggestions for the tag species picker: names used in tags so far (most used first), then
         the groups seen on this site (rat, raccoon, songbirds, ...). Any other name can be typed."""
         used = ctx.query(history.tagged_species)

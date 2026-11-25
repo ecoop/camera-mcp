@@ -639,7 +639,8 @@ function openVisit(t){const id=t.dataset.id; curVisit=id; VIA=viaOf(t); AT=VIA==
   boxData=null; selBox=null; refining=false; mode='image'; boxesOn=true; stillFB=false; resetZoom(); $('#boxtag').hidden=true;
   const img=$('#still'), vid=$('#clip video');
   img.style.display=''; vid.pause(); vid.removeAttribute('src'); vid.style.display='none';
-  img.classList.remove('small'); img.src='/media/visit/'+id+'/frame'+(AT?'?at='+encodeURIComponent(AT):'');
+  img.classList.remove('small'); img.style.visibility='hidden'; $('#boxov').style.display='none'; img.src='/media/visit/'+id+'/frame'+(AT?'?at='+encodeURIComponent(AT):'');
+  if(img.complete&&img.naturalWidth)img.style.visibility='';  // already loaded (cached): no load event to wait for
   $('#stage').classList.add('pan');
   $('#playbtn').style.display=curClip?'':'none'; $('#playbtn').innerHTML='&#9654; clip';
   $('#boxbtn').style.display=''; $('#boxbtn').classList.toggle('on',boxesOn);
@@ -654,7 +655,7 @@ function openVisit(t){const id=t.dataset.id; curVisit=id; VIA=viaOf(t); AT=VIA==
 async function loadBoxData(){if(boxData)return; try{boxData=await (await fetch('/api/visit/'+curVisit+'/boxes')).json();}catch(e){boxData={frames:[]};}}
 function drawBoxes(){const svg=$('#boxov'), m=activeMedia();
   svg.style.width=(m.clientWidth||m.offsetWidth)+'px'; svg.style.height=(m.clientHeight||m.offsetHeight)+'px';
-  if(!boxesOn||!boxData||(stillFB&&mode==='image')){svg.style.display='none';renderBoxTag();return;}  // the thumbnail is a crop
+  if(!boxesOn||!boxData||(mode==='image'&&(stillFB||!stillReady()))){svg.style.display='none';renderBoxTag();return;}  // the thumbnail is a crop
   if(!boxData.frames||!boxData.frames.length){svg.innerHTML='<text x="2" y="7">no boxes stored</text>';svg.style.display='block';return;}
   const f=shownFrame(); let s='';
   (f.boxes||[]).forEach(b=>{const x=b.x*100,y=b.y*100,w=b.w*100,h=b.h*100, t=b.tag;
@@ -753,8 +754,11 @@ function playClip(){if(!curClip)return; const img=$('#still'), vid=$('#clip vide
     vid.pause(); vid.removeAttribute('src'); vid.style.display='none'; img.style.display='';
     $('#playbtn').innerHTML='&#9654; clip'; drawBoxes();}}
 $('#playbtn').onclick=playClip; $('#boxbtn').onclick=toggleBoxes; $('#nextbtn').onclick=advance; $('#hidebtn').onclick=toggleHidden;
-$('#still').addEventListener('load',()=>{if(mode==='image')drawBoxes();});
-$('#still').addEventListener('error',()=>{if(stillFB)return; stillFB=true; $('#still').classList.add('small');
+// The still is hidden from a new src until it loads, and boxes wait for it: they never sit on the last
+// visit's picture, and they appear with the image, not before.
+function stillReady(){const im=$('#still'); return im.style.visibility!=='hidden'&&im.complete&&im.naturalWidth>0;}
+$('#still').addEventListener('load',()=>{$('#still').style.visibility=''; if(mode==='image')drawBoxes();});
+$('#still').addEventListener('error',()=>{$('#still').style.visibility=''; if(stillFB)return; stillFB=true; $('#still').classList.add('small');
   $('#boxbtn').style.display='none'; $('#still').src='/media/visit/'+curVisit+'/thumb';});
 $('#clip video').addEventListener('loadeddata',()=>{if(mode!=='video')return;
   const vid=$('#clip video'), f=shownFrame();
