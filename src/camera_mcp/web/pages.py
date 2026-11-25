@@ -26,13 +26,13 @@ IMAGE_PAGE = _page("image.html")
 
 
 def routes(ctx: Context) -> list[Route]:
-    async def index(request: Request) -> HTMLResponse:
+    def index(request: Request) -> HTMLResponse:
         return HTMLResponse(PAGE)
 
-    async def zones_page(request: Request) -> HTMLResponse:
+    def zones_page(request: Request) -> HTMLResponse:
         return HTMLResponse(ZONES_PAGE)
 
-    async def image_page(request: Request) -> HTMLResponse:
+    def image_page(request: Request) -> HTMLResponse:
         return HTMLResponse(IMAGE_PAGE)  # the page reads the visit id from its own path
 
     return [

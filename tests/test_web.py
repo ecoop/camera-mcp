@@ -1080,3 +1080,21 @@ def test_next_from_the_map_walks_the_maps_dots(client):
     assert "else if(t&&(VIEW!=='map'||mapQ()))setTimeout(advance,350);" in page  # on the map, only through the map
     assert "Math.hypot((v.x-c.x)*ar,v.y-c.y)" in page  # nearest, in picture proportions
     assert "fsum(); refreshMapQ();" in page
+
+
+def test_no_web_handler_blocks_the_event_loop():
+    """A handler that awaits nothing must be a plain def: Starlette runs those on its thread pool. An
+    `async def` doing only blocking work (a SQLite query) holds every other request behind it, so
+    a slow queue count delayed a visit's boxes until well after its picture."""
+    import ast
+    from pathlib import Path
+
+    import camera_mcp.web as web
+
+    blocking = []
+    for p in sorted(Path(web.__file__).parent.glob("*.py")):
+        for f in ast.walk(ast.parse(p.read_text())):
+            if isinstance(f, ast.AsyncFunctionDef) and not any(
+                    isinstance(x, (ast.Await, ast.AsyncFor, ast.AsyncWith)) for x in ast.walk(f)):
+                blocking.append(f"{p.name}:{f.lineno} {f.name}")
+    assert not blocking, blocking
