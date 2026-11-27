@@ -245,12 +245,14 @@ false, amber wrong species, red none yet; dashed when the tag comes from the vis
 ✓ / ✗ / ≠ mark. The buttons are **✗ false**, **✓ real** (the log's name is right) and
 **✎ correct…** (it was something else, or something more exact), with the log's name beside them,
 which is what a tag is judged against. Correct… asks **what was it?**, suggesting names you've used
-and groups seen here; Enter saves and moves on, Esc cancels. The app works out which kind of
+and groups seen here; picking one saves it and moves on (so does Enter, or leaving the field, for a
+typed name), Esc cancels. The app works out which kind of
 correction that is from the name: under the log's name it's real and named, "more precise"
 (animal → cat, bird → doves/pigeons, songbirds → house finch, rodent → rat); anywhere else it's wrong
 species, named (person → cat, songbirds → doves/pigeons). Our groups win over the tree: jays and
 crows are passerines, but songbirds → jays is wrong species. Keys while a visit is open: **f** false,
-**r** real, **c** correct…, **a** accept the suggestion, **n** or **→** next, **1–9** pick a box (in
+**r** real, **c** correct…, **a** accept the suggestion, **n** or **→** next, **b** or **←** back
+(**‹ back** reopens the visit you just left, to fix a slip; the queue next walks is unchanged), **1–9** pick a box (in
 the tag row's order), **0** the whole visit; Tab reaches the buttons and Enter or Space presses one.
 The **boxes to tag** queue
 walks the real visits whose still still has an untagged box (narrowed to the camera filter): the
