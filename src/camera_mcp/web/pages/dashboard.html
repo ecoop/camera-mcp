@@ -650,7 +650,7 @@ function openVisit(t){const id=t.dataset.id; curVisit=id; VIA=viaOf(t); AT=VIA==
   const labelled=loadLabel(id); loadPickerSpecies(); refreshBoxQueue(); refreshUseful(); if(!$('#clip').open)$('#clip').showModal();
   Promise.all([labelled,loadBoxData()]).then(()=>{if(curVisit!==id)return;
     curClip=!!boxData.has_clip; t.dataset.clip=curClip?'1':'0'; $('#playbtn').style.display=curClip?'':'none';
-    if(!curLabel&&stillBoxes().boxes.length>1)selBox=untaggedBox(); drawBoxes();});
+    selBox=untaggedBox()||firstBox(); drawBoxes();});  // a box is always picked: the next to tag, else the surest
   if(curClip&&t.dataset.fav==='clip'){seekTo=t.dataset.favat!==''?+t.dataset.favat:null; playClip();}}  // a favourite clip opens at its moment
 async function loadBoxData(){if(boxData)return; try{boxData=await (await fetch('/api/visit/'+curVisit+'/boxes')).json();}catch(e){boxData={frames:[]};}}
 function drawBoxes(){const svg=$('#boxov'), m=activeMedia();
@@ -691,6 +691,8 @@ function markTarget(){const {boxes}=stillBoxes(), b=selBox&&boxes.find(x=>x.i===
   if(b){const t=b.tag&&b.tag.source==='box'?b.tag:null; markLabel(t&&t.verdict,t?t.species:'');}
   else markLabel(curLabel&&curLabel.verdict,curLabel?curLabel.species:'');}
 // The first box on the still (most confident first) with no tag of its own.
+// The surest box on the still (all tagged already: open on it to review).
+function firstBox(){const {ts,boxes}=stillBoxes(); const b=[...boxes].sort((x,y)=>(y.conf||0)-(x.conf||0))[0]; return b?{ts,i:b.i}:null;}
 function untaggedBox(){const {ts,boxes}=stillBoxes();
   const b=[...boxes].sort((x,y)=>(y.conf||0)-(x.conf||0)).find(x=>!(x.tag&&x.tag.source==='box')); return b?{ts,i:b.i}:null;}
 // Tag the box picked. Once every box on the still has its own tag they tag the visit (the server
