@@ -1077,8 +1077,8 @@ def test_next_from_the_map_walks_the_maps_dots(client):
     page = client.get("/").text
     assert '<option value="map" id="qopt-map" disabled' in page and '<option value="mapnear" id="qopt-mapnear" disabled' in page
     assert "function advance(){if(mapQ())nextOnMap();" in page
-    assert "if(t.closest('#mapgrid')){MAPSEEN.add(String(id)); if(!mapQ())qsel.value=MAPMODE;}" in page
-    assert "else if(mapQ())qsel.value='grid';" in page
+    assert "if(t.closest('#mapgrid')){MAPSEEN.add(String(id)); if(!mapQ()&&!goingBack)qsel.value=MAPMODE;}" in page
+    assert "else if(mapQ()&&!goingBack)qsel.value='grid';" in page
     assert "el.onclick=()=>{hideTip(); openMapDot(v.id);};" in page
     assert "if(!document.querySelector('.mv[value=\"'+(v||'none')+'\"]:checked'))md.remove();" in page
     assert "if(t&&(VIEW!=='map'||mapQ()))setTimeout(advance,350);" in page  # on the map, only through the map
@@ -1144,3 +1144,17 @@ def test_correcting_a_box_is_judged_against_the_visits_name(tmp_path):
     f = c.get("/api/visit/1/boxes").json()["frames"][0]
     r = c.post("/api/visit/1/box-label", json={"ts": f["ts"], "box": 0, "name": "cat"})
     assert r.status_code == 200 and r.json()["box"]["verdict"] == "wrong_species" and r.json()["box"]["species"] == "cat"
+
+
+def test_a_picked_name_saves_and_back_returns_to_the_visit_left(client):
+    """correct…: a name picked from the list saves at once (as leaving the field or Enter does; typed
+    letters don't), once. ‹ back (b or ←) reopens the visit just left, without changing the queue."""
+    page = client.get("/").text
+    assert "if((!e.inputType||e.inputType==='insertReplacementText')&&v&&onList(v))nameIt(v);" in page
+    assert "$('#vsp').addEventListener('change',()=>{if(cancelName){cancelName=false; return;} nameIt(" in page
+    assert "||sp===savedName)return; naming=false; savedName=sp;" in page
+    i, j = page.index('id="backbtn"'), page.index('id="nextbtn"')
+    assert i < j and "$('#backbtn').onclick=goBack;" in page
+    assert "if(!goingBack&&LEFT&&String(LEFT.id)!==String(id)){BACK.push(LEFT);" in page
+    assert "if(!mapQ()&&!goingBack)qsel.value=MAPMODE;" in page and "else if(mapQ()&&!goingBack)qsel.value='grid';" in page
+    assert "else if(k==='b'||e.key==='ArrowLeft'){e.preventDefault(); goBack();}" in page
