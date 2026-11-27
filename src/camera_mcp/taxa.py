@@ -37,6 +37,10 @@ BIRD_GROUPS = ("crows", "jays", "songbirds", "doves/pigeons", "hawks", "owls")
 UNIONS = {"night-critters": ("raccoon", "skunk", "opossum")}
 BIRD_GROUP_MIN = 0.3  # summed top-5 score a bird group needs before an unsorted "bird" is put in it
 
+# Groups that only hold what wasn't sorted finer: a group inside one is more precise, not another animal
+# (rodent -> rat). Other groups stand apart even when the tree nests them (songbirds vs jays).
+CATCH_ALL = frozenset({"rodent"})
+
 CLASS_NAMES = {"aves": "bird", "mammalia": "mammal", "reptilia": "reptile", "amphibia": "amphibian"}
 
 
@@ -149,3 +153,42 @@ def reference_markdown() -> str:
               "found but couldn't name are labelled `animal`; plain `bird` visits couldn't be sorted into a",
               "group, so mention them as possibly songbirds when asked about songbirds.", ""]
     return "\n".join(lines)
+
+
+def _branches(group: str, taxonomy: str) -> tuple[str, ...]:
+    """The taxonomy prefixes a logged name covers: a group's own prefixes, a class ("bird") its
+    class, "animal" everything (""), else the label's own taxonomy (trailing empty fields dropped)."""
+    for g, prefixes in GROUPS:
+        if g == group:
+            return prefixes
+    for cls, name in CLASS_NAMES.items():
+        if name == group:
+            return (cls,)
+    if group == ANIMAL.name or not taxonomy.strip(";"):
+        return ("",)
+    return (taxonomy.rstrip(";"),)
+
+
+def judge_name(logged: str, logged_taxonomy: str, name: str, name_group: str, name_taxonomy: str) -> tuple[str, str]:
+    """The tag correcting a logged name with what it really was: (verdict, species).
+
+    Judged against the log's *group*, the name the viewer shows: the same name -> real; something
+    under it -> real, named (more precise: animal -> cat, rodent -> rat, songbirds -> house finch);
+    anything else -> wrong species, named (person -> cat). Our groups win over the tree: a jay is a
+    passerine, but jays are their own group, so songbirds -> jays is wrong species (CATCH_ALL groups
+    excepted: rodent -> rat is more precise). A name the log
+    has never used has no taxonomy to place it by: real, named, under a vague log name (as
+    tagmodel.accept_label), else wrong species."""
+    name = name.strip()
+    if name.lower() == logged.lower() or (name_group == logged and name_group in dict(GROUPS)):
+        return "real", "" if name.lower() == logged.lower() else name
+    branches = _branches(logged, logged_taxonomy)
+    tax = name_taxonomy.rstrip(";")
+    if not tax:
+        return ("real" if branches == ("",) or logged in CLASS_NAMES.values() else "wrong_species"), name
+    if any(tax.startswith(b) for b in branches):
+        own = group_of(name_taxonomy)
+        if own and own != logged and logged in dict(GROUPS) and logged not in CATCH_ALL:
+            return "wrong_species", name  # under the branch, but its own group (jays in songbirds)
+        return "real", name
+    return "wrong_species", name
