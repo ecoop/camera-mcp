@@ -863,7 +863,7 @@ def test_the_viewer_tags_single_boxes_and_names_species(client):
     assert ".boxov rect.inh{stroke-dasharray:6 4}" in page and "t.source==='visit'?' inh'" in page
     assert "if(waitsForName(v,keep))askName();" in page and "(VIEW!=='map'||mapQ()))setTimeout(advance,350);" in page
     assert "if(d.complete){" in page and "else if(named&&v)selBox=untaggedBox()||selBox;" in page  # every box tagged: move on
-    assert "if(!curLabel&&stillBoxes().boxes.length>1)selBox=untaggedBox();" in page  # several boxes: start on the first
+    assert "selBox=untaggedBox()||firstBox();" in page  # a visit opens with a box picked: the next to tag, else the surest
     assert '<datalist id="spplist">' in page and client.get("/api/labels/species").json() == {"species": []}
 
 
