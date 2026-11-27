@@ -175,7 +175,7 @@ def test_visit_label_stores_and_reads_back(tmp_path):
     from camera_mcp.web import build_app
     _one_visit(tmp_path)
     c = starlette_testclient.TestClient(build_app({"fence": Camera("fence", "f.mp4")}, tmp_path, None))
-    assert c.get("/api/visit/1/label").json() == {"label": None, "editable": True}
+    assert c.get("/api/visit/1/label").json() == {"label": None, "editable": True, "logged": "animal"}
     r = c.post("/api/visit/1/label", json={"verdict": "false", "note": "swaying branch"})
     assert r.status_code == 200 and r.json()["ok"] is True
     got = c.get("/api/visit/1/label").json()
@@ -861,8 +861,8 @@ def test_the_viewer_tags_single_boxes_and_names_species(client):
     assert "if(moved>5||pinched||mode!=='image'||!boxesOn||!boxData)return;" in page
     assert ".sort((a,b)=>a.w*a.h-b.w*b.h)[0]" in page
     assert ".boxov rect.inh{stroke-dasharray:6 4}" in page and "t.source==='visit'?' inh'" in page
-    assert "if(waitsForName(v,keep))askName();" in page and "(VIEW!=='map'||mapQ()))setTimeout(advance,350);" in page
-    assert "if(d.complete){" in page and "else if(named&&v)selBox=untaggedBox()||selBox;" in page  # every box tagged: move on
+    assert "if(t&&(VIEW!=='map'||mapQ()))setTimeout(advance,350);" in page
+    assert "if(d.complete){" in page and "else if(set)selBox=untaggedBox()||selBox;" in page  # every box tagged: move on
     assert "selBox=untaggedBox()||firstBox();" in page  # a visit opens with a box picked: the next to tag, else the surest
     assert '<datalist id="spplist">' in page and client.get("/api/labels/species").json() == {"species": []}
 
@@ -982,10 +982,11 @@ def test_zone_editor_resizes_rectangles_and_moves_any_zone(client):
 
 def test_every_visit_tag_moves_on_to_the_next_visit(client):
     """Real and false move on at once, even when the visit was already tagged (a real box tag makes
-    it real first); wrong sp., and real on a visit the log left vague, move on once named."""
+    it real first); correct… moves on once named (Enter)."""
     html = client.get("/").text
-    assert "if(waitsForName(v,keep))askName();" in html and "!had&&" not in html
-    assert "const go=ok&&sp&&(v==='wrong_species'||(v==='real'&&refining));" in html
+    assert "function tagged(){" in html and "if(t&&(VIEW!=='map'||mapQ()))setTimeout(advance,350);}" in html
+    assert "try{if(await postLabel(v,v==='real'?'':$('#vsp').value.trim(),via))tagged();}" in html
+    assert "try{if(await postLabel(null,'',VIA,sp)){loadPickerSpecies(); tagged();}}" in html and "!had&&" not in html
 
 
 def test_the_viewer_shows_the_tag_models_suggestion_and_its_queue(tmp_path):
@@ -1053,17 +1054,20 @@ def test_on_a_phone_the_feeds_top_stays_short(client):
     assert "$('#askbox').style.display=VIEW==='feeds'?'':'none';" in page
 
 
-def test_more_precise_is_real_and_waits_for_a_name(client):
-    """"more precise…" says the log was right but could say more (animal -> doves/pigeons): it tags
-    real (the visit or a box) and waits for a name, as wrong sp. does; naming it (Enter) moves on,
-    next › skips. Plain real still moves on at once."""
+def test_the_tag_buttons_are_false_real_correct(client):
+    """Three tags, in this order: false, real (the log's name is right), and correct… (say what it
+    really was; the server works out more precise or wrong species). The log's name, what a tag is
+    judged against, sits beside them; keys f r c a n/→ 1–9 0 work while a visit is open."""
     page = client.get("/").text
-    assert 'data-v="real" data-refine="1"' in page and "more precise&hellip;</button>" in page
-    assert "const waitsForName=(v,sp)=>!sp&&(v==='wrong_species'||(v==='real'&&refining));" in page
-    assert "b.onclick=()=>(refining=!!b.dataset.refine,selBox)?" in page
-    assert "named=!waitsForName(v,species); if(named)refining=false;" in page and "if(v&&!named)askName();" in page
-    assert "const go=ok&&sp&&(v==='wrong_species'||(v==='real'&&refining));" in page
-    assert "selBox=null; refining=false;" in page  # a new visit starts plain
+    i, j, k = (page.index(f'<button class="lblbtn" data-v="{v}"') for v in ("false", "real", "name"))
+    assert i < j < k and "correct&hellip;</button>" in page
+    assert "more precise&hellip;</button>" not in page and 'data-v="wrong_species"' not in page
+    assert 'id="loggedname"' in page and "$('#loggedname').textContent=d.logged||'';" in page
+    assert "body:JSON.stringify(name?{name,via}:{verdict:v,species:v==='false'?'':species||'',via})" in page
+    assert "if(selBox){await setBoxTag(null,'',sp); return;}" in page  # a box is corrected the same way
+    assert "const KEYS={f:'false',r:'real',c:'name'};" in page and "document.addEventListener('keydown',e=>{if(!$('#clip').open" in page
+    assert ".lblbtn:focus-visible" in page
+    assert "selBox=null; naming=false;" in page  # a new visit starts plain
 
 
 def test_next_from_the_map_walks_the_maps_dots(client):
@@ -1077,7 +1081,7 @@ def test_next_from_the_map_walks_the_maps_dots(client):
     assert "else if(mapQ())qsel.value='grid';" in page
     assert "el.onclick=()=>{hideTip(); openMapDot(v.id);};" in page
     assert "if(!document.querySelector('.mv[value=\"'+(v||'none')+'\"]:checked'))md.remove();" in page
-    assert "else if(t&&(VIEW!=='map'||mapQ()))setTimeout(advance,350);" in page  # on the map, only through the map
+    assert "if(t&&(VIEW!=='map'||mapQ()))setTimeout(advance,350);" in page  # on the map, only through the map
     assert "Math.hypot((v.x-c.x)*ar,v.y-c.y)" in page  # nearest, in picture proportions
     assert "fsum(); refreshMapQ();" in page
 
@@ -1098,3 +1102,45 @@ def test_no_web_handler_blocks_the_event_loop():
                     isinstance(x, (ast.Await, ast.AsyncFor, ast.AsyncWith)) for x in ast.walk(f)):
                 blocking.append(f"{p.name}:{f.lineno} {f.name}")
     assert not blocking, blocking
+
+
+def _visit_as(tmp_path, name, taxonomy):
+    """A stored visit the log names `name` (a group or a label with its taxonomy)."""
+    import time
+    from camera_mcp.store import Store
+    from camera_mcp.visits import Visit, Detection, Box
+    from camera_mcp.taxa import Label
+    store = Store(tmp_path / "monitor.db")
+    v = Visit("fence", name, start=time.time(), last_seen=time.time() + 5, frames=1)
+    v.votes[(name, taxonomy)] = 1.0
+    v.log = [(v.start + 1, [Detection(Box(0.5, 0.5, 0.2, 0.2, 0.9), Label(name, taxonomy, 0.5), name)])]
+    store.add_visit(v, model="m", thumbnail=None, clip=None)
+    store.close()
+
+
+def test_correcting_a_visit_names_it_and_the_verdict_follows(tmp_path):
+    """POST {"name"} (the viewer's correct…) records what it really was; whether that's real, named
+    (more precise) or wrong species follows from the visit's logged name (taxa.judge_name)."""
+    from camera_mcp.config import Camera
+    from camera_mcp.web import build_app
+    _one_visit(tmp_path)  # 1: "animal"
+    _visit_as(tmp_path, "person", "mammalia;primates;hominidae;homo;sapiens")  # 2
+    c = starlette_testclient.TestClient(build_app({"fence": Camera("fence", "f.mp4")}, tmp_path, None))
+    r = c.post("/api/visit/1/label", json={"name": "cat", "via": "grid"})
+    assert r.status_code == 200 and r.json()["label"]["verdict"] == "real" and r.json()["label"]["species"] == "cat"
+    r = c.post("/api/visit/2/label", json={"name": "cat"})
+    assert r.json()["label"]["verdict"] == "wrong_species" and r.json()["label"]["species"] == "cat"
+    assert c.get("/api/visit/2/label").json()["logged"] == "person"
+    r = c.post("/api/visit/2/label", json={"name": "person"})  # its own name: just real
+    assert r.json()["label"]["verdict"] == "real" and r.json()["label"]["species"] is None
+    assert c.post("/api/visit/999/label", json={"name": "cat"}).status_code == 404
+
+
+def test_correcting_a_box_is_judged_against_the_visits_name(tmp_path):
+    from camera_mcp.config import Camera
+    from camera_mcp.web import build_app
+    _visit_as(tmp_path, "person", "mammalia;primates;hominidae;homo;sapiens")
+    c = starlette_testclient.TestClient(build_app({"fence": Camera("fence", "f.mp4")}, tmp_path, None))
+    f = c.get("/api/visit/1/boxes").json()["frames"][0]
+    r = c.post("/api/visit/1/box-label", json={"ts": f["ts"], "box": 0, "name": "cat"})
+    assert r.status_code == 200 and r.json()["box"]["verdict"] == "wrong_species" and r.json()["box"]["species"] == "cat"

@@ -4,7 +4,7 @@
 ![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13-blue)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
-_Last updated: 2026-11-14_
+_Last updated: 2026-11-27_
 
 An MCP server and an always-on monitor for home IP cameras, built to watch for wildlife on one
 machine without saturating it.
@@ -242,11 +242,17 @@ on the still has its own tag, they tag the visit (noted "from boxes"): false if 
 shared verdict and species if the animal boxes agree, else real with no species (a rat and a bird:
 each box keeps its own); then the viewer moves on. Boxes are outlined by their tag (green real, grey
 false, amber wrong species, red none yet; dashed when the tag comes from the visit's), with a
-✓ / ✗ / ≠ mark. A real or wrong-species tag has a **what was it?** field, suggesting names you've
-used and groups seen here; a wrong-species tag waits for it instead of moving on. **✓ more precise…**
-is for a log that was right but could say more (animal → doves/pigeons, songbirds → house finch):
-it tags real and waits for the name too (Enter saves and moves on; **next ›** skips), where plain
-**✓ real** moves straight on. The **boxes to tag** queue
+✓ / ✗ / ≠ mark. The buttons are **✗ false**, **✓ real** (the log's name is right) and
+**✎ correct…** (it was something else, or something more exact), with the log's name beside them,
+which is what a tag is judged against. Correct… asks **what was it?**, suggesting names you've used
+and groups seen here; Enter saves and moves on, Esc cancels. The app works out which kind of
+correction that is from the name: under the log's name it's real and named, "more precise"
+(animal → cat, bird → doves/pigeons, songbirds → house finch, rodent → rat); anywhere else it's wrong
+species, named (person → cat, songbirds → doves/pigeons). Our groups win over the tree: jays and
+crows are passerines, but songbirds → jays is wrong species. Keys while a visit is open: **f** false,
+**r** real, **c** correct…, **a** accept the suggestion, **n** or **→** next, **1–9** pick a box (in
+the tag row's order), **0** the whole visit; Tab reaches the buttons and Enter or Space presses one.
+The **boxes to tag** queue
 walks the real visits whose still still has an untagged box (narrowed to the camera filter): the
 ones to revisit before the stills are used as training data.
 

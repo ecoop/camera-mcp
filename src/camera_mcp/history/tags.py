@@ -11,7 +11,8 @@ from contextlib import closing
 
 from camera_mcp.boxtags import best_frame, box_tags
 from camera_mcp.config import find_camera
-from camera_mcp.history.base import HistoryError, _gated, _has_column, _tables, parse_when, visit_roi
+from camera_mcp.history.base import HistoryError, _gated, _has_column, _named_as, _tables, parse_when, visit_roi
+from camera_mcp.taxa import judge_name
 
 
 
@@ -111,6 +112,18 @@ class TagQueries:
         hasn't been labelled (or the log is from an older monitor with no visit_labels table)."""
         with closing(self._db()) as db:
             return self._label(db, visit_id)
+
+    def judge(self, visit_id: int, name: str) -> dict:
+        """The tag that corrects a visit's logged name with `name`, what it really was (taxa.judge_name):
+        {"verdict", "species", "logged"}, `logged` being the name it was judged against (the visit's
+        group, as the viewer shows it). HistoryError if the visit isn't there."""
+        with closing(self._db()) as db:
+            r = db.execute("SELECT grp, taxonomy FROM visits WHERE id = ?", (visit_id,)).fetchone()
+            if r is None:
+                raise HistoryError(f"no visit {visit_id}")
+            group, taxonomy = _named_as(db, name)
+        verdict, species = judge_name(r["grp"], r["taxonomy"], name, group, taxonomy)
+        return {"verdict": verdict, "species": species, "logged": r["grp"]}
 
     def untagged(self, ids: list[int], camera: str | None = None) -> list[int]:
         """Those of `ids` that have no visit tag now (and are on `camera`, if given), in the same order."""

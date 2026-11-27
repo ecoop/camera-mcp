@@ -12,6 +12,7 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from camera_mcp.boxtags import visit_from_boxes
+from camera_mcp.history import HistoryError
 from camera_mcp.store import VERDICTS, VIAS, Store
 from camera_mcp.web.context import Context
 
@@ -45,7 +46,8 @@ def routes(ctx: Context) -> list[Route]:
         r = ctx.query(history.visit_label, vid)
         if isinstance(r, Response):
             return r
-        return JSONResponse({"label": r, "editable": ctx.editable})
+        got = history.visits_by_id([vid])  # the name a tag is judged against, shown by the buttons
+        return JSONResponse({"label": r, "editable": ctx.editable, "logged": got[0]["group"] if got else None})
 
     async def api_visit_label_set(request: Request):
         if not ctx.editable:
@@ -56,6 +58,13 @@ def routes(ctx: Context) -> list[Route]:
         except (ValueError, json.JSONDecodeError):
             return JSONResponse({"error": "invalid JSON"}, status_code=400)
         verdict = (body.get("verdict") or "").strip()
+        named = str(body.get("name") or "").strip()  # "correct…": what it was; the verdict follows
+        if named and not verdict:
+            try:
+                got = history.judge(vid, named)
+            except HistoryError as e:
+                return JSONResponse({"error": str(e)}, status_code=404)
+            verdict, body = got["verdict"], {**body, "species": got["species"]}
         if verdict not in VERDICTS:
             return JSONResponse({"error": f"verdict must be one of {', '.join(VERDICTS)}"}, status_code=400)
         note = body.get("note")
@@ -98,6 +107,13 @@ def routes(ctx: Context) -> list[Route]:
             return JSONResponse({"error": str(e)}, status_code=400)
         verdict = body.get("verdict") or None
         species = (str(body.get("species") or "").strip() or None)
+        named = str(body.get("name") or "").strip()  # "correct…" on a box: judged against the visit's name
+        if named and verdict is None:
+            try:
+                got = history.judge(vid, named)
+            except HistoryError as e:
+                return JSONResponse({"error": str(e)}, status_code=404)
+            verdict, species = got["verdict"], got["species"] or None
         if verdict is not None and verdict not in VERDICTS:
             return JSONResponse({"error": f"verdict must be one of {', '.join(VERDICTS)}, or null"}, status_code=400)
         if species and verdict in (None, "false"):

@@ -167,3 +167,24 @@ def test_suggest_needs_a_trained_model(log):
     history, data = log
     with pytest.raises(HistoryError, match="no trained model"):
         tagmodel.suggest(history, data, make_featurizer=colour_featurizer([]))
+
+
+def test_correcting_a_logged_name_says_more_precise_or_wrong_species():
+    """taxa.judge_name: under the log's name -> real, named; elsewhere -> wrong species; our groups
+    win over the tree (songbirds -> jays is wrong), except catch-all ones (rodent -> rat)."""
+    from camera_mcp.taxa import GROUPS, judge_name
+    g = dict(GROUPS)
+    J = lambda logged, tax, name, grp=None, ntax=None: judge_name(logged, tax, name, grp or name, g.get(name, ("",))[0] if ntax is None else ntax)  # noqa: E731
+    assert J("animal", "", "cat") == ("real", "cat")
+    assert J("mammal", "mammalia;;;;", "cat") == ("real", "cat")
+    assert J("bird", "aves;;;;", "doves/pigeons") == ("real", "doves/pigeons")
+    assert J("bird", "aves;;;;", "cat") == ("wrong_species", "cat")
+    assert J("person", "mammalia;primates;hominidae;homo;sapiens", "cat") == ("wrong_species", "cat")
+    assert J("songbirds", "aves;passeriformes;;;", "doves/pigeons") == ("wrong_species", "doves/pigeons")
+    assert J("songbirds", "aves;passeriformes;;;", "jays") == ("wrong_species", "jays")
+    assert J("songbirds", "", "house finch", "songbirds", "aves;passeriformes;fringillidae;haemorhous;mexicanus") \
+        == ("real", "house finch")
+    assert J("rodent", "mammalia;rodentia;;;", "rat") == ("real", "rat")
+    assert J("songbirds", "", "Songbirds") == ("real", "")  # its own name: plain real
+    assert J("animal", "", "something new", "something new", "") == ("real", "something new")
+    assert J("person", "", "something new", "something new", "") == ("wrong_species", "something new")
