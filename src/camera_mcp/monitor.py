@@ -915,14 +915,18 @@ def main(argv: list[str] | None = None) -> None:
     site = load_site(args.config)
     monitor = Monitor(chosen, args.data_dir, detector, tz=site.tz())
     areas = [f"{c.name}: {a.name}" for c in chosen for a in c.alert]
-    if monitor.analyzer is not None and (site.alert_species or areas):  # real-time alerts (email->SMS)
+    if monitor.analyzer is not None and (site.alert_species or areas):  # real-time alerts (email, push)
         from camera_mcp.mailer import alert_recipient, email_settings, web_url
-        monitor.analyzer.alerter = Alerter(site.alert_species, email_settings(), alert_recipient(), site.tz(), web_url())
+        from camera_mcp.push import push_settings
+        alerter = Alerter(site.alert_species, email_settings(), alert_recipient(), site.tz(), web_url(),
+                          push=push_settings())
+        monitor.analyzer.alerter = alerter
         what = ", ".join([*site.alert_species, *(f"alert area {a}" for a in areas)])
-        if monitor.analyzer.alerter.active:
-            log.info("alerts on for %s -> %s", what, monitor.analyzer.alerter.recipient)
+        if alerter.active:
+            to = [*([alerter.recipient] if alerter.emails else []), *(["ntfy push"] if alerter.push else [])]
+            log.info("alerts on for %s -> %s", what, ", ".join(to))  # not the topic: it's the secret
         else:
-            log.warning("alerts set (%s) but inactive (missing mail settings or SMS_ALERT_TO)", what)
+            log.warning("alerts set (%s) but inactive (no mail settings with SMS_ALERT_TO, and no NTFY_TOPIC)", what)
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: monitor.stop.set())
     log.info("watching %s; data in %s", ", ".join(c.name for c in chosen), args.data_dir)
