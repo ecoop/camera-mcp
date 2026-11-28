@@ -1,7 +1,8 @@
 # Copyright (c) 2026 Eric Cooper.
-"""Real-time alerts: a short email (or SMS, through an email-to-SMS gateway) the first time a
+"""Real-time alerts: a short email and/or a push notification (ntfy, see push.py) the first time a
 high-priority species is seen, or anything turns up in a camera's alert area, then quiet for a while.
-An email carries a close-up of what set it off, the full-resolution frame, and a link to the visit."""
+Each carries a close-up of what set it off and a link to the visit; an email also attaches the
+full-resolution frame."""
 
 from __future__ import annotations
 
@@ -29,11 +30,11 @@ def alert_frame(data_dir: Path, visit: int, ts: str) -> Path:
 
 
 class Alerter:
-    """Sends a short alert (an email, or an SMS via an email->SMS gateway) the first time a
+    """Sends a short alert (an email to `recipient`, a push through ntfy, or both) the first time a
     high-priority species is seen, then stays quiet for COOLDOWN per species so a lingering or
     returning animal does not spam. Alert areas (zones.AlertArea) work the same way, quiet for
     COOLDOWN per camera and area, whatever the species. Inactive (a no-op) unless mail settings and a
-    recipient are set; then it alerts for the alert species and any alert areas, whichever are
+    recipient, or push settings, are set; then it alerts for the alert species and any alert areas, whichever are
     configured. The message is its own subject; given a photo it shows the close-up inline and
     attaches the full frame, and given the dashboard's address (web_url) and the visit, it links to it.
 
@@ -44,8 +45,10 @@ class Alerter:
 
     COOLDOWN = 300.0  # seconds between alerts for the same species, or the same alert area
 
-    def __init__(self, species, settings, recipient, tz, web_url: str | None = None):
+    def __init__(self, species, settings, recipient, tz, web_url: str | None = None,
+                 push: dict[str, str] | None = None):
         self.species = set(species)
+        self.push = push  # ntfy settings (push.push_settings), or None: no push
         self.settings = settings
         self.recipient = recipient
         self.tz = tz
@@ -54,6 +57,10 @@ class Alerter:
 
     @property
     def active(self) -> bool:
+        return self.emails or bool(self.push)
+
+    @property
+    def emails(self) -> bool:
         return bool(self.settings and self.recipient)
 
     def maybe_alert(self, camera: str, species: str, t: float, photo: Photo | None = None,
@@ -81,7 +88,6 @@ class Alerter:
             return
         self._last[key] = now
         try:
-            from camera_mcp.mailer import MailError, send_email
             close = full = None
             if photo is not None:
                 try:
@@ -90,13 +96,22 @@ class Alerter:
                     log.exception("alert photo failed for %s", body)
             link = (f"{self.web_url}/?visit={visit}&at={quote(iso(t))}"  # opens it to tag, at this frame
                     if self.web_url and visit is not None else None)
-            attachments = ((f"{camera}-{self._local(t):%Y-%m-%d-%H%M%S}.jpg", full),) if full else ()
+            name = f"{camera}-{self._local(t):%Y-%m-%d-%H%M%S}.jpg"
             text = body + (f" (visit {visit})" if visit is not None else "")
-            try:
-                send_email(body, text, {**self.settings, "SMTP_TO": self.recipient}, close,
-                           link=link, attachments=attachments)
-                log.info("alert sent: %s", body)
-            except MailError as e:
-                log.warning("alert send failed (%s): %s", body, e)
+            if self.push:  # first: it's the fast one
+                from camera_mcp.push import PushError, send_push
+                try:
+                    send_push(body, text, self.push, close or full, filename=name, link=link)
+                    log.info("alert pushed: %s", body)
+                except PushError as e:  # the email may still get through
+                    log.warning("alert push failed (%s): %s", body, e)
+            if self.emails:
+                from camera_mcp.mailer import MailError, send_email
+                try:
+                    send_email(body, text, {**self.settings, "SMTP_TO": self.recipient}, close,
+                               link=link, attachments=((name, full),) if full else ())
+                    log.info("alert sent: %s", body)
+                except MailError as e:
+                    log.warning("alert send failed (%s): %s", body, e)
         except Exception:  # never let an alert crash analysis
             log.exception("alert error for %s", body)

@@ -89,7 +89,7 @@ security add-generic-password -U -s camera-mcp -a <camera user> -w
 headless or remote host the login Keychain is locked in an SSH session, so put
 `CAMERA_USER=` and `CAMERA_PASS=` lines in `~/.config/camera-mcp/credentials` (`chmod 600`,
 or `$CAMERA_MCP_CREDENTIALS` to point elsewhere) and that is used instead. The same file also
-holds the optional email and alert settings (`SMTP_*`, `SMS_ALERT_TO`, `WEB_URL`); see
+holds the optional email and alert settings (`SMTP_*`, `SMS_ALERT_TO`, `WEB_URL`, `NTFY_*`); see
 [`credentials.example`](credentials.example) for every key the code reads, with placeholder
 values and the exact `KEY=value` format it expects.
 Anything else goes in `source` instead of `host`: a video file (which is how the tests run, and
@@ -339,6 +339,16 @@ reaches it, e.g. `http://studio.local:8080`) in the credentials file and it also
 (`/?visit=<number>&at=<frame time>`), which opens it in the dashboard ready to tag, on the frame the
 email showed (kept under `data/alerts/`) rather than the visit's best frame, which in a long visit can be
 minutes away and somewhere else.
+
+**Push alerts.** Email can sit for minutes before a phone notices it. For alerts in seconds, add
+`NTFY_TOPIC` to the credentials file and subscribe to that topic in the [ntfy](https://ntfy.sh) app
+(iOS, Android, or a browser). Every alert is then also pushed, with the close-up as its picture,
+and tapping it opens the visit (with `WEB_URL` set). There's no account or carrier sign-up. On the
+public ntfy.sh server anyone who knows a topic can read it, so make the name long and unguessable,
+or point `NTFY_SERVER` at your own server (with `NTFY_TOKEN` if it needs one). `NTFY_PRIORITY`
+(default `high`) sets how loudly it arrives; `max` can break through Do Not Disturb if you allow ntfy
+to. Push works alongside the email or without it: alerts need mail settings and `SMS_ALERT_TO`, or
+`NTFY_TOPIC`, or both.
 
 **Drawing zones.** The editor zooms (wheel, trackpad pinch, or **+ / − / fit**) and pans
 (**Space**-drag, middle-drag or **✋**), on a full-resolution snapshot. Motion ROI, motion mask,
